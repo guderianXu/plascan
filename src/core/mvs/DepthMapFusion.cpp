@@ -10,7 +10,6 @@
 #include "DepthMapFusion.h"
 
 #include "DepthPyramidPolicy.h"
-#include "MvsImagePreprocessor.h"
 #include "concurrency/SafeWorkerGroup.h"
 #include "io/PathIO.h"
 #include "Logger.h"
@@ -74,26 +73,25 @@ namespace xjw
                 return hasSecond ? std::max(first, second) : first;
             }
 
-            bool projectWorldPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+            bool projectWorldPoint(const placamera::FramePinholeModel& camera,
                                    float worldX,
                                    float worldY,
                                    float worldZ,
                                    float& pixelX,
                                    float& pixelY)
             {
-                const double world[3] = {worldX, worldY, worldZ};
-                double pixel[2] = {0.0, 0.0};
-                double depth = 0.0;
-                if (!camera.projectWorldPointWithDepth(world, pixel, depth))
+                const auto projection = camera.groundToImage(
+                    {camera.groundFrame(), {worldX, worldY, worldZ}});
+                if (!projection)
                 {
                     return false;
                 }
-                pixelX = static_cast<float>(pixel[0]);
-                pixelY = static_cast<float>(pixel[1]);
+                pixelX = static_cast<float>(projection.value().image.sample);
+                pixelY = static_cast<float>(projection.value().image.line);
                 return true;
             }
 
-            bool unprojectPixel(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+            bool unprojectPixel(const placamera::FramePinholeModel& camera,
                                 float pixelX,
                                 float pixelY,
                                 float depth,
@@ -101,28 +99,24 @@ namespace xjw
                                 float& worldY,
                                 float& worldZ)
             {
-                const double pixel[2] = {pixelX, pixelY};
-                double world[3] = {0.0, 0.0, 0.0};
-                if (!camera.unprojectPixel(pixel, depth, world))
+                const auto ground = camera.imageToGroundAtDepth({pixelX, pixelY}, depth);
+                if (!ground)
                 {
                     return false;
                 }
-                worldX = static_cast<float>(world[0]);
-                worldY = static_cast<float>(world[1]);
-                worldZ = static_cast<float>(world[2]);
+                worldX = static_cast<float>(ground.value().position[0]);
+                worldY = static_cast<float>(ground.value().position[1]);
+                worldZ = static_cast<float>(ground.value().position[2]);
                 return true;
             }
 
-            float positiveDepth(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+            float positiveDepth(const placamera::FramePinholeModel& camera,
                                 float worldX,
                                 float worldY,
                                 float worldZ)
             {
-                const double world[3] = {worldX, worldY, worldZ};
-                double camera_point[3] = {0.0, 0.0, 0.0};
-                camera.worldToCamera(world, camera_point);
-                const double depth = camera.depthAxisFlipped() ? -camera_point[2] : camera_point[2];
-                return static_cast<float>(depth);
+                const auto depth = camera.signedDepth({camera.groundFrame(), {worldX, worldY, worldZ}});
+                return depth ? static_cast<float>(depth.value()) : std::numeric_limits<float>::quiet_NaN();
             }
 
             class ColorImageCache
@@ -156,16 +150,8 @@ namespace xjw
                     }
                     if (!image.empty())
                     {
-                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera =
-                            m_frames[frameIdx].sourceCamera.isValid() ? m_frames[frameIdx].sourceCamera
-                                                                      : m_frames[frameIdx].cameraModel;
-                        cv::Mat prepared;
-                        xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
-                        if (prepareMvsImage(image, source_camera, &prepared, &prepared_camera))
-                        {
-                            image = std::move(prepared);
-                        }
-                        else
+                        const cv::Size prepared_size = m_frames[frameIdx].preparedRasterSize;
+                        if (prepared_size.width > 0 && prepared_size.height > 0 && image.size() != prepared_size)
                         {
                             image.release();
                         }
@@ -358,19 +344,15 @@ namespace xjw
 
             for (int fi = 0; fi < NF; ++fi)
             {
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = frames[fi].cameraModel;
                 FrameGeometry& g = geom[fi];
-                g.cameraModel = cam;
+                g.cameraModel = frames[fi].cameraModel;
                 g.W = frames[fi].imgW;
                 g.H = frames[fi].imgH;
                 cv::Size raster_size(g.W, g.H);
-                if (_config.pixelParametersUsePreparedRaster)
+                if (_config.pixelParametersUsePreparedRaster && frames[fi].preparedRasterSize.width > 0 &&
+                    frames[fi].preparedRasterSize.height > 0)
                 {
-                    if (const auto source_size = frames[fi].sourceCamera.imageSize();
-                        source_size.has_value() && source_size->samples > 0 && source_size->lines > 0)
-                    {
-                        raster_size = cv::Size(source_size->samples, source_size->lines);
-                    }
+                    raster_size = frames[fi].preparedRasterSize;
                 }
                 const DepthPixelDomainScale pixel_scale = depthPixelDomainScale(raster_size, cv::Size(g.W, g.H));
                 const float max_reprojection_error =
@@ -393,70 +375,11 @@ namespace xjw
                               _config.localDepthGradientRadiusPixels,
                               g.localDepthGradientRadiusPixels);
                 }
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-                    cam.intrinsics();
-                const std::array<double, 9> rotation = cam.worldToCameraRotation();
-                const std::array<double, 3> translation = cam.worldToCameraTranslation();
-
-                // 构造 3×4 投影矩阵 P = K * [R | T]
-                // K = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
-                for (int r = 0; r < 3; ++r)
+                const auto& rotation = g.cameraModel->pose().cameraToWorldRotation;
+                for (int index = 0; index < 9; ++index)
                 {
-                    for (int c = 0; c < 3; ++c)
-                    {
-                        float kRow[3] = {0, 0, 0};
-                        if (r == 0)
-                        {
-                            kRow[0] = static_cast<float>(intrinsics.focalX);
-                            kRow[2] = static_cast<float>(intrinsics.principalX);
-                        }
-                        else if (r == 1)
-                        {
-                            kRow[1] = static_cast<float>(intrinsics.focalY);
-                            kRow[2] = static_cast<float>(intrinsics.principalY);
-                        }
-                        else
-                        {
-                            kRow[2] = 1.0f;
-                        }
-
-                        g.P[r * 4 + c] = kRow[0] * static_cast<float>(rotation[0 * 3 + c]) +
-                                         kRow[1] * static_cast<float>(rotation[1 * 3 + c]) +
-                                         kRow[2] * static_cast<float>(rotation[2 * 3 + c]);
-                    }
-                    // T 列
-                    float kRow[3] = {0, 0, 0};
-                    if (r == 0)
-                    {
-                        kRow[0] = static_cast<float>(intrinsics.focalX);
-                        kRow[2] = static_cast<float>(intrinsics.principalX);
-                    }
-                    else if (r == 1)
-                    {
-                        kRow[1] = static_cast<float>(intrinsics.focalY);
-                        kRow[2] = static_cast<float>(intrinsics.principalY);
-                    }
-                    else
-                    {
-                        kRow[2] = 1.0f;
-                    }
-
-                    g.P[r * 4 + 3] = kRow[0] * static_cast<float>(translation[0]) +
-                                     kRow[1] * static_cast<float>(translation[1]) +
-                                     kRow[2] * static_cast<float>(translation[2]);
+                    g.invR[index] = static_cast<float>(rotation[static_cast<std::size_t>(index)]);
                 }
-
-                // 逆旋转 R_wc = R_cw^T
-                for (int r = 0; r < 3; ++r)
-                {
-                    for (int c = 0; c < 3; ++c)
-                    {
-                        g.invR[r * 3 + c] = static_cast<float>(rotation[c * 3 + r]);
-                    }
-                }
-
-                // 逆投影矩阵（简化表达 — 直接用 cameraModel.unproject）
-                // invP 不需要显式存储，我们直接调用正深度模型的反投影接口
             }
         }
 
@@ -508,14 +431,14 @@ namespace xjw
                 std::vector<OverlapInfo> candidates;
                 candidates.reserve(NF - 1);
 
-                const std::array<double, 3> C_fi = frames[fi].cameraModel.cameraCenter();
+                const std::array<double, 3> C_fi = frames[fi].cameraModel->pose().center;
                 for (int fj = 0; fj < NF; ++fj)
                 {
                     if (fj == fi)
                     {
                         continue;
                     }
-                    const std::array<double, 3> C_fj = frames[fj].cameraModel.cameraCenter();
+                    const std::array<double, 3> C_fj = frames[fj].cameraModel->pose().center;
                     float dx = static_cast<float>(C_fj[0] - C_fi[0]);
                     float dy = static_cast<float>(C_fj[1] - C_fi[1]);
                     float dz = static_cast<float>(C_fj[2] - C_fi[2]);
@@ -616,7 +539,7 @@ namespace xjw
                 {
                     // 将参考点投影到当前帧
                     float u_proj, v_proj;
-                    if (!projectWorldPoint(g.cameraModel, refX, refY, refZ, u_proj, v_proj))
+                    if (!projectWorldPoint(*g.cameraModel, refX, refY, refZ, u_proj, v_proj))
                     {
                         continue;
                     }
@@ -631,7 +554,7 @@ namespace xjw
                     }
 
                     // 深度一致性：计算期望深度 vs 实测深度
-                    const float Zc_expect = positiveDepth(g.cameraModel, refX, refY, refZ);
+                    const float Zc_expect = positiveDepth(*g.cameraModel, refX, refY, refZ);
                     if (Zc_expect <= 0.f)
                     {
                         continue;
@@ -673,7 +596,7 @@ namespace xjw
 
                 // 计算 3D 坐标
                 float Xw, Yw, Zw;
-                if (!unprojectPixel(g.cameraModel, static_cast<float>(c), static_cast<float>(r), d, Xw, Yw, Zw))
+                if (!unprojectPixel(*g.cameraModel, static_cast<float>(c), static_cast<float>(r), d, Xw, Yw, Zw))
                 {
                     continue;
                 }
@@ -769,7 +692,7 @@ namespace xjw
                         const FrameGeometry& gO = geom[overlapIdx];
                         // 将当前 3D 点投影到重叠视图
                         float u_o, v_o;
-                        if (!projectWorldPoint(gO.cameraModel, Xw, Yw, Zw, u_o, v_o))
+                        if (!projectWorldPoint(*gO.cameraModel, Xw, Yw, Zw, u_o, v_o))
                         {
                             continue;
                         }
@@ -985,7 +908,7 @@ namespace xjw
                                 }
 
                                 float x0, y0, z0;
-                                if (!unprojectPixel(geom[fi].cameraModel,
+                                if (!unprojectPixel(*geom[fi].cameraModel,
                                                     static_cast<float>(col),
                                                     static_cast<float>(row),
                                                     depth,
@@ -1020,7 +943,7 @@ namespace xjw
 
                                 float uOther = 0.f;
                                 float vOther = 0.f;
-                                if (projectWorldPoint(geom[other].cameraModel, x0, y0, z0, uOther, vOther))
+                                if (projectWorldPoint(*geom[other].cameraModel, x0, y0, z0, uOther, vOther))
                                 {
                                     const int otherCol = static_cast<int>(std::round(uOther));
                                     const int otherRow = static_cast<int>(std::round(vOther));
@@ -1030,7 +953,7 @@ namespace xjw
                                         const float du = uOther - static_cast<float>(otherCol);
                                         const float dv = vOther - static_cast<float>(otherRow);
                                         const float otherDepth = frames[other].depthMap.at<float>(otherRow, otherCol);
-                                        const float zExpected = positiveDepth(geom[other].cameraModel, x0, y0, z0);
+                                        const float zExpected = positiveDepth(*geom[other].cameraModel, x0, y0, z0);
                                         bool consistent =
                                             isPixelEligible(frames[other], geom[other], otherRow, otherCol) &&
                                             zExpected > 0.f;
@@ -1060,7 +983,7 @@ namespace xjw
                                         }
                                         if (consistent)
                                         {
-                                            consistent = unprojectPixel(geom[other].cameraModel,
+                                            consistent = unprojectPixel(*geom[other].cameraModel,
                                                                         static_cast<float>(otherCol),
                                                                         static_cast<float>(otherRow),
                                                                         otherDepth,
@@ -1275,7 +1198,7 @@ namespace xjw
                     {
                         return false;
                     }
-                    return ::xjw::mvs::unprojectPixel(frameGeom.cameraModel,
+                    return ::xjw::mvs::unprojectPixel(*frameGeom.cameraModel,
                                                       static_cast<float>(sampleCol),
                                                       static_cast<float>(sampleRow),
                                                       sampleDepth,
@@ -1356,7 +1279,7 @@ namespace xjw
                 std::string acceleratorError;
                 if (!DenseCloudBuilder::unprojectWithReport(frames[fi].depthMap,
                                                             acceleratorMask,
-                                                            geom[fi].cameraModel,
+                                                            *geom[fi].cameraModel,
                                                             cv::Mat(),
                                                             options,
                                                             &acceleratedPoints,
@@ -1446,7 +1369,7 @@ namespace xjw
                                 point.y = worldPoint[1];
                                 point.z = worldPoint[2];
                             }
-                            else if (!unprojectPixel(geom[fi].cameraModel,
+                            else if (!unprojectPixel(*geom[fi].cameraModel,
                                                      static_cast<float>(col),
                                                      static_cast<float>(row),
                                                      depth,
@@ -1529,7 +1452,7 @@ namespace xjw
                                     float uOther = 0.0f;
                                     float vOther = 0.0f;
                                     if (!projectWorldPoint(
-                                            otherGeom.cameraModel, point.x, point.y, point.z, uOther, vOther))
+                                            *otherGeom.cameraModel, point.x, point.y, point.z, uOther, vOther))
                                     {
                                         continue;
                                     }
@@ -1551,7 +1474,7 @@ namespace xjw
 
                                     const float otherDepth = frames[otherFrame].depthMap.at<float>(otherRow, otherCol);
                                     const float expectedDepth =
-                                        positiveDepth(otherGeom.cameraModel, point.x, point.y, point.z);
+                                        positiveDepth(*otherGeom.cameraModel, point.x, point.y, point.z);
                                     if (!isPixelEligible(frames[otherFrame], otherGeom, otherRow, otherCol) ||
                                         expectedDepth <= 0.0f)
                                     {
@@ -1587,7 +1510,7 @@ namespace xjw
                                     float otherX = 0.0f;
                                     float otherY = 0.0f;
                                     float otherZ = 0.0f;
-                                    if (!unprojectPixel(otherGeom.cameraModel,
+                                    if (!unprojectPixel(*otherGeom.cameraModel,
                                                         static_cast<float>(otherCol),
                                                         static_cast<float>(otherRow),
                                                         otherDepth,
@@ -1757,51 +1680,44 @@ namespace xjw
                 return false;
             }
 
-            std::optional<xjw::coordinate_system::CoordinateFrameId> commonFrame;
+            std::optional<placoordinate::CoordinateFrameId> commonFrame;
             for (std::size_t frameIndex = 0; frameIndex < frames.size(); ++frameIndex)
             {
                 const FusionFrameInput& frame = frames[frameIndex];
-                std::string cameraError;
-                if (!frame.cameraModel.isValid() || !frame.cameraModel.validateNumericalState(&cameraError))
+                if (!frame.cameraModel ||
+                    frame.cameraModel->pinholeDefinition().depthAxisFlipped() ||
+                    frame.cameraModel->pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter ||
+                    frame.cameraModel->pinholeDefinition().distortion().radialK1 != 0.0 ||
+                    frame.cameraModel->pinholeDefinition().distortion().radialK2 != 0.0 ||
+                    frame.cameraModel->pinholeDefinition().distortion().radialK3 != 0.0 ||
+                    frame.cameraModel->pinholeDefinition().distortion().tangentialP1 != 0.0 ||
+                    frame.cameraModel->pinholeDefinition().distortion().tangentialP2 != 0.0)
                 {
                     if (errorMsg)
                     {
-                        *errorMsg = "帧 " + std::to_string(frameIndex) + " 的 cameraModel 数值状态非法" +
-                                    (cameraError.empty() ? std::string() : ": " + cameraError);
+                        *errorMsg = "帧 " + std::to_string(frameIndex) +
+                                    " 的 cameraModel 必须是有效的正深度零畸变 PlaCamera 模型";
                     }
                     return false;
                 }
-                if (frame.sourceCamera.isValid())
-                {
-                    cameraError.clear();
-                    if (!frame.sourceCamera.validateNumericalState(&cameraError))
-                    {
-                        if (errorMsg)
-                        {
-                            *errorMsg = "帧 " + std::to_string(frameIndex) + " 的 sourceCamera 数值状态非法" +
-                                        (cameraError.empty() ? std::string() : ": " + cameraError);
-                        }
-                        return false;
-                    }
-                    if (frame.sourceCamera.worldFrame() != frame.cameraModel.worldFrame())
-                    {
-                        if (errorMsg)
-                        {
-                            *errorMsg = "帧 " + std::to_string(frameIndex) +
-                                        " 的 sourceCamera 与 cameraModel 混用 world frame";
-                        }
-                        return false;
-                    }
-                }
                 if (!commonFrame.has_value())
                 {
-                    commonFrame = frame.cameraModel.worldFrame();
+                    commonFrame = frame.cameraModel->groundFrame();
                 }
-                else if (*commonFrame != frame.cameraModel.worldFrame())
+                else if (*commonFrame != frame.cameraModel->groundFrame())
                 {
                     if (errorMsg)
                     {
                         *errorMsg = "融合帧相机集合混用 world frame；必须先显式归一化";
+                    }
+                    return false;
+                }
+                if (!frame.imagePath.empty() &&
+                    (frame.preparedRasterSize.width <= 0 || frame.preparedRasterSize.height <= 0))
+                {
+                    if (errorMsg)
+                    {
+                        *errorMsg = "帧 " + std::to_string(frameIndex) + " 的 prepared raster 尺寸无效";
                     }
                     return false;
                 }
@@ -1842,6 +1758,16 @@ namespace xjw
                     if (errorMsg)
                     {
                         *errorMsg = "帧 " + std::to_string(fi) + " 深度图必须为 CV_32F";
+                    }
+                    return false;
+                }
+                if (frames[fi].cameraModel->imageSize().samples != frames[fi].depthMap.cols ||
+                    frames[fi].cameraModel->imageSize().lines != frames[fi].depthMap.rows ||
+                    frames[fi].imgW != frames[fi].depthMap.cols || frames[fi].imgH != frames[fi].depthMap.rows)
+                {
+                    if (errorMsg)
+                    {
+                        *errorMsg = "帧 " + std::to_string(fi) + " 的 PlaCamera 尺寸与深度网格不一致";
                     }
                     return false;
                 }

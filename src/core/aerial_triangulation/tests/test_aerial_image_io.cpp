@@ -1,6 +1,6 @@
 #include "reporting/AerialTriangulationResultWriter.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 #include "io/ImageIO.h"
 #include "reconstruction/SfmReconstruction.h"
 
@@ -74,13 +74,20 @@ namespace
             image.keypoints = {{32.5f, 24.5f, 2.0f}};
             image.point3DIds = {xjw::kInvalidPoint3DId};
             reconstruction->addImage(image);
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-            camera.setIntrinsics(70.0, 70.0, 32.0, 24.0);
-            camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {index == 0 ? -0.5 : 0.5, 0.0, 0.0});
-            ASSERT_TRUE(camera.bindIdentity(
-                xjw::camera_core::CameraInstanceId(QStringLiteral("instance-%1").arg(index).toStdString()),
-                xjw::camera_core::ImageId(QStringLiteral("image-%1").arg(index).toStdString()),
-                xjw::coordinate_system::CoordinateFrameId("local")));
+            const placamera::FrameId frame("local");
+            const auto definition = placamera::FramePinholeDefinition::create(
+                placamera::CameraDefinitionId(QStringLiteral("definition-%1").arg(index).toStdString()),
+                {70.0, 70.0, 32.0, 24.0, 1.0, 1, 1},
+                {},
+                placamera::PixelConvention::PixelCenter,
+                frame);
+            const auto camera = placamera::FramePinholeNumericState::fromModel(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId(QStringLiteral("instance-%1").arg(index).toStdString()),
+                placamera::ImageId(QStringLiteral("image-%1").arg(index).toStdString()),
+                definition,
+                {64, 48},
+                placamera::Pose::create(
+                    frame, {index == 0 ? -0.5 : 0.5, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
             reconstruction->registerImage(image.id, camera);
         }
         xjw::Track track;
@@ -90,7 +97,7 @@ namespace
 
         xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
         input.images = {first, second};
-        input.imageIds = {xjw::camera_core::ImageId("image-0"), xjw::camera_core::ImageId("image-1")};
+        input.imageIds = {placamera::ImageId("image-0"), placamera::ImageId("image-1")};
         input.outputDir = temporary.filePath(QStringLiteral("output"));
         xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
         execution.reconstruction = reconstruction;

@@ -131,7 +131,7 @@ namespace xjw::core::project
                 {
                     const auto row = static_cast<plamatrix::Index>(index);
                     const std::array<float, 3> position{
-                        points.getValue(row, 0), points.getValue(row, 1), points.getValue(row, 2)};
+                        points.coeff(row, 0), points.coeff(row, 1), points.coeff(row, 2)};
                     if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]))
                     {
                         if (errorMessage)
@@ -238,9 +238,9 @@ namespace xjw::core::project
                 const std::string path =
                     normalizedPath(QString::fromStdString(views[static_cast<std::size_t>(view_index)].imagePath))
                         .toStdString();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
+                const std::shared_ptr<const placamera::FramePinholeModel>& camera =
                     views[static_cast<std::size_t>(view_index)].camera;
-                if (path.empty() || !camera.hasBoundIdentity())
+                if (path.empty() || !camera)
                 {
                     if (errorMessage)
                     {
@@ -250,7 +250,7 @@ namespace xjw::core::project
                     return false;
                 }
                 if (!view_by_path.emplace(path, view_index).second ||
-                    !view_by_canonical_image_id.emplace(camera.imageId().value(), view_index).second)
+                    !view_by_canonical_image_id.emplace(camera->imageId().value(), view_index).second)
                 {
                     if (errorMessage)
                     {

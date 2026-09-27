@@ -545,7 +545,11 @@ std::vector<std::vector<int>> MvsVisibilityGraphBuilder::buildGeometryPeerShortl
         -std::numeric_limits<double>::infinity()};
     for (const CameraView &view : views)
     {
-        const std::array<double, 3> center = view.camera.cameraCenter();
+        if (!view.camera)
+        {
+            continue;
+        }
+        const std::array<double, 3>& center = view.camera->pose().center;
         for (std::size_t axis = 0; axis < center.size(); ++axis)
         {
             if (!std::isfinite(center[axis]))
@@ -582,7 +586,9 @@ std::vector<std::vector<int>> MvsVisibilityGraphBuilder::buildGeometryPeerShortl
     constexpr double kTwoPi = 6.28318530717958647692;
     for (std::size_t viewIndex = 0; viewIndex < views.size(); ++viewIndex)
     {
-        const std::array<double, 3> center = views[viewIndex].camera.cameraCenter();
+        const std::array<double, 3> center = views[viewIndex].camera
+            ? views[viewIndex].camera->pose().center
+            : sceneCenter;
         const double first = center[firstAxis] - sceneCenter[firstAxis];
         const double second = center[secondAxis] - sceneCenter[secondAxis];
         const double radiusSquared = first * first + second * second;

@@ -97,7 +97,7 @@
   filter 和 geometry 累计耗时，便于判断瓶颈来自候选搜索还是几何验证。
 - 引导极线几何会在构造相对姿态前比较两台参考针孔相机声明的 `world_frame`；已声明但不一致时直接拒绝，
   不把不同坐标系的姿态拼成基础矩阵。参考投影几何使用
-  `camera_reference::ReferenceCameraGeometryMap`，按 `ImageId` 连接 canonical 内参、外参和
+  `placamera::reference::ReferenceCameraGeometryMap`，按 `ImageId` 连接 canonical 内参、外参和
   `CoordinateFrameId`；输入路径只用于定位影像。位置先验使用独立的
   `ReferenceCameraPositionMap`，不能被引导极线投影器当作相机模型。重复文件名或无法唯一定位的路径别名
   会被视为歧义并跳过，不会选用第一台相机。

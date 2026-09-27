@@ -9,8 +9,6 @@
 
 #include "IncrementalSfmDetail.h"
 
-#include "Intersection.h"
-
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -381,7 +379,7 @@ namespace xjw::incremental_sfm_detail
             }
 
             const ImageData& image = reconstruction->image(imageId);
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = reconstruction->camera(imageId);
+            const placamera::FramePinholeNumericState& camera = reconstruction->camera(imageId);
 
             for (FeatureIdx featureIdx = 0; featureIdx < static_cast<FeatureIdx>(image.keypoints.size()); ++featureIdx)
             {
@@ -400,20 +398,20 @@ namespace xjw::incremental_sfm_detail
                         continue;
                     }
 
-                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& otherCamera =
+                    const placamera::FramePinholeNumericState& otherCamera =
                         reconstruction->camera(correspondence.imageId);
                     const auto& keypoint = image.keypoints[featureIdx];
                     const auto& otherKeypoint = otherImage.keypoints[correspondence.featureIdx];
-                    const auto triResult = Intersection::intersectPair(
-                        camera, keypoint.x, keypoint.y, otherCamera, otherKeypoint.x, otherKeypoint.y);
-                    if (!triResult.valid || !std::isfinite(triResult.angle_deg) ||
-                        !std::isfinite(triResult.reproj_error_rms) ||
-                        triResult.reproj_error_rms > options.triangulatorOptions.maxReprojError)
+                    const auto triResult = placamera::FramePinholeNumericState::triangulatePair(
+                        camera, {keypoint.x, keypoint.y}, otherCamera, {otherKeypoint.x, otherKeypoint.y});
+                    if (!triResult || !std::isfinite(triResult.value().triangulationAngleDegrees) ||
+                        !std::isfinite(triResult.value().rmsReprojectionPixels) ||
+                        triResult.value().rmsReprojectionPixels > options.triangulatorOptions.maxReprojError)
                     {
                         continue;
                     }
 
-                    validAngles.push_back(triResult.angle_deg);
+                    validAngles.push_back(triResult.value().triangulationAngleDegrees);
                 }
             }
         }
@@ -472,20 +470,20 @@ namespace xjw::incremental_sfm_detail
             return false;
         }
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = reconstruction.camera(imageId);
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& otherCamera =
-            reconstruction.camera(otherImageId);
+        const placamera::FramePinholeNumericState& camera = reconstruction.camera(imageId);
+        const placamera::FramePinholeNumericState& otherCamera = reconstruction.camera(otherImageId);
         const FeatureKeypoint& keypoint = image.keypoints[match.idx1];
         const FeatureKeypoint& otherKeypoint = otherImage.keypoints[match.idx2];
-        // Intersection 同时检查两相机正深度，并返回双视交会角和 RMS。
-        const auto triResult =
-            Intersection::intersectPair(camera, keypoint.x, keypoint.y, otherCamera, otherKeypoint.x, otherKeypoint.y);
-        if (!triResult.valid || !std::isfinite(triResult.angle_deg) || !std::isfinite(triResult.reproj_error_rms))
+        const auto triResult = placamera::FramePinholeNumericState::triangulatePair(
+            camera, {keypoint.x, keypoint.y}, otherCamera, {otherKeypoint.x, otherKeypoint.y});
+        if (!triResult || !std::isfinite(triResult.value().triangulationAngleDegrees) ||
+            !std::isfinite(triResult.value().rmsReprojectionPixels))
         {
             return false;
         }
 
-        return triResult.angle_deg >= options.minTriAngle && triResult.reproj_error_rms <= options.maxReprojError;
+        return triResult.value().triangulationAngleDegrees >= options.minTriAngle &&
+               triResult.value().rmsReprojectionPixels <= options.maxReprojError;
     }
 
     std::array<double, 3> transformPoint(const SimilarityTransform3d& transform, const std::array<double, 3>& point)

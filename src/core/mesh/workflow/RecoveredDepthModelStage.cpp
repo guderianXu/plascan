@@ -37,20 +37,29 @@ namespace xjw::mesh::workflow
             }
             for (const auto& artifact : artifacts)
             {
-                if (!artifact.hasCameraModel || artifact.refIndex < 0 || artifact.refIndex >= artifacts.size() ||
+                if (!artifact.cameraModel || artifact.refIndex < 0 || artifact.refIndex >= artifacts.size() ||
                     !expected_poses[artifact.refIndex].isNull())
                 {
                     result.errorMessage = QStringLiteral("Recovered 模型深度帧的相机索引不完整或重复。");
                     return result;
                 }
                 QJsonArray pose;
-                for (const auto value : artifact.cameraModel.worldToCameraRotation())
+                const auto& camera_pose = artifact.cameraModel->pose();
+                for (int row = 0; row < 3; ++row)
                 {
-                    pose.append(value);
+                    for (int column = 0; column < 3; ++column)
+                    {
+                        pose.append(camera_pose.cameraToWorldRotation[column * 3 + row]);
+                    }
                 }
-                for (const auto value : artifact.cameraModel.worldToCameraTranslation())
+                for (int row = 0; row < 3; ++row)
                 {
-                    pose.append(value);
+                    double translation = 0.0;
+                    for (int column = 0; column < 3; ++column)
+                    {
+                        translation -= camera_pose.cameraToWorldRotation[column * 3 + row] * camera_pose.center[column];
+                    }
+                    pose.append(translation);
                 }
                 expected_poses[artifact.refIndex] = pose;
                 source_images[artifact.refIndex] = artifact.sourceImage;

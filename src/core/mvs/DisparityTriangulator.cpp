@@ -53,12 +53,6 @@ inline bool finite3(const std::array<double, 3> &value)
         && std::isfinite(value[2]);
 }
 
-inline std::array<double, 3> normalize3(const std::array<double, 3> &a)
-{
-    double n = norm3(a);
-    return n < 1e-15 ? std::array<double,3>{0,0,0} : mul3(a, 1.0 / n);
-}
-
 bool applyHomography(const cv::Mat &H, double u, double v,
                      double &ox, double &oy)
 {
@@ -71,21 +65,6 @@ bool applyHomography(const cv::Mat &H, double u, double v,
     ox = (h[0] * u + h[1] * v + h[2]) / w;
     oy = (h[3] * u + h[4] * v + h[5]) / w;
     return std::isfinite(ox) && std::isfinite(oy);
-}
-
-std::array<double, 3>
-pixelToWorldRay(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam, double u, double v)
-{
-    const double x = (u - cam.principalX()) / (cam.uAxisSign() * cam.focalX());
-    const double y = (v - cam.principalY()) / (cam.vAxisSign() * cam.focalY());
-    const double zSign = cam.depthAxisFlipped() ? -1.0 : 1.0;
-    const std::array<double, 3> ray_cam{x * zSign, y * zSign, zSign};
-    const auto R = cam.cameraToWorldRotation();
-    std::array<double, 3> ray_world{
-        R[0] * ray_cam[0] + R[1] * ray_cam[1] + R[2] * ray_cam[2],
-        R[3] * ray_cam[0] + R[4] * ray_cam[1] + R[5] * ray_cam[2],
-        R[6] * ray_cam[0] + R[7] * ray_cam[1] + R[8] * ray_cam[2]};
-    return normalize3(ray_world);
 }
 
 struct RawPoint
@@ -174,25 +153,21 @@ bool prepareHomography(const cv::Mat &input,
     return true;
 }
 
-bool validateCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool validateCamera(const placamera::FramePinholeModel& camera,
                     const char* name,
                     std::string& error)
 {
-    if (!camera.isValid()
-        || !std::isfinite(camera.focalX())
-        || !std::isfinite(camera.focalY())
-        || !std::isfinite(camera.principalX())
-        || !std::isfinite(camera.principalY())
-        || camera.focalX() <= 0.0
-        || camera.focalY() <= 0.0
-        || (camera.uAxisSign() != -1 && camera.uAxisSign() != 1)
-        || (camera.vAxisSign() != -1 && camera.vAxisSign() != 1))
+    const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+    if (!std::isfinite(intrinsics.focalX)
+        || !std::isfinite(intrinsics.focalY)
+        || intrinsics.focalX <= 0.0
+        || intrinsics.focalY <= 0.0)
     {
         error = std::string(name) + "内参无效";
         return false;
     }
 
-    for (double value : camera.cameraCenter())
+    for (double value : camera.pose().center)
     {
         if (!std::isfinite(value))
         {
@@ -201,7 +176,7 @@ bool validateCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumeric
         }
     }
 
-    const std::array<double, 9> rotation = camera.cameraToWorldRotation();
+    const std::array<double, 9>& rotation = camera.pose().cameraToWorldRotation;
     for (double value : rotation)
     {
         if (!std::isfinite(value))
@@ -238,11 +213,16 @@ bool validateConfig(const TriangulationConfig &config, std::string &error)
     return true;
 }
 
-bool validateStereoBaseline(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& left,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& right,
+bool validateStereoBaseline(const placamera::FramePinholeModel& left,
+                            const placamera::FramePinholeModel& right,
                             std::string& error)
 {
-    const double baseline = norm3(sub3(left.cameraCenter(), right.cameraCenter()));
+    if (left.groundFrame() != right.groundFrame())
+    {
+        error = "左右相机坐标系不一致";
+        return false;
+    }
+    const double baseline = norm3(sub3(left.pose().center, right.pose().center));
     if (!std::isfinite(baseline) || baseline <= 1e-12)
     {
         error = "左右相机基线为零";
@@ -258,8 +238,8 @@ DisparityTriangulator::triangulate(const cv::Mat& disparity,
                                    const cv::Mat& validMask,
                                    const cv::Mat& H1inv,
                                    const cv::Mat& H2inv,
-                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
-                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
+                                   const placamera::FramePinholeModel& camL,
+                                   const placamera::FramePinholeModel& camR,
                                    const TriangulationConfig& cfg)
 {
     TriangulationResult result;
@@ -300,8 +280,8 @@ DisparityTriangulator::triangulate(const cv::Mat& disparity,
         return result;
     }
 
-    auto C1 = camL.cameraCenter();
-    auto C2 = camR.cameraCenter();
+    const auto& C1 = camL.pose().center;
+    const auto& C2 = camR.pose().center;
 
     unsigned int nThreads = cfg.numThreads;
     if (nThreads == 0)
@@ -338,8 +318,15 @@ DisparityTriangulator::triangulate(const cv::Mat& disparity,
                     continue;
                 }
 
-                auto d1 = pixelToWorldRay(camL, lu, lv);
-                auto d2 = pixelToWorldRay(camR, ru, rv);
+                const auto left_ray = camL.imageToImagingLocus({lu, lv});
+                const auto right_ray = camR.imageToImagingLocus({ru, rv});
+                if (!left_ray || !right_ray)
+                {
+                    ++localBadRay;
+                    continue;
+                }
+                const auto& d1 = left_ray.value().direction;
+                const auto& d2 = right_ray.value().direction;
 
                 const double rayNorm1 = norm3(d1);
                 const double rayNorm2 = norm3(d2);
@@ -500,9 +487,9 @@ TriangulationResult
 DisparityTriangulator::triangulateFromDepth(const cv::Mat& depthMap,
                                             const cv::Mat& validMask,
                                             const cv::Mat& H1inv,
-                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camL,
-                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camR,
-                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectCam,
+                                            const placamera::FramePinholeModel& camL,
+                                            const placamera::FramePinholeModel& camR,
+                                            const placamera::FramePinholeModel& rectCam,
                                             const TriangulationConfig& cfg)
 {
     TriangulationResult result;
@@ -519,6 +506,11 @@ DisparityTriangulator::triangulateFromDepth(const cv::Mat& depthMap,
         || !validateCamera(rectCam, "校正左相机", result.errorMessage)
         || !validateStereoBaseline(camL, camR, result.errorMessage))
     {
+        return result;
+    }
+    if (rectCam.groundFrame() != camL.groundFrame())
+    {
+        result.errorMessage = "校正左相机坐标系与原始左相机不一致";
         return result;
     }
 
@@ -567,22 +559,22 @@ DisparityTriangulator::triangulateFromDepth(const cv::Mat& depthMap,
                 float depth = depthMap.at<float>(r, c);
                 if (!std::isfinite(depth) || depth <= 0.0f) continue;
 
-                const double pixel[2] = {static_cast<double>(c), static_cast<double>(r)};
-                double world[3] = {0.0, 0.0, 0.0};
-                if (!rectCam.unprojectPixel(pixel, static_cast<double>(depth), world))
+                const auto unprojected = rectCam.imageToGroundAtDepth(
+                    {static_cast<double>(c), static_cast<double>(r)}, static_cast<double>(depth));
+                if (!unprojected)
                 {
                     continue;
                 }
+                const auto& world = unprojected.value().position;
                 if (!std::isfinite(world[0])
                     || !std::isfinite(world[1])
                     || !std::isfinite(world[2]))
                 {
                     continue;
                 }
-                double uv1[2];
                 float errL = 0.0f;
-
-                if (!camL.projectWorldPoint(world, uv1))
+                const auto projected = camL.groundToImage(unprojected.value());
+                if (!projected)
                 {
                     continue;
                 }
@@ -591,8 +583,8 @@ DisparityTriangulator::triangulateFromDepth(const cv::Mat& depthMap,
                 {
                     continue;
                 }
-                const double du = uv1[0] - origU;
-                const double dv = uv1[1] - origV;
+                const double du = projected.value().image.sample - origU;
+                const double dv = projected.value().image.line - origV;
                 errL = static_cast<float>(std::sqrt(du*du + dv*dv));
 
                 if (rowStart == 0 && dbgCount < 3)

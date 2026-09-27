@@ -15,36 +15,29 @@ add_sfm_test(test_sparse_point_cloud_workspace sfm_postprocess)
 add_sfm_test(test_sfm_params sfm_core
     sfm_postprocess
     camera
-    intersection
-    bundle_adjust
     ${OpenCV_LIBS}
 )
 target_include_directories(test_sfm_params PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
 )
 
 add_sfm_test(test_sfm_quality_report sfm_project Qt6::Core)
 
 add_sfm_test(test_triangulation_service sfm_project
-    image_matching plascan_common_io ${OpenCV_LIBS})
+    image_matching plascan_common_io plascan::placamera_runtime ${OpenCV_LIBS})
 target_compile_definitions(test_triangulation_service PRIVATE
     PLASCAN_SFM_COLOR_TEST_TMP_DIR="${CMAKE_SOURCE_DIR}/build/tmp/sfm-color-tests")
 
 add_sfm_test(test_camera_reference_pose_prior sfm_core
-    camera_reference
-    bundle_adjust)
+    placamera::reference)
 
 add_sfm_test(test_sfm_pipeline sfm_core
     camera
-    intersection
-    bundle_adjust
 )
+add_sfm_test(test_sfm_bundle_camera_codec sfm_core)
+add_sfm_test(test_sfm_bundle_solver_parity sfm_core)
 target_include_directories(test_sfm_pipeline PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
 )
 target_compile_definitions(test_sfm_pipeline PRIVATE
     TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
@@ -52,28 +45,20 @@ target_compile_definitions(test_sfm_pipeline PRIVATE
 
 add_sfm_test(test_sfm_prior_tracks sfm_core
     camera
-    intersection
-    bundle_adjust
 )
 target_include_directories(test_sfm_prior_tracks PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/control_points
 )
 
 add_sfm_test(test_ba_input_builder sfm_project
     camera
-    camera_project
-    intersection
-    bundle_adjust
+    plascan::placamera_runtime
     Qt6::Core
 )
 target_include_directories(test_ba_input_builder PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/common
 )
 
@@ -81,21 +66,13 @@ add_sfm_test(test_ba_track_builder sfm_project)
 
 add_sfm_test(test_initial_sparse_triangulator sfm_core
     camera
-    intersection
-    bundle_adjust
 )
 target_include_directories(test_initial_sparse_triangulator PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
 )
 
-add_sfm_test(test_reference_terrain_prior sfm_core
-    bundle_adjust
-    camera
-)
+add_sfm_test(test_reference_terrain_prior sfm_core camera)
 target_include_directories(test_reference_terrain_prior PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 
@@ -103,7 +80,6 @@ add_sfm_test(test_track_processing sfm_core)
 add_sfm_test(test_reference_track_builder sfm_core)
 add_sfm_test(test_covisibility_partitioner sfm_core)
 add_sfm_test(test_observation_network_builder sfm_core)
-add_sfm_test(test_projection_geometry sfm_core)
 add_sfm_test(test_similarity_gauge_normalizer sfm_core)
 add_sfm_test(test_triangulation_quality sfm_core)
 add_sfm_test(test_opencv_camera_adapter sfm_core ${OpenCV_LIBS})

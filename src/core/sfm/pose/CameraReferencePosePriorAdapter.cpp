@@ -17,16 +17,7 @@ namespace xjw
             return std::isfinite(value) && value > 0.0;
         }
 
-        std::array<std::size_t, 6> covarianceDiagonalIndices(camera_core::CovarianceLayout layout)
-        {
-            if (layout == camera_core::CovarianceLayout::Diagonal6)
-            {
-                return {{0, 1, 2, 3, 4, 5}};
-            }
-            return {{0, 6, 11, 15, 18, 20}};
-        }
-
-        bool covarianceSigmas(const camera_core::PoseCovariance& covariance,
+        bool covarianceSigmas(const placamera::reference::PoseCovariance& covariance,
                               double* positionSigmaMeters,
                               double* rotationSigmaDegrees)
         {
@@ -34,36 +25,41 @@ namespace xjw
             {
                 return false;
             }
-            const auto& values = covariance.values();
-            const auto indices = covarianceDiagonalIndices(covariance.layout());
+            const auto& values = covariance.matrixValues();
             double maximumPositionVariance = 0.0;
             double maximumRotationVariance = 0.0;
-            for (std::size_t index = 0; index < indices.size(); ++index)
+            for (std::size_t index = 0; index < 6; ++index)
             {
-                if (indices[index] >= values.size() || !std::isfinite(values[indices[index]]) ||
-                    values[indices[index]] < 0.0)
+                const double variance = values[index * 6 + index];
+                if (!std::isfinite(variance) || variance < 0.0)
                 {
                     return false;
                 }
                 if (index < 3)
                 {
-                    maximumPositionVariance = std::max(maximumPositionVariance, values[indices[index]]);
+                    maximumPositionVariance = std::max(maximumPositionVariance, variance);
                 }
                 else
                 {
-                    maximumRotationVariance = std::max(maximumRotationVariance, values[indices[index]]);
+                    maximumRotationVariance = std::max(maximumRotationVariance, variance);
                 }
             }
-            *positionSigmaMeters = std::sqrt(std::max(maximumPositionVariance, 1.0e-12));
-            *rotationSigmaDegrees = std::sqrt(std::max(maximumRotationVariance, 1.0e-12)) * kRadiansToDegrees;
+            if (covariance.hasPosition())
+            {
+                *positionSigmaMeters = std::sqrt(std::max(maximumPositionVariance, 1.0e-12));
+            }
+            if (covariance.hasRotation())
+            {
+                *rotationSigmaDegrees = std::sqrt(std::max(maximumRotationVariance, 1.0e-12)) * kRadiansToDegrees;
+            }
             return validPositiveFinite(*positionSigmaMeters) && validPositiveFinite(*rotationSigmaDegrees);
         }
 
     } // namespace
 
     CameraReferencePosePriorAdapterResult CameraReferencePosePriorAdapter::toBundleAdjustPriors(
-        const std::vector<camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-        const std::vector<camera_reference::ResolvedCameraPosePrior>& references,
+        const std::vector<CameraReferenceTarget>& targets,
+        const std::vector<placamera::reference::ResolvedCameraPosePrior>& references,
         double defaultPositionSigmaMeters,
         double defaultRotationSigmaDegrees)
     {
@@ -74,8 +70,8 @@ namespace xjw
             return result;
         }
 
-        result.priors.resize(cameras.size());
-        if (cameras.empty())
+        result.priors.resize(targets.size());
+        if (targets.empty())
         {
             result.valid = references.empty();
             if (!result.valid)
@@ -85,42 +81,29 @@ namespace xjw
             return result;
         }
 
-        const xjw::coordinate_system::CoordinateFrameId commonFrame = cameras.front().worldFrame();
-        for (const auto& camera : cameras)
+        const placamera::FrameId commonFrame = targets.front().worldFrame;
+        for (const auto& target : targets)
         {
-            if (!camera.hasBoundIdentity())
+            if (target.worldFrame != commonFrame)
             {
-                result.error = "camera numeric state has no explicit image identity/world frame; bind a typed instance "
-                               "before aligning external pose references";
-                return result;
-            }
-            std::string validationError;
-            if (!camera.validateNumericalState(&validationError))
-            {
-                result.error =
-                    "camera " + camera.imageId().value() + " has invalid numerical state: " + validationError;
-                return result;
-            }
-            if (camera.worldFrame() != commonFrame)
-            {
-                result.error = "numeric camera set mixes world frames at image " + camera.imageId().value() +
-                               ": expected " + commonFrame.value() + ", observed " + camera.worldFrame().value();
+                result.error = "camera target set mixes world frames at image " + target.imageId.value() +
+                               ": expected " + commonFrame.value() + ", observed " + target.worldFrame.value();
                 return result;
             }
         }
 
-        std::unordered_map<camera_core::ImageId, std::size_t> cameraIndices;
-        cameraIndices.reserve(cameras.size());
-        for (std::size_t index = 0; index < cameras.size(); ++index)
+        std::unordered_map<placamera::ImageId, std::size_t> cameraIndices;
+        cameraIndices.reserve(targets.size());
+        for (std::size_t index = 0; index < targets.size(); ++index)
         {
-            if (!cameraIndices.emplace(cameras[index].imageId(), index).second)
+            if (!cameraIndices.emplace(targets[index].imageId, index).second)
             {
-                result.error = "numeric camera set contains duplicate image " + cameras[index].imageId().value();
+                result.error = "camera target set contains duplicate image " + targets[index].imageId.value();
                 return result;
             }
         }
 
-        std::unordered_map<camera_core::ImageId, std::size_t> seenReferences;
+        std::unordered_map<placamera::ImageId, std::size_t> seenReferences;
         seenReferences.reserve(references.size());
         std::string commonTransformProvenanceHash;
         for (const auto& reference : references)
@@ -164,8 +147,7 @@ namespace xjw
                 return result;
             }
 
-            BACameraPosePrior& prior = result.priors[cameraIndex];
-            prior.enabled = true;
+            plabundle::CameraPosePrior prior;
             prior.cameraToWorldRotation = reference.pose().cameraToWorldRotation;
             prior.cameraCenter = reference.pose().center;
             prior.positionSigmaMeters = defaultPositionSigmaMeters;
@@ -178,6 +160,7 @@ namespace xjw
                     return result;
                 }
             }
+            result.priors[cameraIndex] = prior;
             ++result.matchedReferenceCount;
         }
 

@@ -21,7 +21,10 @@ from env_common import default_output_dir, host_platform, repo_root as detect_re
 
 BASE_PACKAGES = [
     "numpy",
+    "pillow",
     "scipy",
+    "rasterio",
+    "trimesh",
     "opencv-python>=5.0,<6",
     "pymupdf",
     "kornia",

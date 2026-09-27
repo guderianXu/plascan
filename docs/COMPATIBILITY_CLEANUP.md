@@ -9,6 +9,7 @@
 
 | 兼容项 | 当前入口与影响 |
 | --- | --- |
+| PlaScan 旧坐标 API | 删除 `src/core/coordinate_system`、`xjw::coordinate_system`、转发头和 `coordinate_system_*` target；业务代码直接使用 `placoordinate::*`，独立扫描门禁阻止旧入口回流 |
 | MVS 无调用的旧私有生产阶段 | 删除单帧估计、源缓存、跨视一致性、残差/学习/位姿候选编排及其专用一致性投票和保存队列；生产仍执行 recovered CUDA，独立后端与重放/融合 API 保留 |
 | MVS 不可达 OpenCL/异构调度 | 删除关闭的 OpenCL 枚举与异构选择分支，Auto/显式 CUDA 均保存严格 CUDA 配置；CUDA 不可用时报告明确错误，不再显示继续使用 CPU |
 | 孤立环拍稀疏载体编排 | 删除 `OrbitalSparseScaffoldSurfaceBuilder.h/.cpp` 和闲置 include；下层独立算法与测试保留 |
@@ -42,10 +43,11 @@ GUI 的 future 持有、取消、析构等待和重复启动拒绝仍保留，�
 | 旧深度工件重放 / 源计划 / PatchMatch 诊断路径 | `src/core/mvs/MvsWorkspaceReplay.cpp`、`MvsSourcePlanner.h/.cpp`、`PatchMatchEstimator.cpp` | 并非当前 recovered 正式生产器；显式重放、诊断和算法测试仍有使用，不能按名字删除整套实现 |
 | Python 旧环境变量及生成配置读取 | `src/common/runtime/PythonRuntimeLocator.cpp` | PLASCAN_PYTHON 作为 PLASCAN_PYTHON_EXECUTABLE 的旧别名，另读取 build/env/plascan-env.json；需要同步环境与安装入口 |
 | 模型减面旧 targetFaces 字段 | `src/gui/dialogs/reconstruction/GenerateModelDialog.cpp`、`application/WorkflowSettingsDialog.cpp` | 仍将旧面数推导为 faceCountMode/faceCountCustom；属于参数 UI 迁移，不是 TSDF 求解器接口 |
-| BA 基准 seconds 输出别名 | `src/core/bundle_adjust/tools/ba_backend_benchmark.cpp`、`scripts/bench/run_ba_backend_benchmark.py` | seconds 与 api_wall_seconds 同时输出；本轮删除旧求解器设置，但未更改现有 CSV 指标格式 |
 
 这是本次源码审查确认的剩余清单，不是通过关键词自动推断的“全仓无兼容层”证明。
-本轮完成 TSDF 控制、BA 求解器接口和相机标定展示字段清理；上述会话、诊断、环境及基准输出格式仍保留。
+本轮完成 TSDF 控制、BA 求解器接口和相机标定展示字段清理；上述会话、诊断与环境兼容仍保留。
+后续 PlaBundle PB5 已删除旧 BA benchmark，并将汇总脚本迁到 PlaBundle 的结构化 cold/warm 输出，
+不再保留 `seconds` / `api_wall_seconds` 双字段。
 
 ## 必须保留的真实边界
 

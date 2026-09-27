@@ -14,7 +14,7 @@ namespace
 
 xjw::mvs::DensePointCloud cloneWithoutNormals(const xjw::mvs::DensePointCloud &cloud)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(cloud.size(), 3);
+    plamatrix::MatrixXf points(cloud.size(), 3);
     for (std::size_t index = 0; index < cloud.size(); ++index)
     {
         const auto row = static_cast<plamatrix::Index>(index);

@@ -16,7 +16,7 @@
 // ============================================================
 
 #include "common/SfmTypes.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 
 #include <string>
 #include <unordered_map>
@@ -79,7 +79,7 @@ namespace xjw
          * @param imageId  图像 ID
          * @param camera   该图像对应的相机参数
          */
-        void registerImage(ImageId imageId, const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
+        void registerImage(ImageId imageId, const placamera::FramePinholeNumericState& camera);
 
         /**
          * @brief 取消注册图像（标记为未注册，并移除关联相机）。
@@ -92,16 +92,16 @@ namespace xjw
         // ============================================================
 
         /// 获取图像对应的相机（可修改）
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera(ImageId imageId);
+        placamera::FramePinholeNumericState& camera(ImageId imageId);
 
         /// 获取图像对应的相机（只读）
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera(ImageId imageId) const;
+        const placamera::FramePinholeNumericState& camera(ImageId imageId) const;
 
         /// 判断图像是否有关联相机
         bool hasCamera(ImageId imageId) const;
 
         /// 获取所有相机（imageId → FramePinholeNumericState）
-        const std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras() const
+        const std::unordered_map<ImageId, placamera::FramePinholeNumericState>& cameras() const
         {
             return cameraMap;
         }
@@ -197,7 +197,7 @@ namespace xjw
         std::unordered_map<ImageId, ImageData> imageDataMap;
 
         /// 相机表 (imageId → FramePinholeNumericState)，仅已注册图像才有
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameraMap;
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState> cameraMap;
 
         /// 三维点表 (point3DId → ScenePoint3D)
         std::unordered_map<Point3DId, ScenePoint3D> point3DMap;

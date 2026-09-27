@@ -13,16 +13,20 @@
 
 构建目标与依赖方向如下：
 
-- `sfm_core`：核心算法，不链接 Qt；依赖 `camera`、Qt-free `camera_reference_core`、`intersection`、`bundle_adjust`、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
+- `sfm_core`：核心算法，不链接 Qt；重建状态使用 PlaCamera 原生数值状态，BA 在求解边界
+  通过 `SfmBundleCameraCodec` 转为 PlaBundle 数值输入。
 - `sfm_postprocess`：质量指标和稀疏点云后处理，不链接 Qt；依赖 `sfm_core` 和 PlaPoint。
 - `sfm_project`：项目文件和 JSON 适配，使用 QtCore，不链接 QtGui；依赖前两层。
 - `sfm`：仅聚合以上三个目标的 `INTERFACE` target，不包含转发头、类型别名或兼容实现。
 
-所有静态面阵数值入口都接收 `FramePinholeNumericState`。项目适配层从 typed
-`FramePinholeInstance` 完成能力校验和一次性转换后，SfM 内部不再解析 JSON、持有旧
-`FramePinholeCamera` 或保留 `StaticPinholeView` 兼容对象；RPC/推扫实例在该边界明确失败。
-`camera_core::CameraOperationPlan` 统一声明静态 SfM、BA、MVS、RPC 空三、推扫空三和外部
-姿态参考的能力/共同 frame 合同；工作流只能执行规划器通过的完整影像集合。当一次静态
+SfM 重建求解器的静态面阵数值入口直接接收 PlaCamera `FramePinholeNumericState`；
+独立工程 BA 服务直接接收 PlaCamera 帧相机实例，并以 PlaCamera 原生数值状态承接 PlaBundle 精化结果。
+`ProjectMatchInputReader` 只选择 PlaCamera `FramePinholeModel` 实例并检查能力与共同 frame，
+不再创建或保存旧数值状态；自动轨迹和稀疏点预览直接使用 PlaCamera 交会与投影。
+标记控制网 Sim(3) 只变换原生实例和轨迹，`BaInputBuilder` 不再产生平行的旧数值相机数组。
+RPC/推扫实例在静态面阵边界明确失败。
+工作流通过 PlaCamera 的 `CameraInstanceSet::requireCapabilities()` 和
+`requireCommonGroundFrame()` 校验完整影像集合。当一次静态
 SfM/BA 请求同时选中针孔与其它模型时，整个选择集都会在输入边界失败，不能通过丢弃不支持的
 影像来偷偷改变求解问题。
 
@@ -37,24 +41,24 @@ SfM/BA 请求同时选中针孔与其它模型时，整个选择集都会在输�
 
 ## 外部姿态先验与显式相机绑定
 
-外部 GNSS/IMU/POS 记录先由 `camera_reference_core` 的 resolver 转成
-`camera_reference::ResolvedCameraPosePrior`，再由
-`pose/CameraReferencePosePriorAdapter` 按稳定 `ImageId` 对齐到有序的
-`FramePinholeNumericState`/`BACameraPosePrior`。adapter 不把外部姿态当作投影相机，也不在 solver 边界
+外部 GNSS/IMU/POS 记录先由 `placamera::reference` 的 resolver 转成
+`placamera::reference::ResolvedCameraPosePrior`，再由
+`pose/CameraReferencePosePriorAdapter` 按稳定 `ImageId`/`FrameId` 对齐到有序的
+`plabundle::CameraPosePrior`。adapter 不把外部姿态当作投影相机，也不在 solver 边界
 猜测坐标变换：所有 matched prior 必须已经处于数值相机共同的 world frame，并具有非空且一致的
 `transformProvenanceHash`。该 hash 表示 frame/单位归一化和变换链，不含影像观测值；观测解析指纹不能
 替代它。
 
-adapter 会先要求本次数值相机集合都具有显式 image identity 和 world frame；任一未绑定的
-`FramePinholeNumericState` 都 fail-closed。局部 BA 窗口之外的 reference 可以被忽略，但结果保留
+调用方须先确认本次相机集合具有显式 image identity 和共同 world frame；独立 BA 中任一空实例或不一致 frame 都 fail-closed。局部 BA 窗口之外的 reference 可以被忽略，但结果保留
 matched/ignored 计数和 ignored image 列表；窗口内 reference 的 frame、重复 image 或 provenance 冲突直接失败。
 空 reference 不构造绝对约束，调用方使用 `hasEnabledPriors()` 而不是仅检查输出 vector 是否非空。
 
 `AerialTriangulationOptions`/`PreparedAerialTriangulationInput` 用
 `aerial_triangulation::SolverCameraBinding` 为需要稳定身份或外部姿态的输入提供一条与 `images`
-一一对应的 `(instanceId, imageId, worldFrame)`。`SfmAttemptRunner` 在读取相机文件或项目相机后显式绑定并
-校验唯一性和共同 frame；路径、文件名、列表序号和数值索引只定位资源，不能回退生成 solver identity。
-缺少 bindings 而携带外部姿态先验时，输入在进入 SfM 前拒绝。
+一一对应的 `(instanceId, imageId, worldFrame)`。`SfmAttemptRunner` 先用 PlaCamera 解析外部/工程相机，
+校验绑定唯一性和共同 frame，再生成求解器数值输入；路径、文件名、列表序号和数值索引只定位资源，不能
+回退生成 solver identity。任何影像缺少 bindings 都会在进入 SfM 前拒绝。`IncrementalSfm` 不再自行读取
+`.tsai` 或保留相机文件路径回退。
 
 ## 稀疏点云颜色读取
 
@@ -95,6 +99,7 @@ resultJson.color_read_failures（image_path/error），有其它有效视图时�
   `multiInitialPairMaxImages` 的小项目上限保护。结果中保留评估候选数、前瞻目标及胜出候选的注册数/点数/RMS。
 - 粗筛只读已经准备好的特征和匹配缓存，不写稀疏点云、项目记录或匹配质量报告。
 - 初始对 E/F/H 估计和增量 PnP 使用由影像 ID 派生的稳定 RANSAC 种子；并行粗筛不会再改变正式 SfM 的随机状态。
+- PnP 解算接口直接接收 PlaCamera 的 `FrameIntrinsics` 和 `BrownConradyDistortion`；重建状态中的帧相机数值类型已使用 PlaCamera。
 - 正式参考 3D-2D 注册使用固定 Park-Miller 样本流的 500 次三点 P3P，按十级递减阈值同时择模，再执行最多
   5 轮、每轮 10 次解析位姿精化和全量重分类；阈值由图幅尺寸按参考公式计算。通用、已知位姿和显式序列恢复
   分支继续使用 OpenCV AP3P/迭代 PnP。
@@ -140,7 +145,8 @@ Auto 对 CUDA/OpenCL 使用独立的常规规模与高密度观测门槛；显�
 - 有控制点、比例尺或已知位姿约束时，绝对约束优先，不重复施加无尺度规范。
 - 相机前后方判断统一调用 `FramePinholeNumericState::positiveDepth()` / `isPointInFront()`；投影、三角化、BA 后过滤
   和 flipped-depth 相机不再各自解释原始相机 Z。
-- BA 返回 `BASolveStatus` 和 `solutionUsable`。取消、数值失败或不支持配置不会回写相机和三维点。
+- BA 返回 `plabundle::SolveStatus`，并以 `Result::usable()` 作为唯一提交门。取消、数值失败或不支持配置
+  不会回写相机和三维点。
 
 ## 已知相机与项目元数据
 
@@ -148,7 +154,7 @@ Auto 对 CUDA/OpenCL 使用独立的常规规模与高密度观测门槛；显�
 - 只有调用方显式提供完整 `.tsai` 相机文件列表时，才进入固定已知外参的直接三角化路径。
 - 固定已知外参路径如果输入存在多视 track 但输出退化为全两视稀疏点云，应视为失败，不能发布为正式空三结果。
 - 外部 pose reference 是独立的软约束来源，不等价于 `useKnownCameraPoses`；它经由
-  `CameraReferencePosePriorAdapter` 对齐后才写入 BA，不能与手工 `BACameraPosePrior` 或完整 known-pose
+  `CameraReferencePosePriorAdapter` 对齐后才写入 BA，不能与手工 `plabundle::CameraPosePrior` 或完整 known-pose
   来源隐式叠加。
 - 需要将相机结果与外部 reference 关联时，运行器优先从当前工程已验证的
   `camera_instances` 按 `image_uuid` 传播与影像顺序一致的 `SolverCameraBinding`；调用方也可以显式提供绑定，

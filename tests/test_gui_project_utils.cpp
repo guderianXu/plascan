@@ -3,10 +3,13 @@
 // ============================================================
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
+#include <placamera/rpc_camera.h>
 #include "CoreImplementationBundles.h"
 
 #include "project/ProjectIO.h"
 #include "ProjectCameraImportService.h"
+#include "ProjectCameraInitialization.h"
 #include "ProjectResourceCleanup.h"
 #include "ProjectTiePointResultService.h"
 #include "project/ProjectSessionModel.h"
@@ -17,11 +20,11 @@
 #include "ReferenceDatasetWorkflow.h"
 #include "ProjectReferenceTerrainBa.h"
 #include "ProjectBundleAdjustWorkflow.h"
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "project/ProjectCameraIO.h"
+#include "support/NativeFrameCameraFixture.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "ProjectSurveyControl.h"
 #include "io/MarkerSetStore.h"
 #include "TriangulationService.h"
@@ -175,9 +178,119 @@
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+TEST(ProjectCameraInitializationTest, WritesNativeCameraAndPreservesInitializationNotes)
+{
+    const QString temp_root =
+        QDir(QString::fromUtf8(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("build/tmp/placamera-initialization"));
+    ASSERT_TRUE(QDir().mkpath(temp_root));
+    QTemporaryDir directory(QDir(temp_root).filePath(QStringLiteral("XXXXXX")));
+    ASSERT_TRUE(directory.isValid());
+    const QString image_path = directory.filePath(QStringLiteral("frame.png"));
+    ASSERT_TRUE(QImage(8, 6, QImage::Format_RGB32).save(image_path));
+    const QJsonObject project{{QStringLiteral("images"),
+                               QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("frame-id")},
+                                                      {QStringLiteral("path"), image_path}}}},
+                              {QStringLiteral("camera_definitions"), QJsonArray{}},
+                              {QStringLiteral("camera_instances"), QJsonArray{}}};
+    xjw::gui::project::CameraInitializationRequest request;
+    request.images = {image_path};
+    request.projectMetadata = project;
+    request.mode = xjw::gui::project::CameraInitializationMode::Intrinsics;
+    request.source = QStringLiteral("init_from_intrinsics");
+    request.settings = {{QStringLiteral("fx"), 100.0}, {QStringLiteral("fy"), 110.0}, {QStringLiteral("k1"), 0.01}};
+
+    const auto prepared = xjw::gui::project::prepareCameraInitializations(request);
+    ASSERT_TRUE(prepared.error.isEmpty()) << prepared.error.toStdString();
+    ASSERT_EQ(prepared.cameras.size(), 1U);
+    QJsonObject written;
+    QString error;
+    const QJsonObject full_project{{QStringLiteral("project_files"), project},
+                                   {QStringLiteral("name"), QStringLiteral("camera-init-test")}};
+    ASSERT_TRUE(xjw::gui::project::withPreparedCameras(full_project, prepared, false, &written, &error))
+        << error.toStdString();
+    EXPECT_EQ(written.value(QStringLiteral("name")), QStringLiteral("camera-init-test"));
+    const QJsonObject written_files = written.value(QStringLiteral("project_files")).toObject();
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(written_files);
+    ASSERT_TRUE(loaded.ok()) << loaded.errors.join(';').toStdString();
+    const auto selected = loaded.instances.forImage(placamera::ImageId("frame-id"));
+    ASSERT_TRUE(selected.ok());
+    const auto* camera = dynamic_cast<const placamera::FramePinholeModel*>(selected.value().get());
+    ASSERT_NE(camera, nullptr);
+    EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalX, 100.0);
+    EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalY, 110.0);
+    EXPECT_DOUBLE_EQ(camera->pinholeDefinition().distortion().radialK1, 0.01);
+    const QJsonObject state = written_files.value(QStringLiteral("camera_instances"))
+                                  .toArray()
+                                  .first()
+                                  .toObject()
+                                  .value(QStringLiteral("state"))
+                                  .toObject();
+    EXPECT_EQ(state.value(QStringLiteral("source")), QStringLiteral("init_from_intrinsics"));
+    EXPECT_EQ(state.value(QStringLiteral("metadata")).toObject().value(QStringLiteral("pose_initialized_as_identity")),
+              true);
+    EXPECT_FALSE(
+        written_files.value(QStringLiteral("images")).toArray().first().toObject().contains(QStringLiteral("camera")));
+}
+
+TEST(ProjectCameraInitializationTest, OverwritesNativeDefinitionWithoutChangingInstanceIdentity)
+{
+    const QString temp_root =
+        QDir(QString::fromUtf8(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("build/tmp/placamera-initialization"));
+    ASSERT_TRUE(QDir().mkpath(temp_root));
+    QTemporaryDir directory(QDir(temp_root).filePath(QStringLiteral("XXXXXX")));
+    ASSERT_TRUE(directory.isValid());
+    const QString image_path = directory.filePath(QStringLiteral("frame.png"));
+    ASSERT_TRUE(QImage(8, 6, QImage::Format_RGB32).save(image_path));
+    QJsonObject project{{QStringLiteral("images"),
+                         QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("frame-id")},
+                                                {QStringLiteral("path"), image_path}}}},
+                        {QStringLiteral("camera_definitions"), QJsonArray{}},
+                        {QStringLiteral("camera_instances"), QJsonArray{}}};
+    xjw::gui::project::CameraInitializationRequest request;
+    request.images = {image_path};
+    request.projectMetadata = project;
+    request.mode = xjw::gui::project::CameraInitializationMode::Intrinsics;
+    request.source = QStringLiteral("init_from_intrinsics");
+    request.settings = {{QStringLiteral("fx"), 100.0}, {QStringLiteral("fy"), 100.0}};
+    QString error;
+    const auto first = xjw::gui::project::prepareCameraInitializations(request);
+    ASSERT_TRUE(first.error.isEmpty()) << first.error.toStdString();
+    ASSERT_TRUE(xjw::gui::project::withPreparedCameras(project, first, false, &project, &error)) << error.toStdString();
+    const QString instance_id = project.value(QStringLiteral("camera_instances"))
+                                    .toArray()
+                                    .first()
+                                    .toObject()
+                                    .value(QStringLiteral("id"))
+                                    .toString();
+
+    request.projectMetadata = project;
+    request.settings.insert(QStringLiteral("overwriteExisting"), true);
+    request.settings.insert(QStringLiteral("fx"), 140.0);
+    const auto second = xjw::gui::project::prepareCameraInitializations(request);
+    ASSERT_TRUE(second.error.isEmpty()) << second.error.toStdString();
+    ASSERT_EQ(second.cameras.size(), 1U);
+    QJsonObject updated;
+    ASSERT_TRUE(xjw::gui::project::withPreparedCameras(project, second, true, &updated, &error)) << error.toStdString();
+    EXPECT_EQ(updated.value(QStringLiteral("camera_instances"))
+                  .toArray()
+                  .first()
+                  .toObject()
+                  .value(QStringLiteral("id"))
+                  .toString(),
+              instance_id);
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(updated);
+    ASSERT_TRUE(loaded.ok()) << loaded.errors.join(';').toStdString();
+    const auto selected = loaded.instances.forImage(placamera::ImageId("frame-id"));
+    ASSERT_TRUE(selected.ok());
+    const auto* camera = dynamic_cast<const placamera::FramePinholeModel*>(selected.value().get());
+    ASSERT_NE(camera, nullptr);
+    EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalX, 140.0);
+}
 
 TEST(DepthOverlayDataTest, ResolvesExactReferenceAndRequestedLevels)
 {
@@ -749,10 +862,9 @@ TEST(CanvasDepthOverlayTest, ShowsCurrentFrameAsSoonAsItsDepthRecordArrives)
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
-    makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
+    NativeFrameCameraFixture makeCamera(double cx, double cy, double cz, double fu = 1200.0, double fv = 1200.0)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
+        NativeFrameCameraFixture cam;
         cam.setIntrinsics(fu, fv, 512.0, 384.0);
         const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
         const std::array<double, 3> center = {cx, cy, cz};
@@ -760,15 +872,56 @@ namespace
         return cam;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
-    makeBoundNumericCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
-                           const std::string& instanceId = "stored-instance",
-                           const std::string& imageId = "stored-image",
-                           const std::string& worldFrame = "stored-world",
-                           int samples = 4,
-                           int lines = 4)
+    std::shared_ptr<const placamera::FramePinholeModel>
+    nativeFixtureCamera(const NativeFrameCameraFixture& camera, const QString& image_id, int samples, int lines)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
+        return std::make_shared<const placamera::FramePinholeModel>(
+            camera.makeModel(placamera::CameraInstanceId("gui-fixture-" + image_id.toStdString()),
+                             placamera::ImageId(image_id.toStdString()),
+                             {samples, lines}));
+    }
+
+    placamera::CameraInstanceSet nativeCameraForFirstImage(const QJsonObject& project_meta,
+                                                           int width,
+                                                           int height,
+                                                           const std::array<double, 3>& center)
+    {
+        const QString image_id = project_meta.value(QStringLiteral("images"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString();
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("gui-test-definition"),
+                                                      {1200.0, 1200.0, width * 0.5, height * 0.5, 0.01, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        const auto added =
+            cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("gui-test-" + image_id.toStdString()),
+                placamera::ImageId(image_id.toStdString()),
+                definition,
+                {width, height},
+                placamera::Pose::create(frame, center, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+        if (!added.ok())
+        {
+            throw std::runtime_error("failed to create native GUI camera fixture");
+        }
+        return cameras;
+    }
+
+    NativeFrameCameraFixture makeBoundNumericCamera(const NativeFrameCameraFixture& source,
+                                                    const std::string& instanceId = "stored-instance",
+                                                    const std::string& imageId = "stored-image",
+                                                    const std::string& worldFrame = "stored-world",
+                                                    int samples = 4,
+                                                    int lines = 4)
+    {
+        NativeFrameCameraFixture state;
         state.setIntrinsics(source.focalX(), source.focalY(), source.principalX(), source.principalY());
         state.setPixelPitch(source.pixelPitch());
         state.setAxisDirections(source.uAxisSign(), source.vAxisSign());
@@ -780,27 +933,44 @@ namespace
                             distortion.tangentialP1,
                             distortion.tangentialP2);
         state.setPose(source.cameraToWorldRotation(), source.cameraCenter());
-        state.setImageSize(xjw::camera_core::ImageSize{samples, lines});
-        std::string error;
-        if (!state.bindIdentity(xjw::camera_core::CameraInstanceId(instanceId),
-                                xjw::camera_core::ImageId(imageId),
-                                xjw::coordinate_system::CoordinateFrameId(worldFrame),
-                                &error))
-        {
-            throw std::runtime_error(error);
-        }
+        state.setImageSize(placamera::ImageSize{samples, lines});
+        state.bind(placamera::CameraInstanceId(instanceId),
+                   placamera::ImageId(imageId),
+                   placoordinate::CoordinateFrameId(worldFrame));
         return state;
     }
 
-    QJsonObject mvsCameraJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    QJsonObject reportCameraFixture(const NativeFrameCameraFixture& source)
+    {
+        const auto size = source.imageSize();
+        const auto camera = nativeFixtureCamera(
+            source, QStringLiteral("report-fixture-image"), size ? size->samples : 1024, size ? size->lines : 768);
+        QJsonObject report = xjw::common::project::serializeFramePinholeModel(*camera);
+        if (!size)
+        {
+            // Calibration-report tests also exercise old external reports with
+            // missing resolution; the production serializer never omits it.
+            report.remove(QStringLiteral("image_width"));
+            report.remove(QStringLiteral("image_height"));
+        }
+        return report;
+    }
+
+    QJsonObject mvsCameraJson(const NativeFrameCameraFixture& camera)
     {
         const auto rotation = camera.worldToCameraRotation();
+        const auto translation = camera.worldToCameraTranslation();
         const auto center = camera.cameraCenter();
         QJsonArray rotationJson;
+        QJsonArray translationJson;
         QJsonArray centerJson;
         for (const double value : rotation)
         {
             rotationJson.append(value);
+        }
+        for (const double value : translation)
+        {
+            translationJson.append(value);
         }
         for (const double value : center)
         {
@@ -811,31 +981,29 @@ namespace
                            {QStringLiteral("cx"), camera.principalX()},
                            {QStringLiteral("cy"), camera.principalY()},
                            {QStringLiteral("rotation_world_to_camera"), rotationJson},
+                           {QStringLiteral("translation_world_to_camera"), translationJson},
                            {QStringLiteral("camera_center"), centerJson},
                            {QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value())},
                            {QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value())},
                            {QStringLiteral("world_frame"), QString::fromStdString(camera.worldFrame().value())}};
     }
 
-    bool projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                      const std::array<double, 3>& xyz,
-                      double* u,
-                      double* v)
+    bool projectPoint(const NativeFrameCameraFixture& camera, const std::array<double, 3>& xyz, double* u, double* v)
     {
         if (!u || !v)
         {
             return false;
         }
 
-        const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
-        double uv[2] = {0.0, 0.0};
-        if (!camera.projectWorldPoint(worldPoint, uv))
+        const auto model = nativeFixtureCamera(camera, QStringLiteral("projection-fixture"), 1024, 768);
+        const auto projection = model->groundToImage({model->groundFrame(), xyz});
+        if (!projection.ok())
         {
             return false;
         }
 
-        *u = uv[0];
-        *v = uv[1];
+        *u = projection.value().image.sample;
+        *v = projection.value().image.line;
         return true;
     }
 
@@ -1124,34 +1292,102 @@ namespace
         file.close();
     }
 
-    TEST(ProjectCameraImportServiceTest, BatchImportRecordsActualTsaiSourceFileInCameraMeta)
+    TEST(ProjectCameraImportServiceTest, CameraProjectImportBindsNativeCameraToProjectImageId)
     {
         QTemporaryDir tempDir;
         ASSERT_TRUE(tempDir.isValid());
 
-        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.JPG"));
-        QFile imageFile(imagePath);
-        ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-        imageFile.write("jpg");
-        imageFile.close();
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.png"));
+        QImage image(1280, 1000, QImage::Format_RGB32);
+        image.fill(Qt::black);
+        ASSERT_TRUE(image.save(imagePath));
 
-        const QString tsaiPath = QDir(tempDir.path()).filePath(QStringLiteral("cameras/IMG_001.tsai"));
-        writeMinimalTsai(tsaiPath, 1234.0, 640.0);
+        const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("scene_par.txt"));
+        QFile projectFile(projectPath);
+        ASSERT_TRUE(projectFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream projectStream(&projectFile);
+        projectStream << "1\n";
+        projectStream << "IMG_001.png 1234 0 640 0 1235 500 0 0 1 "
+                         "1 0 0 0 1 0 0 0 1 0 0 0\n";
+        projectFile.close();
 
-        xjw::gui::project::BatchCameraImportResult result;
-        const auto status = xjw::gui::project::buildBatchCameraImport(
-            QFileInfo(tsaiPath).absolutePath(), QStringList{imagePath}, &result);
+        xjw::gui::project::CameraProjectImportResult result;
+        const auto status = xjw::gui::project::buildCameraProjectImport(projectPath, QStringList{imagePath}, &result);
 
-        ASSERT_EQ(status, xjw::gui::project::BatchCameraImportStatus::Ok);
-        ASSERT_EQ(result.cameraMetaByImage.size(), 1);
-        const QJsonObject camera = result.cameraMetaByImage.constBegin().value();
-        EXPECT_EQ(QDir::cleanPath(camera.value(QStringLiteral("source_file")).toString()),
-                  QDir::cleanPath(QFileInfo(tsaiPath).absoluteFilePath()));
-        EXPECT_DOUBLE_EQ(camera.value(QStringLiteral("fu")).toDouble(), 1234.0);
-        EXPECT_NEAR(camera.value(QStringLiteral("k1")).toDouble(), -0.01, 1e-12);
+        ASSERT_EQ(status, xjw::gui::project::CameraProjectImportStatus::Ok);
+        ASSERT_EQ(result.cameras.size(), 1U);
+        EXPECT_EQ(result.sourceFormat, QStringLiteral("middlebury-par"));
+        ASSERT_TRUE(result.cameras.front().camera.has_value());
+        EXPECT_EQ(result.cameras.front().imageSize.samples, 1280);
+        EXPECT_EQ(result.cameras.front().imageSize.lines, 1000);
+        EXPECT_DOUBLE_EQ(result.cameras.front().camera->definition->intrinsics().focalX, 1234.0);
+        EXPECT_DOUBLE_EQ(result.cameras.front().camera->definition->intrinsics().focalY, 1235.0);
+
+        ProjectData project;
+        QString error;
+        ASSERT_TRUE(project.createProject(QDir(tempDir.path()).filePath(QStringLiteral("tsai.plascan")),
+                                          QStringLiteral("tsai")));
+        ASSERT_TRUE(project.addImages({imagePath}, &error)) << qPrintable(error);
+        placamera::CameraInstanceSet cameras;
+        QMap<QString, QJsonObject> annotations;
+        ASSERT_TRUE(xjw::gui::project::bindImportedFrameCameras(
+            project.coreFilesMeta(), project.currentProjectPath(), result.cameras, &cameras, &annotations, &error))
+            << qPrintable(error);
+        ASSERT_EQ(cameras.size(), 1U);
+        const auto imageId = cameras.values().front()->imageId();
+        EXPECT_EQ(annotations.value(QString::fromStdString(imageId.value()))
+                      .value(QStringLiteral("metadata"))
+                      .toObject()
+                      .value(QStringLiteral("source_file"))
+                      .toString(),
+                  QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()));
+        EXPECT_EQ(annotations.value(QString::fromStdString(imageId.value()))
+                      .value(QStringLiteral("metadata"))
+                      .toObject()
+                      .value(QStringLiteral("source_format"))
+                      .toString(),
+                  QStringLiteral("middlebury-par"));
+        int writtenCount = 0;
+        ASSERT_TRUE(project.upsertNativeCameraInstances(cameras, annotations, &writtenCount, &error))
+            << qPrintable(error);
+        EXPECT_EQ(writtenCount, 1);
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(project.coreFilesMeta());
+        ASSERT_TRUE(loaded.ok()) << qPrintable(loaded.errors.join(QStringLiteral("; ")));
+        EXPECT_TRUE(loaded.instances.forImage(imageId).ok());
     }
 
-    TEST(ProjectDataCameraMetadataTest, SetCameraInstancesRejectsLegacyCameraFileMetadata)
+    TEST(ProjectCameraImportServiceTest, CameraProjectImportRejectsUnrepresentableColmapLens)
+    {
+        QTemporaryDir tempDir;
+        ASSERT_TRUE(tempDir.isValid());
+
+        const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("fisheye.png"));
+        QImage image(800, 600, QImage::Format_RGB32);
+        image.fill(Qt::black);
+        ASSERT_TRUE(image.save(imagePath));
+
+        QFile camerasFile(QDir(tempDir.path()).filePath(QStringLiteral("cameras.txt")));
+        ASSERT_TRUE(camerasFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&camerasFile) << "3 OPENCV_FISHEYE 800 600 500 501 400 300 0.1 0.02 0 0\n";
+        camerasFile.close();
+
+        QFile imagesFile(QDir(tempDir.path()).filePath(QStringLiteral("images.txt")));
+        ASSERT_TRUE(imagesFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&imagesFile) << "7 1 0 0 0 0 0 0 3 fisheye.png\n\n";
+        imagesFile.close();
+
+        xjw::gui::project::CameraProjectImportResult result;
+        const auto status =
+            xjw::gui::project::buildCameraProjectImport(tempDir.path(), QStringList{imagePath}, &result);
+
+        EXPECT_EQ(status, xjw::gui::project::CameraProjectImportStatus::NoImportable);
+        EXPECT_TRUE(result.cameras.empty());
+        EXPECT_EQ(result.unsupportedCount, 1);
+        ASSERT_EQ(result.importErrors.size(), 1);
+        EXPECT_TRUE(result.importErrors.front().contains(QStringLiteral("无法无损")));
+    }
+
+    TEST(ProjectDataCameraMetadataTest, NativeInsertRejectsLegacyCameraFileMetadata)
     {
         QTemporaryDir tempDir;
         ASSERT_TRUE(tempDir.isValid());
@@ -1171,31 +1407,24 @@ namespace
         QJsonArray images = core.value(QStringLiteral("images")).toArray();
         ASSERT_EQ(images.size(), 1);
         QJsonObject imageObject = images.at(0).toObject();
-        const QString projectImagePath = imageObject.value(QStringLiteral("path")).toString();
-        ASSERT_FALSE(projectImagePath.isEmpty());
+        ASSERT_FALSE(imageObject.value(QStringLiteral("image_uuid")).toString().isEmpty());
         imageObject[QStringLiteral("camera_file")] = QStringLiteral("stale/old.tsai");
         images[0] = imageObject;
         core[QStringLiteral("images")] = images;
         data.updateMetadata(core, false);
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraState;
-        cameraState.setIntrinsics(1111.0, 1111.0, 500.0, 400.0);
-        cameraState.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-        cameraState.setImageSize(xjw::camera_core::ImageSize{1024, 768});
-        QJsonObject camera = xjw::common::project::serializeFramePinholeNumericState(cameraState);
-        camera[QStringLiteral("source_file")] = QStringLiteral("fresh/new.tsai");
-
         const QJsonObject before = data.coreFilesMeta();
+        const auto cameras = nativeCameraForFirstImage(before, 1024, 768, {0.0, 0.0, 0.0});
         int updated = 0;
         QString error;
-        EXPECT_FALSE(data.setCameraInstances(QMap<QString, QJsonObject>{{projectImagePath, camera}}, &updated, &error));
+        EXPECT_FALSE(data.upsertNativeCameraInstances(cameras, {}, &updated, &error));
         EXPECT_EQ(updated, 0);
-        EXPECT_TRUE(error.contains(QStringLiteral("camera_file")));
+        EXPECT_TRUE(error.contains(QStringLiteral("legacy embedded camera fields"))) << qPrintable(error);
 
         EXPECT_EQ(data.coreFilesMeta(), before);
     }
 
-    TEST(ProjectDataCameraMetadataTest, ClearImageCamerasSkipsImagesWithoutCamera)
+    TEST(ProjectDataCameraMetadataTest, NativeClearSkipsImagesWithoutCamera)
     {
         QTemporaryDir tempDir;
         ASSERT_TRUE(tempDir.isValid());
@@ -1210,12 +1439,17 @@ namespace
         ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_clear_noop")));
         ASSERT_TRUE(data.addImages(QStringList{imagePath}));
         const QJsonObject before = data.coreFilesMeta();
-        const QString storedPath =
-            before.value(QStringLiteral("images")).toArray().at(0).toObject().value(QStringLiteral("path")).toString();
+        const QString image_id = before.value(QStringLiteral("images"))
+                                     .toArray()
+                                     .at(0)
+                                     .toObject()
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString();
 
         int cleared = -1;
         QString error;
-        EXPECT_FALSE(data.clearCameraInstances(QStringList{storedPath}, &cleared, &error));
+        EXPECT_TRUE(data.replaceNativeCameraInstances(
+            {placamera::ImageId(image_id.toStdString())}, {}, {}, nullptr, &cleared, &error));
         EXPECT_EQ(cleared, 0);
         EXPECT_EQ(data.coreFilesMeta(), before);
     }
@@ -1262,12 +1496,11 @@ namespace
         EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
     }
 
-    QJsonObject buildImageEntry(const QString& path,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    QJsonObject buildImageEntry(const QString& path, const NativeFrameCameraFixture& camera)
     {
         QJsonObject imageObject;
         imageObject[QStringLiteral("path")] = path;
-        imageObject[QStringLiteral("camera")] = xjw::common::project::serializeFramePinholeNumericState(camera);
+        imageObject[QStringLiteral("camera")] = reportCameraFixture(camera);
         return imageObject;
     }
 
@@ -1289,24 +1522,24 @@ namespace
         const QString preparedValidMask =
             QDir(preparedDirectory)
                 .filePath(QStringLiteral("frame_%1_valid.png").arg(frameIndex, 6, 10, QLatin1Char('0')));
-        for (const QString& path : {preparedImage, preparedValidMask})
+        QImage prepared_raster(4, 4, QImage::Format_Grayscale8);
+        prepared_raster.fill(255);
+        if (!prepared_raster.save(preparedImage) || !prepared_raster.save(preparedValidMask))
         {
-            QFile file(path);
-            if (!file.open(QIODevice::WriteOnly) || file.write("prepared") <= 0)
-            {
-                return false;
-            }
+            return false;
         }
 
         (*record)[QStringLiteral("prepared_image")] = preparedImage;
         (*record)[QStringLiteral("prepared_valid_mask_path")] = preparedValidMask;
-        (*record)[QStringLiteral("prepared_camera_model")] = QJsonObject{
-            {QStringLiteral("fx"), 900.0},
-            {QStringLiteral("fy"), 910.0},
-            {QStringLiteral("cx"), 1.0},
-            {QStringLiteral("cy"), 1.0},
-            {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
-            {QStringLiteral("camera_center"), QJsonArray{static_cast<double>(frameIndex), 0.0, 0.0}}};
+        auto camera = makeCamera(static_cast<double>(frameIndex), 0.0, 0.0, 900.0, 910.0);
+        camera.setIntrinsics(900.0, 910.0, 1.0, 1.0);
+        camera = makeBoundNumericCamera(camera,
+                                        "fixture-instance-" + std::to_string(frameIndex),
+                                        "fixture-image-" + std::to_string(frameIndex),
+                                        "fixture-world",
+                                        4,
+                                        4);
+        (*record)[QStringLiteral("prepared_camera_model")] = mvsCameraJson(camera);
         return true;
     }
 
@@ -1361,36 +1594,33 @@ namespace
         return records;
     }
 
-    QJsonObject makeCanonicalTriangulationMeta(
-        std::initializer_list<std::pair<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState>>
-            cameraEntries,
-        int samples = 1024,
-        int lines = 768)
+    QJsonObject
+    makeCanonicalTriangulationMeta(std::initializer_list<std::pair<QString, NativeFrameCameraFixture>> cameraEntries,
+                                   int samples = 1024,
+                                   int lines = 768)
     {
         QJsonObject meta;
         QJsonArray images;
-        QMap<QString, QJsonObject> metadataByPath;
+        placamera::CameraInstanceSet cameras;
         int imageIndex = 0;
         for (const auto& entry : cameraEntries)
         {
             const QString& path = entry.first;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = entry.second;
+            const NativeFrameCameraFixture& camera = entry.second;
             const QString imageId = QStringLiteral("triangulation-image-%1").arg(imageIndex++);
             images.append(QJsonObject{{QStringLiteral("image_uuid"), imageId},
                                       {QStringLiteral("path"), path},
                                       {QStringLiteral("samples"), samples},
                                       {QStringLiteral("lines"), lines}});
 
-            QJsonObject metadata = xjw::common::project::serializeFramePinholeNumericState(camera);
-            metadata.insert(QStringLiteral("image_width"), samples);
-            metadata.insert(QStringLiteral("image_height"), lines);
-            metadataByPath.insert(path, metadata);
+            const auto added = cameras.add(nativeFixtureCamera(camera, imageId, samples, lines));
+            EXPECT_TRUE(added.ok()) << added.message();
         }
 
         meta.insert(QStringLiteral("images"), images);
         meta.insert(QStringLiteral("camera_definitions"), QJsonArray{});
         meta.insert(QStringLiteral("camera_instances"), QJsonArray{});
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, metadataByPath);
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&meta, cameras);
         EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
         return meta;
     }
@@ -1399,7 +1629,7 @@ namespace
     {
         QJsonObject metadata;
         QJsonArray images;
-        QMap<QString, QJsonObject> cameraMetadataByPath;
+        placamera::CameraInstanceSet cameras;
         for (int index = 0; index < imagePaths.size(); ++index)
         {
             const QString& imagePath = imagePaths.at(index);
@@ -1409,18 +1639,14 @@ namespace
                                       {QStringLiteral("samples"), samples},
                                       {QStringLiteral("lines"), lines}});
 
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-                makeCamera(static_cast<double>(index), 0.0, 10.0);
-            QJsonObject cameraMetadata = xjw::common::project::serializeFramePinholeNumericState(camera);
-            cameraMetadata.insert(QStringLiteral("image_width"), samples);
-            cameraMetadata.insert(QStringLiteral("image_height"), lines);
-            cameraMetadataByPath.insert(imagePath, cameraMetadata);
+            NativeFrameCameraFixture camera = makeCamera(static_cast<double>(index), 0.0, 10.0);
+            const auto added = cameras.add(nativeFixtureCamera(camera, imageId, samples, lines));
+            EXPECT_TRUE(added.ok()) << added.message();
         }
         metadata.insert(QStringLiteral("images"), images);
         metadata.insert(QStringLiteral("camera_definitions"), QJsonArray{});
         metadata.insert(QStringLiteral("camera_instances"), QJsonArray{});
-        const auto update =
-            xjw::camera_project::CameraProjectRecords::upsertByImagePath(&metadata, cameraMetadataByPath);
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&metadata, cameras);
         EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
         return metadata;
     }
@@ -1761,32 +1987,30 @@ TEST(ProjectResultRecordsTest, DenseCloudAndMeshRecordsKeepDistinctProductKinds)
               mesh.value(QStringLiteral("source_dense_cloud")).toString());
 }
 
-TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection)
+TEST(ProjectSupportUtilsTest, CameraReportPreservesUnitsAndDepthDirection)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState sourceCamera =
-        makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
+    NativeFrameCameraFixture sourceCamera = makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
     sourceCamera.setAxisDirections(-1, 1);
     sourceCamera.setDepthAxisFlipped(true);
     sourceCamera.setDistortion(0.01, -0.001, 0.0001, 0.0002, -0.0003);
 
-    const QJsonObject cameraJson = xjw::common::project::serializeFramePinholeNumericState(sourceCamera);
+    const QJsonObject cameraJson = reportCameraFixture(sourceCamera);
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState restoredCamera;
-    ASSERT_TRUE(xjw::common::project::decodeFramePinholeNumericState(cameraJson, &restoredCamera));
-
-    EXPECT_DOUBLE_EQ(restoredCamera.focalX(), sourceCamera.focalX());
-    EXPECT_DOUBLE_EQ(restoredCamera.focalY(), sourceCamera.focalY());
-    EXPECT_DOUBLE_EQ(restoredCamera.principalX(), sourceCamera.principalX());
-    EXPECT_DOUBLE_EQ(restoredCamera.principalY(), sourceCamera.principalY());
-    EXPECT_EQ(restoredCamera.uAxisSign(), sourceCamera.uAxisSign());
-    EXPECT_EQ(restoredCamera.vAxisSign(), sourceCamera.vAxisSign());
-    EXPECT_EQ(restoredCamera.depthAxisFlipped(), sourceCamera.depthAxisFlipped());
-
+    EXPECT_EQ(cameraJson.value(QStringLiteral("intrinsics_unit")).toString(), QStringLiteral("mm"));
+    EXPECT_EQ(cameraJson.value(QStringLiteral("camera_center_unit")).toString(), QStringLiteral("m"));
+    EXPECT_DOUBLE_EQ(cameraJson.value(QStringLiteral("fu")).toDouble(), sourceCamera.focalXMillimeters());
+    EXPECT_DOUBLE_EQ(cameraJson.value(QStringLiteral("fv")).toDouble(), sourceCamera.focalYMillimeters());
+    EXPECT_DOUBLE_EQ(cameraJson.value(QStringLiteral("cu")).toDouble(), sourceCamera.principalXMillimeters());
+    EXPECT_DOUBLE_EQ(cameraJson.value(QStringLiteral("cv")).toDouble(), sourceCamera.principalYMillimeters());
+    EXPECT_EQ(cameraJson.value(QStringLiteral("u_direction")).toInt(), sourceCamera.uAxisSign());
+    EXPECT_EQ(cameraJson.value(QStringLiteral("v_direction")).toInt(), sourceCamera.vAxisSign());
+    EXPECT_EQ(cameraJson.value(QStringLiteral("depth_axis_flipped")).toBool(), sourceCamera.depthAxisFlipped());
     const auto sourceCenter = sourceCamera.cameraCenter();
-    const auto restoredCenter = restoredCamera.cameraCenter();
-    EXPECT_DOUBLE_EQ(restoredCenter[0], sourceCenter[0]);
-    EXPECT_DOUBLE_EQ(restoredCenter[1], sourceCenter[1]);
-    EXPECT_DOUBLE_EQ(restoredCenter[2], sourceCenter[2]);
+    const QJsonArray center = cameraJson.value(QStringLiteral("C")).toArray();
+    ASSERT_EQ(center.size(), 3);
+    EXPECT_DOUBLE_EQ(center.at(0).toDouble(), sourceCenter[0]);
+    EXPECT_DOUBLE_EQ(center.at(1).toDouble(), sourceCenter[1]);
+    EXPECT_DOUBLE_EQ(center.at(2).toDouble(), sourceCenter[2]);
 }
 
 TEST(DepthFrameUtilsTest, ExistingFrameArtifactsRequirePreviewAndRawDepth)
@@ -1892,7 +2116,11 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionRequiresCurrentBinaryDepth)
         {QStringLiteral("cx"), 1.0},
         {QStringLiteral("cy"), 1.0},
         {QStringLiteral("rotation_world_to_camera"), QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
-        {QStringLiteral("camera_center"), QJsonArray{0.0, 0.0, 0.0}}};
+        {QStringLiteral("translation_world_to_camera"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("camera_center"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("instance_id"), QStringLiteral("prepared-test-instance")},
+        {QStringLiteral("image_id"), QStringLiteral("prepared-test-image")},
+        {QStringLiteral("world_frame"), QStringLiteral("project-world")}};
     record[QStringLiteral("source_images")] = QJsonArray{QStringLiteral("image_4.jpg"), QStringLiteral("image_6.jpg")};
     record[QStringLiteral("depth_png")] = pngPath;
     record[QStringLiteral("raw_depth_path")] = xjw::core::project::rawDepthStoragePath(pngPath);
@@ -1927,12 +2155,8 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionRequiresCurrentBinaryDepth)
 
     const QString prepared_image = QDir(tempDir.path()).filePath(QStringLiteral("prepared_5.png"));
     const QString prepared_mask = QDir(tempDir.path()).filePath(QStringLiteral("prepared_5_valid.png"));
-    for (const QString& path : {prepared_image, prepared_mask})
-    {
-        QFile file(path);
-        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-        ASSERT_GT(file.write("prepared"), 0);
-    }
+    ASSERT_TRUE(cv::imwrite(prepared_image.toStdString(), cv::Mat(2, 2, CV_8UC3, cv::Scalar(80, 90, 100))));
+    ASSERT_TRUE(cv::imwrite(prepared_mask.toStdString(), cv::Mat(2, 2, CV_8UC1, cv::Scalar(255))));
     record[QStringLiteral("prepared_image")] = prepared_image;
     record[QStringLiteral("prepared_valid_mask_path")] = prepared_mask;
     meta[QStringLiteral("depth_map_results")] = QJsonArray{record};
@@ -1979,19 +2203,18 @@ TEST(DepthFrameUtilsTest, StoredFusionUsesArtifactCameraInsteadOfCurrentProjectC
     // and must be scaled to the loaded raster instead of replaced by the current camera.
     stored.gridWidth = 4;
     stored.gridHeight = 4;
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState current_camera =
+    const NativeFrameCameraFixture current_camera =
         makeBoundNumericCamera(makeCamera(30.0, 40.0, 50.0, 1200.0, 1210.0));
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState stored_camera = current_camera;
+    const auto current_model = current_camera.toModel();
+    ASSERT_TRUE(current_model.has_value());
+    NativeFrameCameraFixture stored_camera = current_camera;
     stored_camera.setCameraCenter({3.0, 4.0, 5.0});
     stored_camera.setIntrinsics(400.0, 410.0, 1.0, 1.0);
     stored.cameraModel = mvsCameraJson(stored_camera);
     stored.refImage = QStringLiteral("source.png");
     stored.preparedImage = QDir(temp_dir.path()).filePath(QStringLiteral("prepared.png"));
-    QFile prepared_file(stored.preparedImage);
-    ASSERT_TRUE(prepared_file.open(QIODevice::WriteOnly));
-    ASSERT_GT(prepared_file.write("prepared"), 0);
-    prepared_file.close();
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera = current_camera;
+    ASSERT_TRUE(cv::imwrite(stored.preparedImage.toStdString(), cv::Mat(4, 4, CV_8UC3, cv::Scalar(80, 90, 100))));
+    NativeFrameCameraFixture prepared_camera = current_camera;
     prepared_camera.setCameraCenter({3.0, 4.0, 5.0});
     prepared_camera.setIntrinsics(800.0, 820.0, 2.0, 2.0);
     stored.preparedCameraModel = mvsCameraJson(prepared_camera);
@@ -2002,33 +2225,46 @@ TEST(DepthFrameUtilsTest, StoredFusionUsesArtifactCameraInsteadOfCurrentProjectC
     fusion_config.enableLocalDepthOutlierFilter = false;
     fusion_config.enableSpeckleFilter = false;
 
-    const auto result = xjw::core::project::buildStoredFusionFrame(stored, current_camera, fusion_config, 2);
+    const auto result = xjw::core::project::buildStoredFusionFrame(stored, *current_model, fusion_config, 2);
 
     ASSERT_TRUE(result.status.ok) << qPrintable(result.status.errorMessage);
     EXPECT_EQ(result.frame.imagePath, xjw::common::io::toUtf8Path(stored.preparedImage));
-    EXPECT_DOUBLE_EQ(result.frame.sourceCamera.focalX(), 800.0);
-    EXPECT_DOUBLE_EQ(result.frame.sourceCamera.focalY(), 820.0);
-    EXPECT_DOUBLE_EQ(result.frame.cameraModel.focalX(), 200.0);
-    EXPECT_DOUBLE_EQ(result.frame.cameraModel.focalY(), 205.0);
+    EXPECT_EQ(result.frame.preparedRasterSize, cv::Size(4, 4));
+    ASSERT_TRUE(result.frame.cameraModel);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel->pinholeDefinition().intrinsics().focalX, 200.0);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel->pinholeDefinition().intrinsics().focalY, 205.0);
     // Principal points follow pixel-center scaling: (c + 0.5) * scale - 0.5.
-    EXPECT_DOUBLE_EQ(result.frame.cameraModel.principalX(), 0.25);
-    EXPECT_DOUBLE_EQ(result.frame.cameraModel.principalY(), 0.25);
-    ASSERT_TRUE(result.frame.cameraModel.imageSize().has_value());
-    EXPECT_EQ(result.frame.cameraModel.imageSize()->samples, 2);
-    EXPECT_EQ(result.frame.cameraModel.imageSize()->lines, 2);
-    const std::array<double, 3> stored_center = result.frame.cameraModel.cameraCenter();
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel->pinholeDefinition().intrinsics().principalX, 0.25);
+    EXPECT_DOUBLE_EQ(result.frame.cameraModel->pinholeDefinition().intrinsics().principalY, 0.25);
+    EXPECT_EQ(result.frame.cameraModel->imageSize().samples, 2);
+    EXPECT_EQ(result.frame.cameraModel->imageSize().lines, 2);
+    const std::array<double, 3> stored_center = result.frame.cameraModel->pose().center;
     EXPECT_EQ(stored_center, (std::array<double, 3>{3.0, 4.0, 5.0}));
     ASSERT_EQ(result.frame.geometrySupportCount.type(), CV_16UC1);
     EXPECT_EQ(result.frame.geometrySupportCount.at<std::uint16_t>(0, 0), 2);
 
+    QJsonObject inconsistent_camera = stored.cameraModel;
+    inconsistent_camera.insert(QStringLiteral("translation_world_to_camera"), QJsonArray{0.0, 0.0, 0.0});
+    stored.cameraModel = inconsistent_camera;
+    const auto inconsistent_pose_result =
+        xjw::core::project::buildStoredFusionFrame(stored, *current_model, fusion_config, 2);
+    EXPECT_FALSE(inconsistent_pose_result.status.ok);
+    EXPECT_TRUE(inconsistent_pose_result.status.errorMessage.contains(QStringLiteral("PlaCamera 面阵针孔")));
+
     stored.cameraModel = {};
-    stored.preparedImage.clear();
-    stored.preparedCameraModel = {};
     stored.gridWidth = 2;
     stored.gridHeight = 2;
-    const auto legacy_result = xjw::core::project::buildStoredFusionFrame(stored, current_camera, fusion_config, 2);
-    EXPECT_FALSE(legacy_result.status.ok);
-    EXPECT_TRUE(legacy_result.status.errorMessage.contains(QStringLiteral("缺少完整的面阵针孔 identity/frame")));
+    const auto invalid_record_result =
+        xjw::core::project::buildStoredFusionFrame(stored, *current_model, fusion_config, 2);
+    EXPECT_FALSE(invalid_record_result.status.ok);
+    EXPECT_TRUE(
+        invalid_record_result.status.errorMessage.contains(QStringLiteral("PlaCamera 面阵针孔 identity/frame")));
+
+    stored.preparedImage.clear();
+    const auto missing_prepared_result =
+        xjw::core::project::buildStoredFusionFrame(stored, *current_model, fusion_config, 2);
+    EXPECT_FALSE(missing_prepared_result.status.ok);
+    EXPECT_TRUE(missing_prepared_result.status.errorMessage.contains(QStringLiteral("prepared PNG")));
 }
 
 TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
@@ -2056,11 +2292,16 @@ TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
     fusion_config.doInpaint = false;
     fusion_config.enableLocalDepthOutlierFilter = false;
     fusion_config.enableSpeckleFilter = false;
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeBoundNumericCamera(makeCamera(0.0, 0.0, 0.0));
+    const NativeFrameCameraFixture camera = makeBoundNumericCamera(makeCamera(0.0, 0.0, 0.0));
+    const auto camera_model = camera.toModel();
+    ASSERT_TRUE(camera_model.has_value());
     stored.cameraModel = mvsCameraJson(camera);
+    stored.preparedImage = directory.filePath(QStringLiteral("prepared.png"));
+    ASSERT_TRUE(cv::imwrite(stored.preparedImage.toStdString(), cv::Mat(4, 4, CV_8UC3, cv::Scalar(80, 90, 100))));
+    stored.preparedCameraModel = mvsCameraJson(camera);
 
-    const auto missing_evidence = xjw::core::project::buildStoredFusionFrame(stored, camera, fusion_config, 2, 2);
+    const auto missing_evidence =
+        xjw::core::project::buildStoredFusionFrame(stored, *camera_model, fusion_config, 2, 2);
     EXPECT_FALSE(missing_evidence.status.ok);
     EXPECT_TRUE(missing_evidence.status.errorMessage.contains(QStringLiteral("几何支持")));
 
@@ -2069,7 +2310,8 @@ TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
     ASSERT_TRUE(
         xjw::core::project::writeDepthMatStorage(inverse_depth_spread_path, cv::Mat(4, 4, CV_32FC1, cv::Scalar(0.01f)))
             .ok);
-    const auto malformed_evidence = xjw::core::project::buildStoredFusionFrame(stored, camera, fusion_config, 2, 2);
+    const auto malformed_evidence =
+        xjw::core::project::buildStoredFusionFrame(stored, *camera_model, fusion_config, 2, 2);
     EXPECT_FALSE(malformed_evidence.status.ok);
     EXPECT_TRUE(malformed_evidence.status.errorMessage.contains(QStringLiteral("类型或尺寸")));
 
@@ -2079,7 +2321,7 @@ TEST(DepthFrameUtilsTest, StoredFusionRequiresAndNearestResizesGeometryEvidence)
     geometry_support(cv::Rect(2, 2, 2, 2)).setTo(cv::Scalar(4));
     ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(geometry_support_path, geometry_support).ok);
 
-    const auto loaded = xjw::core::project::buildStoredFusionFrame(stored, camera, fusion_config, 2, 2);
+    const auto loaded = xjw::core::project::buildStoredFusionFrame(stored, *camera_model, fusion_config, 2, 2);
     ASSERT_TRUE(loaded.status.ok) << qPrintable(loaded.status.errorMessage);
     ASSERT_EQ(loaded.frame.depthMap.size(), cv::Size(2, 2));
     ASSERT_EQ(loaded.frame.geometrySupportCount.type(), CV_16UC1);
@@ -2508,25 +2750,16 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsLegacySignatur
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    const std::array<xjw::camera_models::frame_pinhole::FramePinholeNumericState, 2> cameras{
-        makeCamera(1.0, 2.0, 3.0), makeCamera(-1.0, 2.5, 3.5)};
-    QJsonArray images;
-    QJsonArray selected_images;
-    for (int index = 0; index < 2; ++index)
-    {
-        const QString path = QStringLiteral("E:/source/image_%1.jpg").arg(index);
-        QJsonObject image = buildImageEntry(path, cameras[static_cast<std::size_t>(index)]);
-        image[QStringLiteral("image_uuid")] = QStringLiteral("image-id-%1").arg(index);
-        images.append(image);
-        selected_images.append(path);
-    }
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("images")] = images;
+    const std::array<NativeFrameCameraFixture, 2> cameras{makeCamera(1.0, 2.0, 3.0), makeCamera(-1.0, 2.5, 3.5)};
+    const QString first_path = QStringLiteral("E:/source/image_0.jpg");
+    const QString second_path = QStringLiteral("E:/source/image_1.jpg");
+    const QJsonArray selected_images{first_path, second_path};
+    QJsonObject metadata = makeCanonicalTriangulationMeta({{first_path, cameras[0]}, {second_path, cameras[1]}});
     metadata[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("run_id"), QStringLiteral("run-current")},
                                {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-current")},
                                {QStringLiteral("selected_images"), selected_images}}};
+    ASSERT_FALSE(xjw::gui::project::projectDepthInputSignature(metadata).isEmpty());
 
     QJsonArray depth_records;
     for (int index = 0; index < 2; ++index)
@@ -2579,7 +2812,7 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsLegacySignatur
 
     const auto rejected = xjw::gui::project::assessStoredDepthBatchCompatibility(metadata, temp_dir.path());
     EXPECT_FALSE(rejected.compatible);
-    EXPECT_TRUE(rejected.reason.contains(QStringLiteral("已过期")));
+    EXPECT_TRUE(rejected.reason.contains(QStringLiteral("已过期"))) << rejected.reason.toStdString();
 }
 
 TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifacts)
@@ -4198,68 +4431,6 @@ TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, FramePinholeNumericStateStoresGroupedSolverStateAsSingleSourceOfTruth)
-{
-    const QString header =
-        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("Intrinsics _intrinsics;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("Distortion _distortion;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("Pose _pose;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _isValid = false;")));
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("_fu"),
-        QStringLiteral("_fv"),
-        QStringLiteral("_cu"),
-        QStringLiteral("_cv"),
-        QStringLiteral("_C"),
-        QStringLiteral("_R"),
-        QStringLiteral("_k1"),
-        QStringLiteral("_k2"),
-        QStringLiteral("_k3"),
-        QStringLiteral("_p1"),
-        QStringLiteral("_p2"),
-        QStringLiteral("_pitch"),
-        QStringLiteral("_u_dir"),
-        QStringLiteral("_v_dir"),
-        QStringLiteral("_depth_flipped_z"),
-        QStringLiteral("_loaded"),
-    };
-    auto containsIdentifier = [](const QString& text, const QString& identifier)
-    {
-        const QString pattern =
-            QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])").arg(QRegularExpression::escape(identifier));
-        return QRegularExpression(pattern).match(text).hasMatch();
-    };
-    for (const QString& oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(containsIdentifier(header, oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(containsIdentifier(source, oldName)) << qPrintable(oldName);
-    }
-}
-
-TEST(CodeStyleTest, StaticCameraKeepsPositiveDepthValueSemantics)
-{
-    const QString header =
-        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeNumericState normalizedForPositiveDepth() const;")));
-    EXPECT_TRUE(header.contains(
-        QStringLiteral("FramePinholeNumericState scaledIntrinsics(double scaleX, double scaleY) const;")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("FramePinholeNumericState FramePinholeNumericState::normalizedForPositiveDepth() const")));
-    EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeNumericState FramePinholeNumericState::scaledIntrinsics")));
-}
-
 TEST(CodeStyleTest, ReferenceTrackBuilderUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/ReferenceTrackBuilder.h"));
@@ -4382,19 +4553,6 @@ TEST(CodeStyleTest, PointCloudPreprocessHeaderKeepsLinesWithinStyleLimit)
     }
 }
 
-TEST(CodeStyleTest, IntersectionSourceKeepsLinesWithinStyleLimit)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/intersection/Intersection.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList lines = source.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        EXPECT_LE(lines.at(i).size(), 120)
-            << "Intersection.cpp:" << (i + 1) << " has " << lines.at(i).size() << " characters";
-    }
-}
-
 TEST(CodeStyleTest, EpipolarRectifierSourceKeepsLinesWithinStyleLimit)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/EpipolarRectifier.cpp"));
@@ -4452,8 +4610,7 @@ TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
 
     EXPECT_TRUE(header.contains(QStringLiteral("QPointer<xjw::gui::project::ProjectSession> _session;")));
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiMessageAdapter* _messages = nullptr;")));
-    EXPECT_TRUE(header.contains(
-        QStringLiteral("xjw::gui::project::ProjectModelTaskLifecycle _taskLifecycle;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("xjw::gui::project::ProjectModelTaskLifecycle _taskLifecycle;")));
     EXPECT_FALSE(header.contains(QStringLiteral("ProjectManager")));
     EXPECT_FALSE(header.contains(QStringLiteral("ProjectData")));
 
@@ -4519,6 +4676,16 @@ TEST(GuiArchitectureTest, ProjectManagerIsThinServiceContainerFacade)
     }
 }
 
+TEST(GuiArchitectureTest, MainWindowKeepsProjectServiceOwnershipUnambiguousDuringShutdown)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("_projectData = new ProjectData();")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_projectData->setParent(project_manager);")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_projectServices->setParent(this);")));
+}
+
 TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
@@ -4531,8 +4698,7 @@ TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMembe
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(serviceContainerSource.isEmpty());
 
-    EXPECT_TRUE(header.contains(
-        QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("xjw::gui::project::ProjectSession *_session = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiMessageAdapter *_messages = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QWidget *_parentWidget = nullptr;")));
     EXPECT_FALSE(header.contains(QStringLiteral("ProjectManager")));
@@ -4545,26 +4711,22 @@ TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMembe
     EXPECT_TRUE(serviceContainerSource.contains(QStringLiteral("_session->isCurrent(expected.session)")));
     const int writeResult = serviceContainerSource.indexOf(
         QStringLiteral("const TiePointMutationResult result = _session->replaceTiePointResult"));
-    const int postWriteCurrent = serviceContainerSource.indexOf(
-        QStringLiteral("const bool still_current"), writeResult);
-    const int failureBranch = serviceContainerSource.indexOf(
-        QStringLiteral("if (!result.success)"), postWriteCurrent);
-    const int currentFailureGate = serviceContainerSource.indexOf(
-        QStringLiteral("if (still_current)"), failureBranch);
+    const int postWriteCurrent =
+        serviceContainerSource.indexOf(QStringLiteral("const bool still_current"), writeResult);
+    const int failureBranch = serviceContainerSource.indexOf(QStringLiteral("if (!result.success)"), postWriteCurrent);
+    const int currentFailureGate = serviceContainerSource.indexOf(QStringLiteral("if (still_current)"), failureBranch);
     const int bundleAdjustWarningGate = serviceContainerSource.indexOf(
         QStringLiteral("expected.taskId != QLatin1String(\"bundle_adjust\")"), currentFailureGate);
-    const int warning = serviceContainerSource.indexOf(
-        QStringLiteral("_messages->warning"), bundleAdjustWarningGate);
-    const int successLogGate = serviceContainerSource.indexOf(
-        QStringLiteral("if (still_current)"), warning);
-    const int observerSetter = serviceContainerSource.indexOf(
-        QStringLiteral("setBundleAdjustPostExternalCommitObserver"), successLogGate);
+    const int warning = serviceContainerSource.indexOf(QStringLiteral("_messages->warning"), bundleAdjustWarningGate);
+    const int successLogGate = serviceContainerSource.indexOf(QStringLiteral("if (still_current)"), warning);
+    const int observerSetter =
+        serviceContainerSource.indexOf(QStringLiteral("setBundleAdjustPostExternalCommitObserver"), successLogGate);
     const int observerCancelGate = serviceContainerSource.indexOf(
         QStringLiteral("expected.cancelFlag->load(std::memory_order_relaxed)"), observerSetter);
-    const int observerSessionGate = serviceContainerSource.indexOf(
-        QStringLiteral("_session->isCurrent(expected.session)"), observerSetter);
-    const int refresh = serviceContainerSource.indexOf(
-        QStringLiteral("refreshReconstructionQualityReport()"), observerSetter);
+    const int observerSessionGate =
+        serviceContainerSource.indexOf(QStringLiteral("_session->isCurrent(expected.session)"), observerSetter);
+    const int refresh =
+        serviceContainerSource.indexOf(QStringLiteral("refreshReconstructionQualityReport()"), observerSetter);
     ASSERT_GE(writeResult, 0);
     EXPECT_GT(postWriteCurrent, writeResult);
     EXPECT_GT(failureBranch, postWriteCurrent);
@@ -4818,7 +4980,7 @@ TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNam
         QStringLiteral("QVector<QPointF> _manualPts2;"),
         QStringLiteral("QVector<QPointF> _currentPts1;"),
         QStringLiteral("QVector<QPointF> _currentPts2;"),
-        QStringLiteral("QVector<xjw::Intersection::Result> _currentResults;"),
+        QStringLiteral("QVector<ForwardIntersectionResult> _currentResults;"),
         QStringLiteral("bool _currentPairsEditable{false};"),
         QStringLiteral("int _pendingFirstSide{-1};"),
         QStringLiteral("QPointF _pendingFirstPoint{};"),
@@ -4912,38 +5074,6 @@ TEST(CodeStyleTest, ForwardIntersectionResultsDialogSourceKeepsLinesWithinStyleL
     {
         EXPECT_LE(lines.at(i).size(), 120)
             << "ForwardIntersectionResultsDialog.cpp:" << (i + 1) << " has " << lines.at(i).size() << " characters";
-    }
-}
-
-TEST(CodeStyleTest, CameraConvertDialogUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraConvertDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraConvertDialog.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_formatCombo = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_inputEdit = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_outputEdit = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_overwriteCheck = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_statusLabel = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QTextEdit *_resultEdit = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_runButton = nullptr;")));
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_formatCombo"),
-        QStringLiteral("m_inputEdit"),
-        QStringLiteral("m_outputEdit"),
-        QStringLiteral("m_overwriteCheck"),
-        QStringLiteral("m_statusLabel"),
-        QStringLiteral("m_resultEdit"),
-        QStringLiteral("m_runButton"),
-    };
-    for (const QString& oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
     }
 }
 
@@ -5165,7 +5295,7 @@ TEST(CodeStyleTest, ProjectCameraSetupManagerUsesLowerCamelPrivateMemberNames)
     const QStringList expectedMembers = {
         QStringLiteral("QPointer<xjw::gui::project::ProjectSession> _session;"),
         QStringLiteral("ProjectUiMessageAdapter* _messages = nullptr;"),
-        QStringLiteral("xjw::gui::project::ProjectTaskContext _sfmContext;"),
+        QStringLiteral("xjw::gui::project::ProjectTaskContext _taskContext;"),
     };
     for (const QString& expectedMember : expectedMembers)
     {
@@ -5476,12 +5606,12 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSideca
     ASSERT_TRUE(outputCloud != nullptr);
     ASSERT_EQ(outputCloud->size(), 2u);
     ASSERT_TRUE(outputCloud->hasColors());
-    EXPECT_EQ(outputCloud->colors()->getValue(0, 0), 40);
-    EXPECT_EQ(outputCloud->colors()->getValue(0, 1), 50);
-    EXPECT_EQ(outputCloud->colors()->getValue(0, 2), 60);
-    EXPECT_EQ(outputCloud->colors()->getValue(1, 0), 70);
-    EXPECT_EQ(outputCloud->colors()->getValue(1, 1), 80);
-    EXPECT_EQ(outputCloud->colors()->getValue(1, 2), 90);
+    EXPECT_EQ(outputCloud->colors()->coeff(0, 0), 40);
+    EXPECT_EQ(outputCloud->colors()->coeff(0, 1), 50);
+    EXPECT_EQ(outputCloud->colors()->coeff(0, 2), 60);
+    EXPECT_EQ(outputCloud->colors()->coeff(1, 0), 70);
+    EXPECT_EQ(outputCloud->colors()->coeff(1, 1), 80);
+    EXPECT_EQ(outputCloud->colors()->coeff(1, 2), 90);
 }
 
 TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesPointJsonAndRefreshesQuality)
@@ -5767,28 +5897,6 @@ TEST(ReferenceCameraImportMenuTest, ReusesExistingImportFlowsAndTracksProjectSta
     EXPECT_TRUE(closed.contains(QStringLiteral("importCameraAction()->setEnabled(false)")));
 }
 
-TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
-{
-    QMainWindow window;
-    MainMenu menu(&window);
-
-    QAction* action = menu.cameraConvertAction();
-    ASSERT_NE(action, nullptr);
-    EXPECT_TRUE(action->text().contains(QStringLiteral("相机格式转换")));
-
-    bool foundInToolsMenu = false;
-    const QList<QMenu*> menus = window.menuBar()->findChildren<QMenu*>();
-    for (QMenu* candidate : menus)
-    {
-        if (candidate && candidate->title() == QStringLiteral("工具"))
-        {
-            foundInToolsMenu = candidate->actions().contains(action);
-            break;
-        }
-    }
-    EXPECT_TRUE(foundInToolsMenu);
-}
-
 TEST(MainMenuTest, ToolsMenuExposesCameraCalibrationAction)
 {
     QMainWindow window;
@@ -5807,7 +5915,7 @@ TEST(MainMenuTest, ToolsMenuExposesCameraCalibrationAction)
 TEST(CameraCalibrationDataTest, ReconstructsInitialAndAdjustedValuesFromLatestReport)
 {
     const QString imagePath = QStringLiteral("D:/images/camera_001.jpg");
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState currentCamera;
+    NativeFrameCameraFixture currentCamera;
     currentCamera.setIntrinsics(5800.0, 5798.0, 2998.0, 2001.0);
     currentCamera.setDistortion(-0.02, 0.0, 0.0, 0.0001, 0.0);
     currentCamera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
@@ -5843,6 +5951,41 @@ TEST(CameraCalibrationDataTest, ReconstructsInitialAndAdjustedValuesFromLatestRe
     EXPECT_EQ(records.front().imageHeight, 4000);
 }
 
+TEST(CameraCalibrationDataTest, BuildsAdjustedIntrinsicsFromNativePlaCameraResult)
+{
+    const QString imagePath = QStringLiteral("D:/images/native-camera.jpg");
+    const QJsonObject metadata{{QStringLiteral("images"),
+                                QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("native-image")},
+                                                       {QStringLiteral("path"), imagePath},
+                                                       {QStringLiteral("width"), 6000},
+                                                       {QStringLiteral("height"), 4000}}}}};
+    const placamera::FrameId frame("survey-world");
+    const auto definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("native-report-definition"),
+                                                  {5672.0, 5672.0, 2998.7, 1996.7, 0.01, 1, 1},
+                                                  {-0.042, -0.16, 0.21, -0.00008, 0.00018},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  frame);
+    placamera::CameraInstanceSet cameras;
+    ASSERT_TRUE(
+        cameras
+            .add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("native-report-instance"),
+                placamera::ImageId("native-image"),
+                definition,
+                {6000, 4000},
+                placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))))
+            .ok());
+
+    const QJsonArray comparisons =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(metadata, cameras, QJsonObject{});
+    ASSERT_EQ(comparisons.size(), 1);
+    const QJsonObject adjusted = comparisons.first().toObject().value(QStringLiteral("adjusted_camera")).toObject();
+    EXPECT_DOUBLE_EQ(adjusted.value(QStringLiteral("fu")).toDouble(), 5672.0);
+    EXPECT_NEAR(adjusted.value(QStringLiteral("cx")).toDouble(), -1.3, 1.0e-9);
+    EXPECT_DOUBLE_EQ(adjusted.value(QStringLiteral("k1")).toDouble(), -0.042);
+}
+
 TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics)
 {
     const QString imagePath = QStringLiteral("D:/images/rx1r_001.jpg");
@@ -5850,12 +5993,11 @@ TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 6000}, {QStringLiteral("height"), 4000}}}}};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
-        makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
+    NativeFrameCameraFixture adjustedState = makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
     adjustedState.setIntrinsics(5672.0, 5672.0, 2998.7, 1996.7);
     adjustedState.setDistortion(-0.042, -0.16, 0.21, -0.00008, 0.00018);
-    adjustedState.setImageSize(xjw::camera_core::ImageSize{6000, 4000});
-    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    adjustedState.setImageSize(placamera::ImageSize{6000, 4000});
+    const QJsonObject adjustedCamera = reportCameraFixture(adjustedState);
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_focal_seed_scale"), 5833.333 / 6000.0},
         {QStringLiteral("adaptive_camera_model_fitting"), true},
@@ -5887,11 +6029,10 @@ TEST(CameraCalibrationDataTest, RequiresExplicitAdaptiveFittingApplication)
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 6000}, {QStringLiteral("height"), 4000}}}}};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
-        makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
+    NativeFrameCameraFixture adjustedState = makeCamera(0.0, 0.0, 0.0, 5672.0, 5672.0);
     adjustedState.setIntrinsics(5672.0, 5672.0, 2998.7, 1996.7);
-    adjustedState.setImageSize(xjw::camera_core::ImageSize{6000, 4000});
-    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    adjustedState.setImageSize(placamera::ImageSize{6000, 4000});
+    const QJsonObject adjustedCamera = reportCameraFixture(adjustedState);
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_camera_model_fitting"), true},
         {QStringLiteral("adaptive_camera_model_refinement_accepted"), true},
@@ -5918,13 +6059,13 @@ TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
                                            QJsonObject{{QStringLiteral("path"), secondPath}}}}};
     const auto adjustedCamera = [](bool recordsResolution)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState state = makeCamera(0.0, 0.0, 0.0, 42658.0, 42658.0);
+        NativeFrameCameraFixture state = makeCamera(0.0, 0.0, 0.0, 42658.0, 42658.0);
         state.setIntrinsics(42658.0, 42658.0, 1939.0, 1444.0);
         if (recordsResolution)
         {
-            state.setImageSize(xjw::camera_core::ImageSize{3878, 2888});
+            state.setImageSize(placamera::ImageSize{3878, 2888});
         }
-        return xjw::common::project::serializeFramePinholeNumericState(state);
+        return reportCameraFixture(state);
     };
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_camera_model_fitting"), true},
@@ -5966,10 +6107,10 @@ TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
 
 TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraState = makeCamera(0.0, 0.0, 0.0, 1000.0, 1000.0);
+    NativeFrameCameraFixture cameraState = makeCamera(0.0, 0.0, 0.0, 1000.0, 1000.0);
     cameraState.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
-    cameraState.setImageSize(xjw::camera_core::ImageSize{1000, 800});
-    const QJsonObject cameraA = xjw::common::project::serializeFramePinholeNumericState(cameraState);
+    cameraState.setImageSize(placamera::ImageSize{1000, 800});
+    const QJsonObject cameraA = reportCameraFixture(cameraState);
     QJsonObject cameraB = cameraA;
     cameraB.insert(QStringLiteral("image_width"), 2000);
     cameraB.insert(QStringLiteral("image_height"), 1600);
@@ -6001,7 +6142,7 @@ TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
 
 TEST(CameraCalibrationDataTest, ReportWithoutCanonicalComparisonKeepsProjectCameraAsInitial)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    NativeFrameCameraFixture camera;
     camera.setIntrinsics(900.0, 900.0, 600.0, 400.0);
     camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
     const QJsonObject metadata = makeCanonicalTriangulationMeta({{QStringLiteral("D:/images/one.jpg"), camera}});
@@ -6014,10 +6155,26 @@ TEST(CameraCalibrationDataTest, ReportWithoutCanonicalComparisonKeepsProjectCame
     EXPECT_FALSE(records.front().hasAdjusted);
 }
 
+TEST(CameraCalibrationDataTest, RejectsEmbeddedLegacyCameraInsteadOfDisplayingIt)
+{
+    const QJsonObject metadata{
+        {QStringLiteral("images"),
+         QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("legacy-image")},
+                                {QStringLiteral("path"), QStringLiteral("D:/images/legacy.jpg")},
+                                {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 900.0}}}}}},
+        {QStringLiteral("camera_definitions"), QJsonArray{}},
+        {QStringLiteral("camera_instances"), QJsonArray{}}};
+    QString cameraError;
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(metadata, {}, &cameraError);
+
+    EXPECT_TRUE(records.isEmpty());
+    EXPECT_TRUE(cameraError.contains(QStringLiteral("legacy embedded camera fields")));
+}
+
 TEST(CameraCalibrationDataTest, IgnoresFlattenedLegacyComparisonFields)
 {
     const QString imagePath = QStringLiteral("D:/images/one.jpg");
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    NativeFrameCameraFixture camera;
     camera.setIntrinsics(900.0, 900.0, 600.0, 400.0);
     camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
     const QJsonObject metadata = makeCanonicalTriangulationMeta({{imagePath, camera}});
@@ -6041,10 +6198,9 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 4000}, {QStringLiteral("height"), 3000}}}}};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
-        makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
+    NativeFrameCameraFixture adjustedState = makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
     adjustedState.setIntrinsics(2985.0, 2985.0, 2000.0, 1500.0);
-    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    const QJsonObject adjustedCamera = reportCameraFixture(adjustedState);
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_focal_seed_scale"), 0.75},
         {QStringLiteral("adaptive_camera_model_fitting"), true},
@@ -6078,10 +6234,9 @@ TEST(CameraCalibrationDataTest, RequestedButFixedCalibrationIsNotReportedAsRefin
         {QStringLiteral("images"),
          QJsonArray{QJsonObject{
              {QStringLiteral("path"), imagePath}, {QStringLiteral("width"), 4000}, {QStringLiteral("height"), 3000}}}}};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState =
-        makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
+    NativeFrameCameraFixture adjustedState = makeCamera(0.0, 0.0, 0.0, 2985.0, 2985.0);
     adjustedState.setIntrinsics(2985.0, 2985.0, 2000.0, 1500.0);
-    const QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
+    const QJsonObject adjustedCamera = reportCameraFixture(adjustedState);
     const QJsonObject diagnostics{{QStringLiteral("adaptive_camera_model_fitting"), true},
                                   {QStringLiteral("adaptive_camera_model_fitting_requested"), true},
                                   {QStringLiteral("adaptive_camera_model_fitting_scheduled"), false},
@@ -6127,15 +6282,19 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     auto* photoTable = dialog.findChild<QTableWidget*>(QStringLiteral("cameraCalibrationPhotos"));
     auto* cameraGroups = dialog.findChild<QListWidget*>(QStringLiteral("cameraCalibrationGroups"));
     auto* importButton = dialog.findChild<QPushButton*>(QStringLiteral("cameraCalibrationImportSelectedButton"));
-    auto* batchImportButton = dialog.findChild<QPushButton*>(QStringLiteral("cameraCalibrationBatchImportButton"));
+    auto* importProjectButton = dialog.findChild<QPushButton*>(QStringLiteral("cameraCalibrationImportProjectButton"));
+    auto* initializeButton =
+        dialog.findChild<QPushButton*>(QStringLiteral("cameraCalibrationInitializeIntrinsicsButton"));
     auto* clearButton = dialog.findChild<QPushButton*>(QStringLiteral("cameraCalibrationClearSelectedButton"));
     ASSERT_NE(photoTable, nullptr);
     ASSERT_NE(cameraGroups, nullptr);
     ASSERT_NE(importButton, nullptr);
-    ASSERT_NE(batchImportButton, nullptr);
+    ASSERT_NE(importProjectButton, nullptr);
+    ASSERT_NE(initializeButton, nullptr);
     ASSERT_NE(clearButton, nullptr);
     EXPECT_FALSE(importButton->isEnabled());
-    EXPECT_TRUE(batchImportButton->isEnabled());
+    EXPECT_TRUE(importProjectButton->isEnabled());
+    EXPECT_TRUE(initializeButton->isEnabled());
     EXPECT_FALSE(clearButton->isEnabled());
 
     int unconfiguredGroupRow = -1;
@@ -6164,14 +6323,30 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     EXPECT_EQ(photoTable->item(unconfiguredPhotoRow, 3)->text(), QStringLiteral("无相机参数"));
 
     QSignalSpy importSpy(&dialog, &CameraCalibrationDialog::importCameraForImageRequested);
-    QSignalSpy batchImportSpy(&dialog, &CameraCalibrationDialog::batchImportRequested);
+    QSignalSpy importProjectSpy(&dialog, &CameraCalibrationDialog::importCameraProjectRequested);
     QSignalSpy clearSpy(&dialog, &CameraCalibrationDialog::clearCamerasRequested);
     ASSERT_TRUE(importSpy.isValid());
-    ASSERT_TRUE(batchImportSpy.isValid());
+    ASSERT_TRUE(importProjectSpy.isValid());
     ASSERT_TRUE(clearSpy.isValid());
 
     photoTable->selectRow(unconfiguredPhotoRow);
     EXPECT_TRUE(importButton->isEnabled());
+    EXPECT_FALSE(clearButton->isEnabled());
+
+    dialog.setCameraTaskRunning(true);
+    EXPECT_FALSE(importButton->isEnabled());
+    EXPECT_FALSE(importProjectButton->isEnabled());
+    EXPECT_FALSE(initializeButton->isEnabled());
+    EXPECT_FALSE(clearButton->isEnabled());
+    importButton->click();
+    importProjectButton->click();
+    EXPECT_EQ(importSpy.count(), 0);
+    EXPECT_EQ(importProjectSpy.count(), 0);
+
+    dialog.setCameraTaskRunning(false);
+    EXPECT_TRUE(importButton->isEnabled());
+    EXPECT_TRUE(importProjectButton->isEnabled());
+    EXPECT_TRUE(initializeButton->isEnabled());
     EXPECT_FALSE(clearButton->isEnabled());
 
     importButton->click();
@@ -6206,44 +6381,26 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     ASSERT_EQ(clearSpy.count(), 1);
     EXPECT_EQ(clearSpy.takeFirst().at(0).toStringList(), QStringList{configuredImagePath});
 
-    batchImportButton->click();
-    EXPECT_EQ(batchImportSpy.count(), 1);
+    importProjectButton->click();
+    EXPECT_EQ(importProjectSpy.count(), 1);
 }
 
 TEST(CameraCalibrationDialogTest, ShowsRpcGeolocationParametersInsteadOfPinholeIntrinsics)
 {
-    const auto coefficients = [](double first)
-    {
-        QJsonArray values;
-        for (int index = 0; index < 20; ++index)
-        {
-            values.append(index == 0 ? first : 0.0);
-        }
-        return values;
-    };
     const QString imagePath = QStringLiteral("D:/images/rpc.tif");
-    QJsonObject rpcCamera{{QStringLiteral("model"), QStringLiteral("rpc00b")},
-                          {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
-                          {QStringLiteral("world_frame"), QStringLiteral("EPSG:4978")},
-                          {QStringLiteral("ground_crs"), QStringLiteral("EPSG:4979")},
-                          {QStringLiteral("height_datum"), QStringLiteral("WGS84_ellipsoidal")},
-                          {QStringLiteral("pixel_convention"), QStringLiteral("opencv_zero_based_center")},
-                          {QStringLiteral("image_samples"), 1024},
-                          {QStringLiteral("image_lines"), 768},
-                          {QStringLiteral("line_off"), 383.5},
-                          {QStringLiteral("samp_off"), 511.5},
-                          {QStringLiteral("lat_off"), 34.5},
-                          {QStringLiteral("long_off"), 113.5},
-                          {QStringLiteral("height_off"), 120.0},
-                          {QStringLiteral("line_scale"), 384.0},
-                          {QStringLiteral("samp_scale"), 512.0},
-                          {QStringLiteral("lat_scale"), 0.1},
-                          {QStringLiteral("long_scale"), 0.1},
-                          {QStringLiteral("height_scale"), 500.0},
-                          {QStringLiteral("line_num_coeff"), coefficients(0.0)},
-                          {QStringLiteral("line_den_coeff"), coefficients(1.0)},
-                          {QStringLiteral("samp_num_coeff"), coefficients(0.0)},
-                          {QStringLiteral("samp_den_coeff"), coefficients(1.0)}};
+    placamera::RpcParameters parameters;
+    parameters.lineOffset = 383.5;
+    parameters.sampleOffset = 511.5;
+    parameters.latitudeOffset = 34.5;
+    parameters.longitudeOffset = 113.5;
+    parameters.heightOffset = 120.0;
+    parameters.lineScale = 384.0;
+    parameters.sampleScale = 512.0;
+    parameters.latitudeScale = 0.1;
+    parameters.longitudeScale = 0.1;
+    parameters.heightScale = 500.0;
+    parameters.lineDenominator[0] = 1.0;
+    parameters.sampleDenominator[0] = 1.0;
     QJsonObject metadata{{QStringLiteral("images"),
                           QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-image")},
                                                  {QStringLiteral("path"), imagePath},
@@ -6251,16 +6408,25 @@ TEST(CameraCalibrationDialogTest, ShowsRpcGeolocationParametersInsteadOfPinholeI
                                                  {QStringLiteral("lines"), 768}}}},
                          {QStringLiteral("camera_definitions"), QJsonArray{}},
                          {QStringLiteral("camera_instances"), QJsonArray{}}};
-    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-        &metadata, QMap<QString, QJsonObject>{{imagePath, rpcCamera}});
+    const auto definition = placamera::RpcDefinition::create(
+        placamera::CameraDefinitionId("gui-rpc-definition"), placamera::FrameId("EPSG:4978"), parameters);
+    placamera::CameraInstanceSet cameras;
+    ASSERT_TRUE(cameras
+                    .add(std::make_shared<const placamera::RpcModel>(
+                        placamera::RpcModel::create(placamera::CameraInstanceId("gui-rpc-instance"),
+                                                    placamera::ImageId("rpc-image"),
+                                                    definition,
+                                                    {1024, 768})))
+                    .ok());
+    const auto update = xjw::placamera_runtime::upsertProjectCameras(&metadata, cameras);
     ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
     const QJsonObject rpcDefinition = metadata.value(QStringLiteral("camera_definitions")).toArray().at(0).toObject();
     EXPECT_EQ(rpcDefinition.value(QStringLiteral("frame")).toString(), QStringLiteral("EPSG:4978"));
-    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(
-                  metadata, metadata.value(QStringLiteral("images")).toArray().at(0).toObject())
-                  .value(QStringLiteral("world_frame"))
-                  .toString(),
-              QStringLiteral("EPSG:4978"));
+    const auto restored = xjw::placamera_runtime::loadProjectCameras(metadata);
+    ASSERT_TRUE(restored.ok()) << restored.errors.join(';').toStdString();
+    const auto selected = restored.instances.forImage(placamera::ImageId("rpc-image"));
+    ASSERT_TRUE(selected.ok());
+    EXPECT_EQ(selected.value()->groundFrame().value(), "EPSG:4978");
 
     CameraCalibrationDialog dialog(metadata, QString());
     auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("cameraCalibrationTabs"));
@@ -6366,47 +6532,22 @@ TEST(ProjectBundleAdjustWorkflowTest, CommitUpdatesCameraAndStoresCompactResult)
     const QStringList projectImages = projectData.getAllImages();
     ASSERT_EQ(projectImages.size(), 1);
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState adjustedState = makeCamera(1.0, 2.0, 3.0);
-    adjustedState.setImageSize(xjw::camera_core::ImageSize{1024, 768});
-    QJsonObject adjustedCamera = xjw::common::project::serializeFramePinholeNumericState(adjustedState);
-    adjustedCamera.insert(QStringLiteral("aligned"), true);
+    const auto initial_cameras = nativeCameraForFirstImage(projectData.coreFilesMeta(), 1024, 768, {1.0, 2.0, 3.0});
     const QJsonObject baResult{
         {QStringLiteral("track_count"), 20},
         {QStringLiteral("mean_rms_after"), 0.6},
         {QStringLiteral("point_preview"), QJsonArray{QJsonObject{{QStringLiteral("index"), 1}}}}};
-    const QString imageId = projectData.coreFilesMeta()
-                                .value(QStringLiteral("images"))
-                                .toArray()
-                                .at(0)
-                                .toObject()
-                                .value(QStringLiteral("image_uuid"))
-                                .toString();
     int initialCameraCount = 0;
     QString initialCameraError;
-    ASSERT_TRUE(projectData.setCameraInstances(
-        QMap<QString, QJsonObject>{{sourceImagePath, adjustedCamera}}, &initialCameraCount, &initialCameraError))
+    ASSERT_TRUE(projectData.upsertNativeCameraInstances(initial_cameras, {}, &initialCameraCount, &initialCameraError))
         << qPrintable(initialCameraError);
     ASSERT_EQ(initialCameraCount, 1);
     const QJsonObject canonicalCore = projectData.coreFilesMeta();
-    const QJsonObject canonicalInstance =
-        canonicalCore.value(QStringLiteral("camera_instances")).toArray().at(0).toObject();
-    const QString instanceId = canonicalInstance.value(QStringLiteral("id")).toString();
-    const QString worldFrame = canonicalCore.value(QStringLiteral("camera_definitions"))
-                                   .toArray()
-                                   .at(0)
-                                   .toObject()
-                                   .value(QStringLiteral("frame"))
-                                   .toString();
-    QJsonObject adjustedUpdate = adjustedCamera;
-    adjustedUpdate.insert(QStringLiteral("world_frame"), worldFrame);
+    const auto loadedCameras = xjw::placamera_runtime::loadProjectCameras(canonicalCore);
+    ASSERT_TRUE(loadedCameras.ok()) << qPrintable(loadedCameras.errors.join(QStringLiteral("; ")));
 
-    const auto commitResult = xjw::gui::project::commitBundleAdjustPreview(
-        &projectData,
-        xjw::camera_project::CameraInstanceUpdates{{xjw::camera_core::ImageId(imageId.toStdString()),
-                                                    xjw::camera_core::CameraInstanceId(instanceId.toStdString()),
-                                                    xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
-                                                    adjustedUpdate}},
-        baResult);
+    const auto commitResult =
+        xjw::gui::project::commitBundleAdjustPreview(&projectData, loadedCameras.instances, baResult);
 
     ASSERT_TRUE(commitResult.success) << qPrintable(commitResult.errorMessage);
     EXPECT_EQ(commitResult.updatedCameraCount, 1);
@@ -6424,7 +6565,7 @@ TEST(ProjectBundleAdjustWorkflowTest, CommitUpdatesCameraAndStoresCompactResult)
                          .toObject()
                          .value(QStringLiteral("intrinsics"))
                          .toObject()
-                         .value(QStringLiteral("fx_px"))
+                         .value(QStringLiteral("focal_x"))
                          .toDouble(),
                      1200.0);
     const QJsonArray storedResults = projectData.getBundleAdjustResults();
@@ -6893,7 +7034,8 @@ TEST(FeatureResidualVisualizationTest, ExportsAndLoadsTrueReprojectionVectorsAsy
 
     EXPECT_TRUE(aerialSource.contains(QStringLiteral("projected_xy")));
     EXPECT_TRUE(aerialSource.contains(QStringLiteral("residual_xy")));
-    EXPECT_TRUE(aerialSource.contains(QStringLiteral("projectWorldPoint")));
+    EXPECT_TRUE(aerialSource.contains(QStringLiteral("groundToImage(ground)")));
+    EXPECT_TRUE(aerialSource.contains(QStringLiteral("groundToImageSigned(ground)")));
     EXPECT_TRUE(loaderHeader.contains(QStringLiteral("FeatureResidualVector")));
     EXPECT_TRUE(loaderHeader.contains(QStringLiteral("loadFeatureResidualsForImage")));
     EXPECT_TRUE(loaderSource.contains(QStringLiteral("sparse_cloud_points_json")));
@@ -8180,10 +8322,8 @@ TEST(GenerateMaskWorkflowTest, ClearsManagedMaskAndAllMaskMetadata)
     projectData.updateMetadata(meta, false);
 
     xjw::gui::project::ProjectServiceContainer services(&projectData, nullptr);
-    QSignalSpy masksChangedSpy(&services.tasks(),
-                               &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
-    QSignalSpy metadataSpy(&services.tasks(),
-                           &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
+    QSignalSpy masksChangedSpy(&services.tasks(), &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
+    QSignalSpy metadataSpy(&services.tasks(), &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
     bool confirmationClicked = false;
     QString modalDriverError;
     QTimer dialogCloser;
@@ -8261,10 +8401,8 @@ TEST(GenerateMaskWorkflowTest, RetainsMetadataWhenManagedMaskCannotBeDeleted)
     projectData.updateMetadata(meta, false);
 
     xjw::gui::project::ProjectServiceContainer services(&projectData, nullptr);
-    QSignalSpy masksChangedSpy(&services.tasks(),
-                               &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
-    QSignalSpy metadataSpy(&services.tasks(),
-                           &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
+    QSignalSpy masksChangedSpy(&services.tasks(), &xjw::gui::project::ProjectTaskOrchestrator::masksGenerated);
+    QSignalSpy metadataSpy(&services.tasks(), &xjw::gui::project::ProjectTaskOrchestrator::projectMetadataUpdated);
     bool confirmationClicked = false;
     QString modalDriverError;
     QTimer dialogCloser;
@@ -8386,8 +8524,7 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
 
 TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDialog)
 {
-    const QString taskHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.h"));
+    const QString taskHeader = readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.h"));
     const QString managerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     const QString mainHeader =
@@ -9401,7 +9538,7 @@ TEST(ProjectOpenResponsivenessTest, LifecycleServiceLoadsProjectSnapshotOffGuiTh
 
     const int openStart = lifecycleSource.indexOf(QStringLiteral("void ProjectLifecycleService::openProjectFromPath"));
     const int saveStart =
-        lifecycleSource.indexOf(QStringLiteral("void ProjectLifecycleService::saveProject"), openStart);
+        lifecycleSource.indexOf(QStringLiteral("bool ProjectLifecycleService::saveProject"), openStart);
     ASSERT_GE(openStart, 0);
     ASSERT_GT(saveStart, openStart);
     const QString openBlock = lifecycleSource.mid(openStart, saveStart - openStart);
@@ -9434,10 +9571,10 @@ TEST(ProjectOpenResponsivenessTest, ResourceServiceScansImageFoldersOffGuiThread
     EXPECT_TRUE(resourceHeader.contains(QStringLiteral("OperationResult addFolder(const QString& folderPath);")));
     EXPECT_TRUE(resourceSource.contains(QStringLiteral("_messages->selectDirectory(")));
 
-    const int importStart = resourceSource.indexOf(
-        QStringLiteral("OperationResult ProjectResourceService::startImageImportTask"));
-    const int addPhotoStart = resourceSource.indexOf(
-        QStringLiteral("OperationResult ProjectResourceService::addPhoto"), importStart);
+    const int importStart =
+        resourceSource.indexOf(QStringLiteral("OperationResult ProjectResourceService::startImageImportTask"));
+    const int addPhotoStart =
+        resourceSource.indexOf(QStringLiteral("OperationResult ProjectResourceService::addPhoto"), importStart);
     ASSERT_GE(importStart, 0);
     ASSERT_GT(addPhotoStart, importStart);
     const QString importBlock = resourceSource.mid(importStart, addPhotoStart - importStart);
@@ -9446,7 +9583,8 @@ TEST(ProjectOpenResponsivenessTest, ResourceServiceScansImageFoldersOffGuiThread
         << "Directory scanning can touch slow disks or large folders and must not run on the GUI thread.";
     EXPECT_TRUE(importBlock.contains(QStringLiteral("if (scanFolder)")));
     EXPECT_TRUE(importBlock.contains(QStringLiteral("directory.entryInfoList(")));
-    EXPECT_TRUE(importBlock.contains(QStringLiteral("parseRpcCameraRaster(")));
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("readRpcRasterData(")));
+    EXPECT_TRUE(importBlock.contains(QStringLiteral("upsertNativeCameraInstances(")));
     EXPECT_TRUE(importBlock.contains(QStringLiteral("imageImportProgressChanged")))
         << "Large image imports should report determinate GUI progress.";
     EXPECT_TRUE(importBlock.contains(QStringLiteral("self->_session->data()->addImages(work.newPaths")));
@@ -10486,10 +10624,14 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     emit tasks.backgroundTaskFinished(QStringLiteral("dem:first"));
     EXPECT_EQ(taskbar->currentProgress().value, 500);
 
+    emit tasks.cameraProgressChanged(QStringLiteral("正在读取影像尺寸与 EXIF..."), 40);
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("camera_setup")));
+    EXPECT_EQ(taskbar->currentProgress().value, 450);
+
     emit lifecycle.saveStarted();
     EXPECT_EQ(taskbar->currentProgress().state, xjw::gui::platform::TaskbarProgressState::Indeterminate);
     emit lifecycle.saveFinished(true);
-    EXPECT_EQ(taskbar->currentProgress().value, 500);
+    EXPECT_EQ(taskbar->currentProgress().value, 450);
 
     emit resources.imageImportProgressChanged(QStringLiteral("导入影像"), 2, 10);
     controller.updateImageLoading(QStringLiteral("加载照片列表"), 8, 10);
@@ -10525,6 +10667,11 @@ TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
     };
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("导入影像")));
     EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
+    EXPECT_TRUE(dashboardHasTask(QStringLiteral("相机导入/初始化")));
+
+    emit tasks.cameraFinished(true);
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("camera_setup")));
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("mesh")));
 
     emit resources.imageImportFinished(true, QString());
     EXPECT_FALSE(taskbar->hasTask(QStringLiteral("image_import")));
@@ -11417,9 +11564,9 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
     const QString controllerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/tasks/ProjectBundleAdjustController.cpp"));
     const QString bundleAdjustHeader =
-        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustOptions.h"));
+        readProjectSourceFile(QStringLiteral("3rdparty/plabundle/include/plabundle/options.h"));
     const QString bundleAdjustSource =
-        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustPlaMatrix.cpp"));
+        readProjectSourceFile(QStringLiteral("3rdparty/plabundle/src/internal/BundleAdjustPlaMatrix.cpp"));
     const QString serviceSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     const QString executionSource =
@@ -11433,8 +11580,8 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
 
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("正在取消空三/光束法平差")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("std::make_shared<std::atomic<bool>>(false)")));
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.cancelFlag = _taskContext.cancelFlag")));
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.progressCallback")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.solver.cancelFlag = _taskContext.cancelFlag")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("options.baOpt.solver.progressCallback")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("光束法平差优化中")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("completeOnce")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("executionResult.serviceResult.errorMessage")));
@@ -11456,6 +11603,13 @@ TEST(ForwardIntersectionCheckDialogTest, AutoModeReadsUnifiedImageMatchShard)
     EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::filePathForImage")));
     EXPECT_TRUE(source.contains(QStringLiteral("MatchRecordFlag::GeometryInlier")));
     EXPECT_FALSE(source.contains(QStringLiteral("feature0_path")));
+    EXPECT_TRUE(source.contains(QStringLiteral("getPinholeModelsForImages")));
+    EXPECT_TRUE(source.contains(QStringLiteral("placamera::FramePinholeNumericState::triangulatePair")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cam1.groundFrame() != cam2.groundFrame()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("obj[QStringLiteral(\"ground_frame\")] = groundFrame")));
+    EXPECT_FALSE(source.contains(QStringLiteral("projectCameraModelParameters")));
+    EXPECT_FALSE(source.contains(QStringLiteral("decodeFramePinholeNumericState")));
+    EXPECT_FALSE(source.contains(QStringLiteral("selectBestIntersectionBatch")));
 }
 
 TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
@@ -12056,8 +12210,8 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
     const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const NativeFrameCameraFixture camera0 = makeCamera(0.0, 0.0, 0.0);
+    const NativeFrameCameraFixture camera1 = makeCamera(8.0, 0.0, 0.0);
 
     const std::vector<std::array<double, 3>> points = {{3.0, -1.0, 35.0}, {4.0, 0.5, 40.0}, {5.0, 1.2, 45.0}};
 
@@ -12129,9 +12283,9 @@ TEST(TriangulationServiceTest, UsesBinaryShardFeatureIdsForMultiViewTracks)
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
     const QString image2Path = QDir(tempDir.path()).filePath(QStringLiteral("3.jpg"));
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
+    const NativeFrameCameraFixture camera0 = makeCamera(0.0, 0.0, 0.0);
+    const NativeFrameCameraFixture camera1 = makeCamera(8.0, 0.0, 0.0);
+    const NativeFrameCameraFixture camera2 = makeCamera(16.0, 0.0, 0.0);
     const std::array<double, 3> point = {6.0, 0.5, 36.0};
 
     double u0 = 0.0;
@@ -12188,9 +12342,10 @@ TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetada
 
 TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
 {
-    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustProblem.h"));
+    const QString baHeader =
+        readProjectSourceFile(QStringLiteral("3rdparty/plabundle/include/plabundle/constraints.h"));
     const QString baValidation =
-        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustValidation.cpp"));
+        readProjectSourceFile(QStringLiteral("3rdparty/plabundle/src/internal/BundleAdjustValidation.cpp"));
     const QString baInputBuilder = readProjectSourceFile(QStringLiteral("src/core/sfm/project/BaTrackBuilder.cpp"));
     const QString incrementalSfm = readIncrementalSfmProjectImplementation();
     ASSERT_FALSE(baHeader.isEmpty());
@@ -12211,19 +12366,20 @@ TEST(SfmSparseResultMetadataTest, BundleAdjustAutoEnablesSurveyControlConstraint
 {
     const QString execution =
         readProjectSourceFile(QStringLiteral("src/gui/project/support/ProjectBundleAdjustExecution.cpp"));
-    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustProblem.h"));
+    const QString baHeader =
+        readProjectSourceFile(QStringLiteral("3rdparty/plabundle/include/plabundle/constraints.h"));
     const QString baService = readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
     ASSERT_FALSE(execution.isEmpty());
     ASSERT_FALSE(baHeader.isEmpty());
     ASSERT_FALSE(baService.isEmpty());
 
     EXPECT_TRUE(execution.contains(QStringLiteral("baInput.surveyControlTrackCount > 0")));
-    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.enableControlPointConstraints = true")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.enableControlPointConstraints = true")));
     EXPECT_TRUE(execution.contains(QStringLiteral("baInput.scaleBarConstraints")));
-    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.enableScaleBarConstraints = true")));
-    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.scaleBarConstraints = baInput.scaleBarConstraints")));
-    EXPECT_TRUE(baHeader.contains(QStringLiteral("BAControlPointConstraint")));
-    EXPECT_TRUE(baHeader.contains(QStringLiteral("BAScaleBarConstraint")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.enableScaleBarConstraints = true")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.scaleBarConstraints = baInput.scaleBarConstraints")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("ControlPointConstraint")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("ScaleBarConstraint")));
     EXPECT_TRUE(baService.contains(QStringLiteral("control_point_constraints_summary")));
     EXPECT_TRUE(baService.contains(QStringLiteral("scale_bar_constraints_summary")));
 }
@@ -13328,6 +13484,33 @@ TEST(DataTreeWidgetTest, ShowsAlignedPhotoRatioAndHidesEmptySections)
     EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("参考数据")));
 }
 
+TEST(DataTreeWidgetTest, DoesNotCountIdentityInitializedPlaCameraAsAligned)
+{
+    const QString image_path = QStringLiteral("/tmp/images/identity_pose.jpg");
+    QJsonObject metadata = makeCanonicalTriangulationMeta({{image_path, makeCamera(0.0, 0.0, 0.0)}});
+    QJsonArray instances = metadata.value(QStringLiteral("camera_instances")).toArray();
+    QJsonObject instance = instances.at(0).toObject();
+    instance.insert(
+        QStringLiteral("state"),
+        QJsonObject{{QStringLiteral("metadata"), QJsonObject{{QStringLiteral("pose_initialized_as_identity"), true}}}});
+    instances.replace(0, instance);
+    metadata.insert(QStringLiteral("camera_instances"), instances);
+
+    DataTreeWidget tree;
+    tree.loadFromJson(metadata);
+    auto* view = tree.findChild<QTreeView*>();
+    ASSERT_NE(view, nullptr);
+    auto* model = qobject_cast<QStandardItemModel*>(view->model());
+    ASSERT_NE(model, nullptr);
+    bool found_images = false;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        const QStandardItem* item = model->item(row, 0);
+        found_images = found_images || (item && item->text() == QStringLiteral("图像 (0/1 对齐)"));
+    }
+    EXPECT_TRUE(found_images);
+}
+
 TEST(DataTreeWidgetTest, ShowsCurrentMaskedPhotoCountAndHidesEmptyMaskSection)
 {
     DataTreeWidget tree;
@@ -13548,15 +13731,16 @@ TEST(TiePointResultIntegrationTest, ResourceServiceRoutesTiePointDeletionToDedic
     ASSERT_FALSE(resourceService.isEmpty());
     ASSERT_FALSE(coordinator.isEmpty());
 
-    const int methodStart = resourceService.indexOf(
-        QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
+    const int methodStart =
+        resourceService.indexOf(QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
     const int methodEnd = resourceService.indexOf(
         QStringLiteral("OperationResult ProjectResourceService::importReferenceDataset"), methodStart);
     ASSERT_GE(methodStart, 0);
     ASSERT_GT(methodEnd, methodStart);
     const QString method = resourceService.mid(methodStart, methodEnd - methodStart);
     EXPECT_TRUE(method.contains(QStringLiteral("_cleanup->rejectLifecycleChange(QStringLiteral(\"删除数据\"))")));
-    EXPECT_TRUE(method.contains(QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
+    EXPECT_TRUE(
+        method.contains(QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
     EXPECT_FALSE(method.contains(QStringLiteral("ProjectTiePointResultService")));
     EXPECT_FALSE(method.contains(QStringLiteral("cleanupGeneratedData")));
 
@@ -13576,9 +13760,12 @@ TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAnd
     const QString coordinator =
         readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupCoordinator.cpp"));
     const QString mainWindow = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString shutdownCoordinator =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/ApplicationShutdownCoordinator.cpp"));
     ASSERT_FALSE(lifecycle.isEmpty());
     ASSERT_FALSE(coordinator.isEmpty());
     ASSERT_FALSE(mainWindow.isEmpty());
+    ASSERT_FALSE(shutdownCoordinator.isEmpty());
 
     EXPECT_TRUE(coordinator.contains(
         QStringLiteral("ProjectResourceCleanupCoordinator::~ProjectResourceCleanupCoordinator()")));
@@ -13586,7 +13773,10 @@ TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAnd
     EXPECT_TRUE(coordinator.contains(QStringLiteral("_future.waitForFinished();")));
     EXPECT_TRUE(coordinator.contains(QStringLiteral("_session->tryBeginOperation(_operationName)")));
     EXPECT_TRUE(coordinator.contains(QStringLiteral("_session->endOperation(_operationName)")));
-    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_projectServices->cleanup().waitForFinished()")));
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("_projectServices->cleanup().waitForFinished()")));
+    EXPECT_TRUE(shutdownCoordinator.contains(QStringLiteral("projectOperationsIdle")));
+    EXPECT_TRUE(shutdownCoordinator.contains(QStringLiteral("startProjectTaskDrain")));
+    EXPECT_TRUE(shutdownCoordinator.contains(QStringLiteral("requestRuntimeShutdown")));
     EXPECT_TRUE(lifecycle.contains(QStringLiteral("return _cleanup && _cleanup->rejectLifecycleChange(operation);")));
     for (const QString& operation : {QStringLiteral("新建项目"),
                                      QStringLiteral("打开项目"),
@@ -13597,8 +13787,7 @@ TEST(TiePointResultIntegrationTest, ResourceCleanupGuardsProjectLockLifecycleAnd
                                      QStringLiteral("删除 Chunk"),
                                      QStringLiteral("切换 Chunk")})
     {
-        EXPECT_TRUE(lifecycle.contains(
-            QStringLiteral("rejectLifecycleChange(QStringLiteral(\"%1\"))").arg(operation)))
+        EXPECT_TRUE(lifecycle.contains(QStringLiteral("rejectLifecycleChange(QStringLiteral(\"%1\"))").arg(operation)))
             << qPrintable(operation);
     }
 }
@@ -13619,22 +13808,20 @@ TEST(TiePointResultIntegrationTest, PortableExportGuardsGeneratedDataDeletionAnd
     ASSERT_GE(exportStart, 0);
     ASSERT_GT(exportEnd, exportStart);
     const QString exportMethod = lifecycle.mid(exportStart, exportEnd - exportStart);
-    EXPECT_TRUE(exportMethod.contains(
-        QStringLiteral("rejectLifecycleChange(QStringLiteral(\"导出项目\"))")));
+    EXPECT_TRUE(exportMethod.contains(QStringLiteral("rejectLifecycleChange(QStringLiteral(\"导出项目\"))")));
     EXPECT_TRUE(exportMethod.contains(QStringLiteral("beginOperation(QStringLiteral(\"导出项目\"))")));
     EXPECT_TRUE(exportMethod.contains(QStringLiteral("exportPortableProjectAsync(outputPath, &error)")));
 
-    const int deleteStart = resourceService.indexOf(
-        QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
+    const int deleteStart =
+        resourceService.indexOf(QStringLiteral("OperationResult ProjectResourceService::deleteGeneratedData"));
     const int deleteEnd = resourceService.indexOf(
         QStringLiteral("OperationResult ProjectResourceService::importReferenceDataset"), deleteStart);
     ASSERT_GE(deleteStart, 0);
     ASSERT_GT(deleteEnd, deleteStart);
     const QString deleteMethod = resourceService.mid(deleteStart, deleteEnd - deleteStart);
-    EXPECT_TRUE(deleteMethod.contains(
-        QStringLiteral("_cleanup->rejectLifecycleChange(QStringLiteral(\"删除数据\"))")));
-    EXPECT_TRUE(deleteMethod.contains(
-        QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
+    EXPECT_TRUE(deleteMethod.contains(QStringLiteral("_cleanup->rejectLifecycleChange(QStringLiteral(\"删除数据\"))")));
+    EXPECT_TRUE(
+        deleteMethod.contains(QStringLiteral("_cleanup->deleteGeneratedData(section, resourcePaths, requestWidget)")));
 
     const int methodStart =
         coordinator.indexOf(QStringLiteral("bool ProjectResourceCleanupCoordinator::deleteGeneratedData"));
@@ -14651,7 +14838,7 @@ TEST(ProjectReferenceTerrainBaTest, AppliesReferenceDemAsBundleAdjustSoftPrior)
     ASSERT_TRUE(xjw::DemDomIO::writeDemRaster(dem, demPath, xjw::DemRasterFormat::Float32Tiff, &ioError))
         << ioError.toStdString();
 
-    std::vector<xjw::BATrack> tracks(2);
+    std::vector<plabundle::Track> tracks(2);
     tracks[0].initialPoint = {{1.0, 1.0, 5.1}};
     tracks[1].initialPoint = {{1.0, 1.0, 8.0}};
 
@@ -14670,8 +14857,8 @@ TEST(ProjectReferenceTerrainBaTest, AppliesReferenceDemAsBundleAdjustSoftPrior)
     EXPECT_EQ(result.summary.value(QStringLiteral("input_tracks")).toInt(), 2);
     EXPECT_EQ(result.summary.value(QStringLiteral("associated_tracks")).toInt(), 1);
     EXPECT_EQ(result.summary.value(QStringLiteral("rejected_by_distance")).toInt(), 1);
-    EXPECT_TRUE(options.baOpt.enableLaserPlaneConstraints);
-    EXPECT_NEAR(options.baOpt.laserPlaneWeight, 4.0, 1e-9);
+    EXPECT_TRUE(options.enableLaserPlaneConstraints);
+    EXPECT_NEAR(options.baOpt.constraints.laserPlaneWeight, 4.0, 1e-9);
     ASSERT_EQ(tracks[0].laserPlaneConstraints.size(), 1);
     EXPECT_TRUE(tracks[1].laserPlaneConstraints.empty());
 }
@@ -14694,8 +14881,8 @@ TEST(ProjectReferenceTerrainBaTest, MenuWorkflowRoutesReferenceTerrainBundleAdju
     EXPECT_TRUE(menu.contains(QStringLiteral("_resources->prepareReferenceTerrainBundleAdjust()")));
     EXPECT_FALSE(menu.contains(QStringLiteral("startBundleAdjustAsync")));
 
-    const int prepareStart = resources.indexOf(
-        QStringLiteral("void ProjectResourceService::prepareReferenceTerrainBundleAdjust"));
+    const int prepareStart =
+        resources.indexOf(QStringLiteral("void ProjectResourceService::prepareReferenceTerrainBundleAdjust"));
     const int prepareEnd = resources.indexOf(
         QStringLiteral("void ProjectResourceService::refreshReconstructionQualityReport"), prepareStart);
     ASSERT_GE(prepareStart, 0);
@@ -14708,15 +14895,15 @@ TEST(ProjectReferenceTerrainBaTest, MenuWorkflowRoutesReferenceTerrainBundleAdju
     EXPECT_TRUE(prepare.contains(QStringLiteral("enable_laser_constraints")));
     EXPECT_TRUE(prepare.contains(QStringLiteral("laser_constraint_cloud_path")));
     EXPECT_TRUE(prepare.contains(QStringLiteral("laser_missing_normals_as_height_planes")));
-    EXPECT_TRUE(prepare.contains(
-        QStringLiteral("_bundleAdjustLauncher(images, output_dir, qMax(1, QThread::idealThreadCount()), false, extra)")));
+    EXPECT_TRUE(prepare.contains(QStringLiteral(
+        "_bundleAdjustLauncher(images, output_dir, qMax(1, QThread::idealThreadCount()), false, extra)")));
 
     EXPECT_TRUE(container.contains(
         QStringLiteral("_tasks->startBundleAdjustAsync(images, outputDir, threads, dryRun, extraSettings)")));
-    const int launchStart = orchestrator.indexOf(
-        QStringLiteral("bool ProjectTaskOrchestrator::startBundleAdjustAsync"));
-    const int launchEnd = orchestrator.indexOf(
-        QStringLiteral("bool ProjectTaskOrchestrator::acceptBundleAdjustPreview"), launchStart);
+    const int launchStart =
+        orchestrator.indexOf(QStringLiteral("bool ProjectTaskOrchestrator::startBundleAdjustAsync"));
+    const int launchEnd =
+        orchestrator.indexOf(QStringLiteral("bool ProjectTaskOrchestrator::acceptBundleAdjustPreview"), launchStart);
     ASSERT_GE(launchStart, 0);
     ASSERT_GT(launchEnd, launchStart);
     const QString launch = orchestrator.mid(launchStart, launchEnd - launchStart);
@@ -14930,6 +15117,31 @@ TEST(PhotoStripWidgetTest, ClickSelectsPhotoAndActivationOpensPhoto)
     ASSERT_EQ(activatedSpy.count(), 1);
     const QString activatedPath = activatedSpy.takeFirst().at(0).toString();
     EXPECT_EQ(activatedPath, selectedPath);
+}
+
+TEST(PhotoStripWidgetTest, AlignmentBadgeUsesCanonicalPlaCameraInstance)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString imagePath = directory.filePath(QStringLiteral("camera.png"));
+    QImage image(16, 12, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    ASSERT_TRUE(image.save(imagePath));
+
+    const QJsonObject alignedMetadata = makeCanonicalTriangulationMeta({{imagePath, makeCamera(0.0, 0.0, 0.0)}});
+    QJsonObject unalignedMetadata = alignedMetadata;
+    unalignedMetadata.insert(QStringLiteral("camera_instances"), QJsonArray{});
+
+    PhotoStripWidget strip;
+    strip.loadFromJson(unalignedMetadata);
+    auto* list = strip.findChild<QListWidget*>(QStringLiteral("photoStripList"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(list->count(), 1);
+    EXPECT_TRUE(list->item(0)->toolTip().contains(QStringLiteral("未对齐")));
+
+    strip.loadFromJson(alignedMetadata);
+    ASSERT_EQ(list->count(), 1);
+    EXPECT_TRUE(list->item(0)->toolTip().contains(QStringLiteral("已对齐")));
 }
 
 TEST(PhotoStripWidgetTest, ProjectSwitchDiscardsOldThumbnailRequests)
@@ -15257,9 +15469,9 @@ TEST(CameraSceneWidgetTest, PlyFloatIntensityIsScaledToByteRange)
     ASSERT_TRUE(cloud != nullptr);
     ASSERT_EQ(cloud->size(), 1u);
     ASSERT_TRUE(cloud->hasColors());
-    EXPECT_EQ(cloud->colors()->getValue(0, 0), 128);
-    EXPECT_EQ(cloud->colors()->getValue(0, 1), 128);
-    EXPECT_EQ(cloud->colors()->getValue(0, 2), 128);
+    EXPECT_EQ(cloud->colors()->coeff(0, 0), 128);
+    EXPECT_EQ(cloud->colors()->coeff(0, 1), 128);
+    EXPECT_EQ(cloud->colors()->coeff(0, 2), 128);
 }
 
 TEST(CameraSceneWidgetTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
@@ -15287,9 +15499,9 @@ TEST(CameraSceneWidgetTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
     EXPECT_EQ(cloud->size(), 4u);
     ASSERT_TRUE(cloud->hasFaces());
     ASSERT_EQ(cloud->faces()->rows(), 2);
-    EXPECT_EQ(cloud->faces()->getValue(0, 0), 0);
-    EXPECT_EQ(cloud->faces()->getValue(0, 2), 2);
-    EXPECT_EQ(cloud->faces()->getValue(1, 2), 3);
+    EXPECT_EQ(cloud->faces()->coeff(0, 0), 0);
+    EXPECT_EQ(cloud->faces()->coeff(0, 2), 2);
+    EXPECT_EQ(cloud->faces()->coeff(1, 2), 3);
 }
 
 TEST(CameraSceneWidgetTest, ObjReaderPreservesPerFaceTextureSeams)
@@ -15321,9 +15533,9 @@ TEST(CameraSceneWidgetTest, ObjReaderPreservesPerFaceTextureSeams)
     ASSERT_TRUE(cloud->hasTextureCoords());
     ASSERT_TRUE(cloud->hasFaceTextureIndices());
     ASSERT_EQ(cloud->faceTextureIndices()->rows(), 2);
-    EXPECT_EQ(cloud->faceTextureIndices()->getValue(0, 0), 0);
-    EXPECT_EQ(cloud->faceTextureIndices()->getValue(1, 0), 3);
-    EXPECT_NE(cloud->faceTextureIndices()->getValue(0, 0), cloud->faceTextureIndices()->getValue(1, 0));
+    EXPECT_EQ(cloud->faceTextureIndices()->coeff(0, 0), 0);
+    EXPECT_EQ(cloud->faceTextureIndices()->coeff(1, 0), 3);
+    EXPECT_NE(cloud->faceTextureIndices()->coeff(0, 0), cloud->faceTextureIndices()->coeff(1, 0));
 
     const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
     ASSERT_TRUE(prepared.isValid());
@@ -15422,10 +15634,10 @@ TEST(CameraSceneWidgetTest, StreamingObjReaderReportsProgressAndPreservesGeometr
     ASSERT_TRUE(cloud->hasFaces());
     EXPECT_EQ(cloud->faces()->rows(), 2);
     ASSERT_TRUE(cloud->hasColors());
-    EXPECT_EQ(cloud->colors()->getValue(0, 0), 255);
+    EXPECT_EQ(cloud->colors()->coeff(0, 0), 255);
     ASSERT_TRUE(cloud->hasTextureCoords());
     ASSERT_TRUE(cloud->hasFaceTextureIndices());
-    EXPECT_EQ(cloud->faceTextureIndices()->getValue(1, 2), 3);
+    EXPECT_EQ(cloud->faceTextureIndices()->coeff(1, 2), 3);
     EXPECT_EQ(cloud->materialLibraryFile(), "streamed.mtl");
     ASSERT_FALSE(percentages.isEmpty());
     EXPECT_EQ(percentages.back(), 80);
@@ -15442,7 +15654,7 @@ TEST(CameraSceneWidgetTest, OversizedMeshUsesChunkedPointLodWithoutChangingCloud
         cloud.points()(index, 1) = float(index % 2);
         cloud.points()(index, 2) = float(index) * 0.5f;
     }
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(2, 3);
     faces(0, 0) = 0;
     faces(0, 1) = 1;
     faces(0, 2) = 2;
@@ -15486,7 +15698,7 @@ TEST(CameraSceneWidgetTest, StaticMeshPreparationPreservesSourceVertexColors)
     cloud.points()(2, 0) = 0.0f;
     cloud.points()(2, 1) = 1.0f;
     cloud.points()(2, 2) = 3.0f;
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(3, 3);
     colors(0, 0) = 255;
     colors(0, 1) = 64;
     colors(0, 2) = 32;
@@ -15497,7 +15709,7 @@ TEST(CameraSceneWidgetTest, StaticMeshPreparationPreservesSourceVertexColors)
     colors(2, 1) = 40;
     colors(2, 2) = 240;
     cloud.setColors(std::move(colors));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(1, 3);
     faces(0, 0) = 0;
     faces(0, 1) = 1;
     faces(0, 2) = 2;
@@ -15589,7 +15801,7 @@ TEST(CameraSceneWidgetTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     ASSERT_FALSE(fragmentShader.isEmpty());
 
     EXPECT_TRUE(preparationSource.contains(QStringLiteral("hasFaceTextureIndices")));
-    EXPECT_TRUE(preparationSource.contains(QStringLiteral("faceTextureIndices()->getValue")));
+    EXPECT_TRUE(preparationSource.contains(QStringLiteral("faceTextureIndices()->coeff")));
     EXPECT_TRUE(source.contains(QStringLiteral("ensureTexturedMeshPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawTexturedMesh")));
     EXPECT_TRUE(source.contains(QStringLiteral("self->setModelColorMode(ModelColorMode::Texture)")));
@@ -15680,10 +15892,10 @@ TEST(SurfaceReconstructorTest, HeightGridFallbackUsesPlaPointGpuCapablePath)
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructorHeightGrid.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("#include <plapoint/gpu/height_grid.h>")));
-    EXPECT_TRUE(source.contains(QStringLiteral("buildHeightGridWithRequestedDevice")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <plapoint/mesh/height_grid.h>")));
+    EXPECT_TRUE(source.contains(QStringLiteral("plapoint::mesh::buildHeightGrid")));
     EXPECT_TRUE(source.contains(QStringLiteral("config.preprocessingDevice")));
-    EXPECT_TRUE(source.contains(QStringLiteral("plapoint::gpu::buildHeightGrid")));
+    EXPECT_FALSE(source.contains(QStringLiteral(".toGpu(")));
 }
 
 TEST(MainMenuTest, WorkflowMenuExposesCurrentPhotogrammetryStages)
@@ -15802,6 +16014,33 @@ TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
     EXPECT_EQ(valueFor(QStringLiteral("严格的体积掩模")), QStringLiteral("否"));
     EXPECT_EQ(valueFor(QStringLiteral("软件版本")), QStringLiteral("1.1.7"));
     EXPECT_EQ(valueFor(QStringLiteral("文件大小")), QStringLiteral("2.0 MB"));
+}
+
+TEST(SelectionPropertiesWidgetTest, ShowsCanonicalPlaCameraPoseAndIntrinsics)
+{
+    const QString imagePath = QStringLiteral("D:/images/camera_photo.jpg");
+    const QJsonObject metadata =
+        makeCanonicalTriangulationMeta({{imagePath, makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0)}});
+    SelectionPropertiesWidget widget;
+    widget.showPhotoProperties(metadata, imagePath);
+    auto* table = widget.findChild<QTableWidget*>();
+    ASSERT_NE(table, nullptr);
+
+    const auto valueFor = [table](const QString& name)
+    {
+        for (int row = 0; row < table->rowCount(); ++row)
+        {
+            if (const auto* item = table->item(row, 0); item && item->text() == name)
+            {
+                return table->item(row, 1)->text();
+            }
+        }
+        return QString();
+    };
+    EXPECT_EQ(valueFor(QStringLiteral("定向状态")), QStringLiteral("已定向"));
+    EXPECT_EQ(valueFor(QStringLiteral("相机类型")), QStringLiteral("针孔相机"));
+    EXPECT_EQ(valueFor(QStringLiteral("相机中心")), QStringLiteral("1.250, -2.500, 3.750"));
+    EXPECT_EQ(valueFor(QStringLiteral("内方位")), QStringLiteral("fu=1200.00, fv=1195.00, cu=512.00, cv=384.00"));
 }
 
 TEST(SelectionPropertiesWidgetTest, ReportsWhetherInspectorHasContent)

@@ -85,23 +85,36 @@ bool isBilinearMaskSampleValid(const cv::Mat &mask, double x, double y)
            mask.at<std::uint8_t>(y1, x1) != 0;
 }
 
-QVector<MeshColorView> prepareColorViews(const QVector<MeshColorView> &views)
+QVector<MeshColorView> prepareColorViews(const QVector<MeshColorView>& views)
 {
     QVector<MeshColorView> prepared_views = views;
-    for (MeshColorView &view : prepared_views)
+    std::optional<placamera::FrameId> ground_frame;
+    for (MeshColorView& view : prepared_views)
     {
         if (view.colorBgr.type() != CV_8UC3)
         {
             continue;
         }
-        if (!view.colorCamera.isValid())
+        if (!view.camera)
+        {
+            continue;
+        }
+        if ((ground_frame && view.camera->groundFrame() != *ground_frame) ||
+            (view.colorCamera && view.colorCamera->groundFrame() != view.camera->groundFrame()))
+        {
+            view.camera.reset();
+            view.colorCamera.reset();
+            continue;
+        }
+        ground_frame = view.camera->groundFrame();
+        if (!view.colorCamera)
         {
             view.colorCamera = view.camera;
             if (!view.depth.empty() && view.colorBgr.size() != view.depth.size())
             {
-                view.colorCamera = view.camera.scaledIntrinsics(
-                    static_cast<double>(view.colorBgr.cols) / view.depth.cols,
-                    static_cast<double>(view.colorBgr.rows) / view.depth.rows);
+                view.colorCamera =
+                    view.camera->scaledIntrinsics(static_cast<double>(view.colorBgr.cols) / view.depth.cols,
+                                                  static_cast<double>(view.colorBgr.rows) / view.depth.rows);
             }
         }
         if (!view.colorForegroundMask.empty())
@@ -225,7 +238,7 @@ std::vector<cv::Mat> visibilityDepths(const TriMesh &mesh,
         static_cast<std::size_t>(views.size()));
     std::atomic_bool loading_failed{false};
 #ifdef MESHING_OPENMP
-#pragma omp parallel for schedule(dynamic, 1) num_threads(worker_count) if(worker_count > 1)
+#pragma omp parallel for schedule(dynamic, 1) num_threads(worker_count) if (worker_count > 1)
 #endif
     for (int view_index = 0; view_index < views.size(); ++view_index)
     {
@@ -235,28 +248,31 @@ std::vector<cv::Mat> visibilityDepths(const TriMesh &mesh,
         }
         try
         {
-            const MeshColorView &view = views[view_index];
+            const MeshColorView& view = views[view_index];
             if (view.depth.type() != CV_32FC1)
             {
                 continue;
             }
-            cv::Mat depth(view.depth.size(), CV_32F,
-                          cv::Scalar(std::numeric_limits<float>::infinity()));
-            for (const MeshVertex &vertex : mesh.vertices)
+            cv::Mat depth(view.depth.size(), CV_32F, cv::Scalar(std::numeric_limits<float>::infinity()));
+            for (const MeshVertex& vertex : mesh.vertices)
             {
-                const double world[3] = {vertex.x, vertex.y, vertex.z};
-                double pixel[2]{};
-                double camera_depth = 0.0;
-                if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+                if (!view.camera)
                 {
                     continue;
                 }
-                const int column = static_cast<int>(std::lround(pixel[0]));
-                const int row = static_cast<int>(std::lround(pixel[1]));
+                const auto projected =
+                    view.camera->groundToImage({view.camera->groundFrame(), {vertex.x, vertex.y, vertex.z}});
+                if (!projected || !projected.value().positiveDepth)
+                {
+                    continue;
+                }
+                const auto& pixel = projected.value().image;
+                const int column = static_cast<int>(std::lround(pixel.sample));
+                const int row = static_cast<int>(std::lround(pixel.line));
                 if (row >= 0 && column >= 0 && row < depth.rows && column < depth.cols)
                 {
-                    float &nearest = depth.at<float>(row, column);
-                    nearest = std::min(nearest, static_cast<float>(camera_depth));
+                    float& nearest = depth.at<float>(row, column);
+                    nearest = std::min(nearest, static_cast<float>(*projected.value().positiveDepth));
                 }
             }
             cv::erode(depth, depth, cv::Mat::ones(3, 3, CV_8UC1));
@@ -573,53 +589,50 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
             std::vector<ColorCandidate> visibility_only_candidates;
             if (options.allowVisibilityOnlyFallback)
             {
-                visibility_only_candidates.reserve(
-                    static_cast<std::size_t>(prepared_views.size()));
+                visibility_only_candidates.reserve(static_cast<std::size_t>(prepared_views.size()));
             }
             ColorCandidate best_fallback;
             bool has_best_fallback = false;
             const double world[3] = {vertex.x, vertex.y, vertex.z};
             for (int view_index = 0; view_index < prepared_views.size(); ++view_index)
             {
-                const MeshColorView &view = prepared_views[view_index];
-                if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1 ||
-                    view.confidence.type() != CV_32FC1 ||
-                    view.depthValidMask.type() != CV_8UC1 ||
-                    view.supportMask.type() != CV_8UC1 ||
-                    view.depth.size() != view.confidence.size() ||
-                    view.depth.size() != view.depthValidMask.size() ||
+                const MeshColorView& view = prepared_views[view_index];
+                if (!view.camera || !view.colorCamera || view.colorBgr.type() != CV_8UC3 ||
+                    view.depth.type() != CV_32FC1 || view.confidence.type() != CV_32FC1 ||
+                    view.depthValidMask.type() != CV_8UC1 || view.supportMask.type() != CV_8UC1 ||
+                    view.depth.size() != view.confidence.size() || view.depth.size() != view.depthValidMask.size() ||
                     view.depth.size() != view.supportMask.size())
                 {
                     continue;
                 }
-                double pixel[2]{};
-                double vertex_depth = 0.0;
-                if (!view.camera.projectWorldPointWithDepth(world, pixel, vertex_depth))
+                const auto projected =
+                    view.camera->groundToImage({view.camera->groundFrame(), {world[0], world[1], world[2]}});
+                if (!projected || !projected.value().positiveDepth)
                 {
                     ++rejected_projection_count;
                     continue;
                 }
-                const int column = static_cast<int>(std::lround(pixel[0]));
-                const int row = static_cast<int>(std::lround(pixel[1]));
-                if (row < 0 || column < 0 ||
-                    row >= view.depth.rows || column >= view.depth.cols)
+                const auto& pixel = projected.value().image;
+                const double vertex_depth = *projected.value().positiveDepth;
+                const int column = static_cast<int>(std::lround(pixel.sample));
+                const int row = static_cast<int>(std::lround(pixel.line));
+                if (row < 0 || column < 0 || row >= view.depth.rows || column >= view.depth.cols)
                 {
                     ++rejected_projection_count;
                     continue;
                 }
-                double color_pixel[2]{};
-                double color_depth = 0.0;
-                if (!view.colorCamera.projectWorldPointWithDepth(
-                        world, color_pixel, color_depth) ||
-                    color_pixel[0] < 0.0 || color_pixel[1] < 0.0 ||
-                    color_pixel[0] > view.colorBgr.cols - 1.0 ||
-                    color_pixel[1] > view.colorBgr.rows - 1.0)
+                const auto color_projection =
+                    view.colorCamera->groundToImage({view.colorCamera->groundFrame(), {world[0], world[1], world[2]}});
+                if (!color_projection || !color_projection.value().positiveDepth ||
+                    color_projection.value().image.sample < 0.0 || color_projection.value().image.line < 0.0 ||
+                    color_projection.value().image.sample > view.colorBgr.cols - 1.0 ||
+                    color_projection.value().image.line > view.colorBgr.rows - 1.0)
                 {
                     ++rejected_projection_count;
                     continue;
                 }
-                if (!isBilinearMaskSampleValid(
-                        view.colorForegroundMask, color_pixel[0], color_pixel[1]))
+                const auto& color_pixel = color_projection.value().image;
+                if (!isBilinearMaskSampleValid(view.colorForegroundMask, color_pixel.sample, color_pixel.line))
                 {
                     if (options.allowVisibilityOnlyFallback)
                     {
@@ -629,12 +642,11 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     continue;
                 }
                 const float nearest_depth =
-                    visibility_depths[static_cast<std::size_t>(view_index)]
-                        .at<float>(row, column);
-                const bool mesh_visible = !std::isfinite(nearest_depth) ||
-                    vertex_depth <= nearest_depth +
-                        options.visibilityToleranceVoxels * voxel_size;
-                const std::array<double, 3> center = view.camera.cameraCenter();
+                    visibility_depths[static_cast<std::size_t>(view_index)].at<float>(row, column);
+                const bool mesh_visible =
+                    !std::isfinite(nearest_depth) ||
+                    vertex_depth <= nearest_depth + options.visibilityToleranceVoxels * voxel_size;
+                const std::array<double, 3> center = view.camera->pose().center;
                 float dx = static_cast<float>(center[0]) - vertex.x;
                 float dy = static_cast<float>(center[1]) - vertex.y;
                 float dz = static_cast<float>(center[2]) - vertex.z;
@@ -645,12 +657,10 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
                     dx /= length;
                     dy /= length;
                     dz /= length;
-                    view_cosine = std::fabs(
-                        vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
+                    view_cosine = std::fabs(vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
                 }
-                const cv::Vec3f sampled_color = bilinearColor(
-                    view.colorBgr, color_pixel[0], color_pixel[1])
-                    * gains[static_cast<std::size_t>(view_index)];
+                const cv::Vec3f sampled_color = bilinearColor(view.colorBgr, color_pixel.sample, color_pixel.line) *
+                                                gains[static_cast<std::size_t>(view_index)];
                 if (options.allowVisibilityOnlyFallback)
                 {
                     ++visibility_only_attempted_observation_count;

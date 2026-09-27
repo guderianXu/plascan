@@ -1,7 +1,6 @@
 #include "InitialPairInitializer.h"
 #include "IncrementalSfmDetail.h"
 #include "geometry/OpenCvCameraAdapter.h"
-#include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 
 #include "log/Logger.h"
@@ -39,13 +38,14 @@ namespace xjw
         return _owner.initializeFromPair(id1, id2);
     }
 
-    bool InitialPairInitializer::initializeWithPose(
-        ImageId id1, ImageId id2, const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera)
+    bool InitialPairInitializer::initializeWithPose(ImageId id1,
+                                                    ImageId id2,
+                                                    const placamera::FramePinholeNumericState& secondCamera)
     {
         return _owner.initializeFromPairPose(id1, id2, secondCamera);
     }
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
+    std::vector<placamera::FramePinholeNumericState>
     InitialPairInitializer::enumerateFivePointPoseHypotheses(ImageId id1, ImageId id2) const
     {
         return _owner.initialPairPoseHypotheses(id1, id2);
@@ -275,19 +275,20 @@ namespace xjw
 
             if (_sfmOptions.useReferenceInitialPairTrials)
             {
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2;
-                if (!getCamera(pair.id1, camera1) || !getCamera(pair.id2, camera2))
+                const auto* first_camera = getCamera(pair.id1);
+                const auto* second_camera = getCamera(pair.id2);
+                if (!first_camera || !second_camera)
                 {
                     continue;
                 }
+                const auto& camera1 = *first_camera;
                 const bool depth_flipped = camera1.depthAxisFlipped();
-                const cv::Mat camera_matrix = openCvCameraMatrix(camera1.focalX(),
-                                                                 camera1.focalY(),
-                                                                 camera1.principalX(),
-                                                                 camera1.principalY(),
-                                                                 camera1.uAxisSign(),
-                                                                 camera1.vAxisSign(),
+                const cv::Mat camera_matrix = openCvCameraMatrix(camera1.intrinsics().focalX,
+                                                                 camera1.intrinsics().focalY,
+                                                                 camera1.intrinsics().principalX,
+                                                                 camera1.intrinsics().principalY,
+                                                                 camera1.intrinsics().uAxisSign,
+                                                                 camera1.intrinsics().vAxisSign,
                                                                  depth_flipped,
                                                                  true);
                 cv::Mat essential_mask;
@@ -389,33 +390,36 @@ namespace xjw
     bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
     {
         // 加载两台相机内参
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1, cam2;
-        if (!getCamera(id1, cam1))
+        const auto* first_camera = getCamera(id1);
+        if (!first_camera)
         {
             _lastErrorMessage = "getCamera(" + std::to_string(id1) + ") failed";
             return false;
         }
-        if (!getCamera(id2, cam2))
+        const auto* second_camera = getCamera(id2);
+        if (!second_camera)
         {
             _lastErrorMessage = "getCamera(" + std::to_string(id2) + ") failed";
             return false;
         }
+        placamera::FramePinholeNumericState cam1 = *first_camera;
+        placamera::FramePinholeNumericState cam2 = *second_camera;
 
         Logger::instance()->infof("[SFM] initializeFromPair: id1=%d, id2=%d", id1, id2);
         Logger::instance()->debugf("[SFM] cam1: fu=%.4f fv=%.4f cu=%.4f cv=%.4f uDir=%d vDir=%d",
-                                   cam1.focalX(),
-                                   cam1.focalY(),
-                                   cam1.principalX(),
-                                   cam1.principalY(),
-                                   cam1.uAxisSign(),
-                                   cam1.vAxisSign());
+                                   cam1.intrinsics().focalX,
+                                   cam1.intrinsics().focalY,
+                                   cam1.intrinsics().principalX,
+                                   cam1.intrinsics().principalY,
+                                   cam1.intrinsics().uAxisSign,
+                                   cam1.intrinsics().vAxisSign);
         Logger::instance()->debugf("[SFM] cam2: fu=%.4f fv=%.4f cu=%.4f cv=%.4f uDir=%d vDir=%d",
-                                   cam2.focalX(),
-                                   cam2.focalY(),
-                                   cam2.principalX(),
-                                   cam2.principalY(),
-                                   cam2.uAxisSign(),
-                                   cam2.vAxisSign());
+                                   cam2.intrinsics().focalX,
+                                   cam2.intrinsics().focalY,
+                                   cam2.intrinsics().principalX,
+                                   cam2.intrinsics().principalY,
+                                   cam2.intrinsics().uAxisSign,
+                                   cam2.intrinsics().vAxisSign);
 
         // ---- 收集匹配特征点 ----
         const auto& matches = _correspondenceGraph.matchesBetween(id1, id2);
@@ -456,20 +460,20 @@ namespace xjw
         // 当 depthAxisFlipped 时，额外翻转 fx/fy 符号，使归一化坐标处于正深度约定
         // 这样 OpenCV 的 recoverPose / decomposeHomography 的 chirality 检查 (Z>0) 才正确
         const bool depthFlipped = cam1.depthAxisFlipped();
-        const cv::Mat K1 = openCvCameraMatrix(cam1.focalX(),
-                                              cam1.focalY(),
-                                              cam1.principalX(),
-                                              cam1.principalY(),
-                                              cam1.uAxisSign(),
-                                              cam1.vAxisSign(),
+        const cv::Mat K1 = openCvCameraMatrix(cam1.intrinsics().focalX,
+                                              cam1.intrinsics().focalY,
+                                              cam1.intrinsics().principalX,
+                                              cam1.intrinsics().principalY,
+                                              cam1.intrinsics().uAxisSign,
+                                              cam1.intrinsics().vAxisSign,
                                               depthFlipped,
                                               true);
-        const cv::Mat K2 = openCvCameraMatrix(cam2.focalX(),
-                                              cam2.focalY(),
-                                              cam2.principalX(),
-                                              cam2.principalY(),
-                                              cam2.uAxisSign(),
-                                              cam2.vAxisSign(),
+        const cv::Mat K2 = openCvCameraMatrix(cam2.intrinsics().focalX,
+                                              cam2.intrinsics().focalY,
+                                              cam2.intrinsics().principalX,
+                                              cam2.intrinsics().principalY,
+                                              cam2.intrinsics().uAxisSign,
+                                              cam2.intrinsics().vAxisSign,
                                               depthFlipped,
                                               true);
         const double fx1 = K1.at<double>(0, 0);
@@ -651,7 +655,7 @@ namespace xjw
                 C2[i] -= R21_cv.at<double>(j, i) * t21_cv.at<double>(j);
             }
         }
-        cam2.setPose(R2, C2);
+        cam2.setPose(placamera::Pose::create(cam2.groundFrame(), C2, R2));
 
         Logger::instance()->infof(
             "[SFM] cam2 pose: C=[%.6f, %.6f, %.6f], poseInliers=%d", C2[0], C2[1], C2[2], poseInliers);
@@ -659,20 +663,20 @@ namespace xjw
         return initializeFromPairPose(id1, id2, cam2, poseInliers);
     }
 
-    bool IncrementalSfm::initializeFromPairPose(
-        ImageId id1,
-        ImageId id2,
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera,
-        int poseInliers)
+    bool IncrementalSfm::initializeFromPairPose(ImageId id1,
+                                                ImageId id2,
+                                                const placamera::FramePinholeNumericState& secondCamera,
+                                                int poseInliers)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1;
-        if (!getCamera(id1, cam1))
+        const auto* first_camera = getCamera(id1);
+        if (!first_camera)
         {
             _lastErrorMessage = "getCamera(" + std::to_string(id1) + ") failed";
             return false;
         }
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2 = secondCamera;
-        cam1.setPose({1, 0, 0, 0, 1, 0, 0, 0, 1}, {0, 0, 0});
+        placamera::FramePinholeNumericState cam1 = *first_camera;
+        placamera::FramePinholeNumericState cam2 = secondCamera;
+        cam1.setPose(placamera::Pose::create(cam1.groundFrame(), {0, 0, 0}, {1, 0, 0, 0, 1, 0, 0, 0, 1}));
 
         const auto& matches = _correspondenceGraph.matchesBetween(id1, id2);
         const ImageData& img1 = _reconstruction->image(id1);
@@ -698,15 +702,16 @@ namespace xjw
                 double u1 = img1.keypoints[fi1].x, v1 = img1.keypoints[fi1].y;
                 double u2 = img2.keypoints[fi2].x, v2 = img2.keypoints[fi2].y;
 
-                auto triResult = Intersection::intersectPair(cam1, u1, v1, cam2, u2, v2);
-                if (triResult.valid)
+                const auto triResult =
+                    placamera::FramePinholeNumericState::triangulatePair(cam1, {u1, v1}, cam2, {u2, v2});
+                if (triResult)
                 {
-                    if (triResult.angle_deg < _sfmOptions.triangulatorOptions.minTriAngle)
+                    if (triResult.value().triangulationAngleDegrees < _sfmOptions.triangulatorOptions.minTriAngle)
                     {
                         ++angleFailCount;
                     }
-                    else if (!std::isfinite(triResult.reproj_error_rms) ||
-                             triResult.reproj_error_rms > _sfmOptions.triangulatorOptions.maxReprojError)
+                    else if (!std::isfinite(triResult.value().rmsReprojectionPixels) ||
+                             triResult.value().rmsReprojectionPixels > _sfmOptions.triangulatorOptions.maxReprojError)
                     {
                         ++reprojFailCount;
                     }
@@ -727,7 +732,7 @@ namespace xjw
                                       reprojFailCount);
         }
 
-        Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+        Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
         if (_sfmOptions.executionProfile == SfmExecutionProfile::FullRefinement && !_inputMultiViewTracks.empty())
         {
             TriangulatorOptions triangulatorOptions = _sfmOptions.triangulatorOptions;
@@ -759,15 +764,17 @@ namespace xjw
         return true;
     }
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-    IncrementalSfm::initialPairPoseHypotheses(ImageId id1, ImageId id2) const
+    std::vector<placamera::FramePinholeNumericState> IncrementalSfm::initialPairPoseHypotheses(ImageId id1,
+                                                                                               ImageId id2) const
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2;
-        if (!getCamera(id1, camera1) || !getCamera(id2, camera2))
+        const auto* first_camera = getCamera(id1);
+        const auto* second_camera = getCamera(id2);
+        if (!first_camera || !second_camera)
         {
             return {};
         }
+        const auto& camera1 = *first_camera;
+        const auto& camera2 = *second_camera;
         const auto& matches = _correspondenceGraph.matchesBetween(id1, id2);
         const ImageData& image1 = _reconstruction->image(id1);
         const ImageData& image2 = _reconstruction->image(id2);
@@ -791,12 +798,12 @@ namespace xjw
         }
 
         const bool depth_flipped = camera1.depthAxisFlipped();
-        const cv::Mat camera_matrix = openCvCameraMatrix(camera1.focalX(),
-                                                         camera1.focalY(),
-                                                         camera1.principalX(),
-                                                         camera1.principalY(),
-                                                         camera1.uAxisSign(),
-                                                         camera1.vAxisSign(),
+        const cv::Mat camera_matrix = openCvCameraMatrix(camera1.intrinsics().focalX,
+                                                         camera1.intrinsics().focalY,
+                                                         camera1.intrinsics().principalX,
+                                                         camera1.intrinsics().principalY,
+                                                         camera1.intrinsics().uAxisSign,
+                                                         camera1.intrinsics().vAxisSign,
                                                          depth_flipped,
                                                          true);
         const double fx = camera_matrix.at<double>(0, 0);
@@ -806,7 +813,7 @@ namespace xjw
         const double normalized_threshold_squared = 1.0 / std::pow(std::max(std::fabs(fx), std::fabs(fy)), 2.0);
         const int chirality_threshold = std::max(5, _sfmOptions.initMinChiralityInliers);
         const std::size_t subset_count = std::min<std::size_t>(16, points1.size());
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> hypotheses;
+        std::vector<placamera::FramePinholeNumericState> hypotheses;
 
         for (std::size_t subset = 0; subset < subset_count && hypotheses.size() < 32; ++subset)
         {
@@ -879,10 +886,10 @@ namespace xjw
                     }
                 }
                 bool duplicate = false;
-                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& existing : hypotheses)
+                for (const placamera::FramePinholeNumericState& existing : hypotheses)
                 {
                     double squared_difference = 0.0;
-                    const auto existing_rotation = existing.cameraToWorldRotation();
+                    const auto existing_rotation = existing.pose().cameraToWorldRotation;
                     for (std::size_t index = 0; index < camera_to_world.size(); ++index)
                     {
                         squared_difference += std::pow(camera_to_world[index] - existing_rotation[index], 2.0);
@@ -895,8 +902,8 @@ namespace xjw
                 }
                 if (!duplicate)
                 {
-                    xjw::camera_models::frame_pinhole::FramePinholeNumericState hypothesis = camera2;
-                    hypothesis.setPose(camera_to_world, center);
+                    placamera::FramePinholeNumericState hypothesis = camera2;
+                    hypothesis.setPose(placamera::Pose::create(hypothesis.groundFrame(), center, camera_to_world));
                     hypotheses.push_back(std::move(hypothesis));
                 }
             }

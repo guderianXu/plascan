@@ -1,17 +1,18 @@
 #include "project/support/ProjectDepthBatchLineage.h"
 
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QMap>
 #include <QTemporaryDir>
 
 #include <gtest/gtest.h>
+
+#include <memory>
 
 namespace
 {
@@ -25,10 +26,6 @@ namespace
     QJsonObject metadataForSparsePly(const QString& sparsePlyPath)
     {
         const QString imagePath = QStringLiteral("/stable/image_0.tif");
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 10.0});
-
         QJsonObject metadata{
             {QStringLiteral("images"),
              QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-0")},
@@ -42,11 +39,23 @@ namespace
                  {QStringLiteral("run_id"), QStringLiteral("run-a")},
                  {QStringLiteral("selected_images"), QJsonArray{imagePath}},
                  {QStringLiteral("files"), QJsonObject{{QStringLiteral("sparse_cloud_xyz"), sparsePlyPath}}}}}}};
-        QJsonObject cameraMetadata = xjw::common::project::serializeFramePinholeNumericState(camera);
-        cameraMetadata.insert(QStringLiteral("image_width"), 1024);
-        cameraMetadata.insert(QStringLiteral("image_height"), 768);
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-            &metadata, QMap<QString, QJsonObject>{{imagePath, cameraMetadata}});
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("lineage-definition"),
+                                                      {1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        const auto added =
+            cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("lineage-instance"),
+                placamera::ImageId("image-0"),
+                definition,
+                {1024, 768},
+                placamera::Pose::create(frame, {0.0, 0.0, 10.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+        EXPECT_TRUE(added.ok()) << added.message();
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&metadata, cameras);
         EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
         return metadata;
     }

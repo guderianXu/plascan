@@ -1,10 +1,10 @@
 #include "TextureMapper.h"
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <QDir>
 #include <QFileInfo>
@@ -24,17 +24,17 @@ namespace xjw::mesh
 namespace
 {
 
-using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using PlaPointCloud = plapoint::GeometryCloud<float>;
 
-struct Bounds
-{
-    float minX = 0.0f;
-    float minY = 0.0f;
-    float minZ = 0.0f;
-    float maxX = 0.0f;
-    float maxY = 0.0f;
-    float maxZ = 0.0f;
-    bool valid = false;
+    struct Bounds
+    {
+        float minX = 0.0f;
+        float minY = 0.0f;
+        float minZ = 0.0f;
+        float maxX = 0.0f;
+        float maxY = 0.0f;
+        float maxZ = 0.0f;
+        bool valid = false;
 };
 
 Bounds computeCloudBounds(const PlaPointCloud &cloud)
@@ -144,7 +144,7 @@ bool assignPlanarTextureCoordinates(PlaPointCloud *meshCloud,
     const float rangeV = std::max(actualMaxV - actualMinV, 1e-6f);
 
     const auto n = static_cast<plamatrix::Index>(meshCloud->size());
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texCoords(n, 2);
+    plamatrix::MatrixXf texCoords(n, 2);
     for (size_t i = 0; i < meshCloud->size(); ++i)
     {
         const float u = (pointAxisValue(*meshCloud, i, axes.uAxis) - actualMinU) / rangeU;
@@ -166,7 +166,7 @@ bool assignPlanarTextureCoordinates(PlaPointCloud *meshCloud,
     }
 
     const int faceCount = static_cast<int>(faces->rows());
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texIdx(faceCount, 3);
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> texIdx(faceCount, 3);
     for (int fi = 0; fi < faceCount; ++fi)
     {
         texIdx(fi, 0) = (*faces)(fi, 0);

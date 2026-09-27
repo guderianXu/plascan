@@ -1,6 +1,10 @@
 #include "SelectionPropertiesWidget.h"
 
 #include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
+#include <placamera/rpc_camera.h>
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -21,6 +25,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 
 namespace
 {
@@ -69,6 +74,24 @@ namespace
             }
         }
         return {};
+    }
+
+    std::shared_ptr<const placamera::RasterModel> projectCameraForImage(const QJsonObject& metadata,
+                                                                        const QJsonObject& image)
+    {
+        const QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (image_id.isEmpty())
+        {
+            return {};
+        }
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(
+            xjw::common::project::projectFilesRootObject(metadata));
+        if (!loaded.ok())
+        {
+            return {};
+        }
+        const auto camera = loaded.instances.forImage(placamera::ImageId(image_id.toStdString()));
+        return camera ? camera.value() : nullptr;
     }
 
     QString recordPath(const QJsonObject& record)
@@ -312,7 +335,7 @@ void SelectionPropertiesWidget::showPhotoProperties(const QJsonObject& meta, con
 
     rows.push_back({tr("名称"), info.fileName()});
     rows.push_back({tr("路径"), imagePath});
-    const QJsonObject camera = xjw::common::project::projectCameraModelParameters(meta, entry);
+    const auto camera = projectCameraForImage(meta, entry);
     rows.push_back({tr("定向状态"), imageAlignedText(entry, camera)});
 
     QImageReader reader(imagePath);
@@ -327,17 +350,21 @@ void SelectionPropertiesWidget::showPhotoProperties(const QJsonObject& meta, con
 
     appendFileRows(&rows, imagePath);
 
-    const bool isRpcCamera = camera.value(QStringLiteral("model")).toString() == QStringLiteral("rpc00b");
-    if (!camera.isEmpty())
+    const bool isRpcCamera = std::dynamic_pointer_cast<const placamera::RpcModel>(camera) != nullptr;
+    const bool isFrameCamera = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(camera) != nullptr;
+    if (camera)
     {
-        rows.push_back({tr("相机类型"), isRpcCamera ? tr("RPC 相机") : tr("针孔相机")});
+        rows.push_back({tr("相机类型"),
+                        isRpcCamera     ? tr("RPC 相机")
+                        : isFrameCamera ? tr("针孔相机")
+                                        : tr("行扫描相机")});
     }
-    const QString center = cameraCenterText(entry, camera);
+    const QString center = cameraCenterText(camera);
     if (!center.isEmpty())
     {
         rows.push_back({tr("相机中心"), center});
     }
-    const QString intrinsics = isRpcCamera ? QString() : intrinsicsText(entry, camera);
+    const QString intrinsics = isFrameCamera ? intrinsicsText(camera) : QString();
     if (!intrinsics.isEmpty())
     {
         rows.push_back({tr("内方位"), intrinsics});
@@ -723,60 +750,41 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
     return rows;
 }
 
-QString SelectionPropertiesWidget::imageAlignedText(const QJsonObject& entry, const QJsonObject& camera) const
+QString SelectionPropertiesWidget::imageAlignedText(const QJsonObject& entry,
+                                                    const std::shared_ptr<const placamera::RasterModel>& camera) const
 {
     if (entry.isEmpty())
     {
         return tr("未知");
     }
-    const bool hasCenter = entry.contains(QStringLiteral("center")) ||
-                           entry.contains(QStringLiteral("camera_center")) || camera.contains(QStringLiteral("C"));
-    const bool aligned = entry.value(QStringLiteral("aligned")).toBool(hasCenter);
+    const bool aligned = entry.value(QStringLiteral("aligned")).toBool(camera != nullptr);
     return aligned ? tr("已定向") : tr("未定向");
 }
 
-QString SelectionPropertiesWidget::cameraCenterText(const QJsonObject& entry, const QJsonObject& camera) const
+QString SelectionPropertiesWidget::cameraCenterText(const std::shared_ptr<const placamera::RasterModel>& camera) const
 {
-    QJsonArray center = entry.value(QStringLiteral("center")).toArray();
-    if (center.isEmpty())
-    {
-        center = entry.value(QStringLiteral("camera_center")).toArray();
-    }
-    if (center.isEmpty())
-    {
-        center = camera.value(QStringLiteral("C")).toArray();
-    }
-    if (center.size() < 3)
+    const auto frame = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(camera);
+    if (!frame)
     {
         return {};
     }
-    return QStringLiteral("%1, %2, %3")
-        .arg(center.at(0).toDouble(), 0, 'f', 3)
-        .arg(center.at(1).toDouble(), 0, 'f', 3)
-        .arg(center.at(2).toDouble(), 0, 'f', 3);
+    const auto& center = frame->pose().center;
+    return QStringLiteral("%1, %2, %3").arg(center[0], 0, 'f', 3).arg(center[1], 0, 'f', 3).arg(center[2], 0, 'f', 3);
 }
 
-QString SelectionPropertiesWidget::intrinsicsText(const QJsonObject& entry, const QJsonObject& camera) const
+QString SelectionPropertiesWidget::intrinsicsText(const std::shared_ptr<const placamera::RasterModel>& camera) const
 {
-    const QJsonObject intrinsics = entry.value(QStringLiteral("intrinsics")).toObject();
-    if (!intrinsics.isEmpty())
-    {
-        return QStringLiteral("fx=%1, fy=%2, cx=%3, cy=%4")
-            .arg(intrinsics.value(QStringLiteral("fx")).toDouble(), 0, 'f', 2)
-            .arg(intrinsics.value(QStringLiteral("fy")).toDouble(), 0, 'f', 2)
-            .arg(intrinsics.value(QStringLiteral("cx")).toDouble(), 0, 'f', 2)
-            .arg(intrinsics.value(QStringLiteral("cy")).toDouble(), 0, 'f', 2);
-    }
-
-    if (camera.isEmpty())
+    const auto frame = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(camera);
+    if (!frame)
     {
         return {};
     }
+    const auto& intrinsics = frame->pinholeDefinition().intrinsics();
     return QStringLiteral("fu=%1, fv=%2, cu=%3, cv=%4")
-        .arg(camera.value(QStringLiteral("fu")).toDouble(), 0, 'f', 2)
-        .arg(camera.value(QStringLiteral("fv")).toDouble(), 0, 'f', 2)
-        .arg(camera.value(QStringLiteral("cu")).toDouble(), 0, 'f', 2)
-        .arg(camera.value(QStringLiteral("cv")).toDouble(), 0, 'f', 2);
+        .arg(intrinsics.focalX, 0, 'f', 2)
+        .arg(intrinsics.focalY, 0, 'f', 2)
+        .arg(intrinsics.principalX, 0, 'f', 2)
+        .arg(intrinsics.principalY, 0, 'f', 2);
 }
 
 QString SelectionPropertiesWidget::fileSizeText(qint64 bytes)

@@ -6,7 +6,6 @@
 #include "MainMenu.h"
 #include "ModelDropSupport.h"
 #include "project/services/ProjectLifecycleService.h"
-#include "project/services/ProjectResourceCleanupCoordinator.h"
 #include "project/services/ProjectServiceContainer.h"
 #include "WorkspaceCenterWidget.h"
 #include "WindowControlsWidget.h"
@@ -63,10 +62,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), _ui(new Ui::MainW
 
 MainWindow::~MainWindow()
 {
-    if (_projectServices)
-    {
-        _projectServices->cleanup().waitForFinished();
-    }
     delete _ui;
 }
 

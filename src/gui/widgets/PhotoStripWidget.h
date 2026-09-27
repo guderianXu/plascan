@@ -101,7 +101,7 @@ private:
     QSet<QString> _desiredThumbnailKeys;
     QJsonArray _pendingImageEntries;
     QJsonArray _loadedImageEntries;
-    QJsonObject _projectMetadata;
+    QSet<QString> _cameraImageIds;
     int _pendingImageIndex = 0;
     int _activeThumbnailLoads = 0;
     bool _hasLoadedImageEntries = false;

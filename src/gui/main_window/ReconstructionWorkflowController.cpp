@@ -9,7 +9,10 @@
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectWorkflowOperations.h"
 #include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "reconstruction/TextureMappingDialog.h"
+
+#include <placamera/rpc_camera.h>
 
 #include <QDir>
 #include <QFileInfo>
@@ -92,14 +95,41 @@ namespace
                                     const QString& note,
                                     const QJsonObject& properties);
 
-    bool hasValidRpc00bCamera(const QJsonObject& metadata, const QString& imagePath)
+    bool hasValidRpc00bCamera(const placamera::CameraInstanceSet& cameras,
+                              const QJsonArray& images,
+                              const QString& imagePath)
     {
-        const QJsonObject camera = xjw::common::project::projectCameraModelParametersForPath(metadata, imagePath);
-        const QJsonValue height_offset = camera.value(QStringLiteral("height_off"));
-        const QJsonValue height_scale = camera.value(QStringLiteral("height_scale"));
-        return camera.value(QStringLiteral("model")).toString() == QStringLiteral("rpc00b") &&
-               height_offset.isDouble() && height_scale.isDouble() && std::isfinite(height_offset.toDouble()) &&
-               std::isfinite(height_scale.toDouble()) && height_scale.toDouble() > 0.0;
+        QString image_id;
+        for (const QJsonValue& value : images)
+        {
+            const QJsonObject image = value.toObject();
+            if (!xjw::common::project::pathTokenMatchesImage(image.value(QStringLiteral("path")).toString(), imagePath))
+            {
+                continue;
+            }
+            if (!image_id.isEmpty())
+            {
+                return false;
+            }
+            image_id = image.value(QStringLiteral("image_uuid")).toString();
+        }
+        if (image_id.isEmpty())
+        {
+            return false;
+        }
+        const auto selected = cameras.forImage(placamera::ImageId(image_id.toStdString()));
+        if (!selected.ok())
+        {
+            return false;
+        }
+        const auto* rpc = dynamic_cast<const placamera::RpcModel*>(selected.value().get());
+        if (!rpc)
+        {
+            return false;
+        }
+        const auto& parameters = rpc->rpcDefinition().parameters();
+        return std::isfinite(parameters.heightOffset) && std::isfinite(parameters.heightScale) &&
+               parameters.heightScale > 0.0;
     }
 
     void appendRpcHeightPlaneSweepCandidate(QJsonArray* candidates, const QJsonObject& metadata)
@@ -118,8 +148,12 @@ namespace
         }
         const QString left_image = existingCleanPath(selected_images.at(0).toString());
         const QString right_image = existingCleanPath(selected_images.at(1).toString());
-        if (left_image.isEmpty() || right_image.isEmpty() || !hasValidRpc00bCamera(metadata, left_image) ||
-            !hasValidRpc00bCamera(metadata, right_image))
+        const auto loaded =
+            xjw::placamera_runtime::loadProjectCameras(xjw::common::project::projectFilesRootObject(metadata));
+        const QJsonArray images = xjw::common::project::projectImageEntries(metadata);
+        if (left_image.isEmpty() || right_image.isEmpty() || !loaded.ok() ||
+            !hasValidRpc00bCamera(loaded.instances, images, left_image) ||
+            !hasValidRpc00bCamera(loaded.instances, images, right_image))
         {
             return;
         }

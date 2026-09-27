@@ -2,7 +2,7 @@
 
 #include "DemDomTypes.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 #include <QString>
 

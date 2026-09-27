@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PairSelector.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
 
 #include <QMap>
 #include <QString>
@@ -26,11 +26,11 @@ namespace xjw
             PairSelectionInput pairInput;
             // ImageId 是参考几何的唯一键。路径只在进入任务时用于把输入影像
             // 定位到 imageIds，之后不再作为相机身份参与匹配。
-            std::vector<camera_core::ImageId> imageIds;
-            camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
+            std::vector<placamera::ImageId> imageIds;
+            placamera::reference::ReferenceCameraGeometryMap referenceCameraGeometries;
             // 仅含相机中心的位置先验也可用于 Source/Estimated 参考预选，
             // 不要求调用方伪造完整且可投影的相机模型。
-            camera_reference::ReferenceCameraPositionMap referencePositions;
+            placamera::reference::ReferenceCameraPositionMap referencePositions;
             // 影像路径到蒙版路径的映射。键可以是绝对路径、文件名或 baseName，运行时会做宽松匹配。
             QMap<QString, QString> maskPaths;
             // 特征只在本次任务内存在。调用方通常无需设置，MatchPhotosTask 会创建并在

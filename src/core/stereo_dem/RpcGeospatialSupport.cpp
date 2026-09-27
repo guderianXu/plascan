@@ -120,8 +120,7 @@ namespace xjw::stereo_dem
         return true;
     }
 
-    bool geodeticToProjected(
-        const std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>& geodetic,
+    bool geodeticToProjected(const std::vector<placamera::GeodeticCoordinate>& geodetic,
                              const ProjectedCoordinateSystem& coordinateSystem,
                              std::vector<std::array<double, 3>>* projected,
                              QString* errorMessage)
@@ -156,9 +155,9 @@ namespace xjw::stereo_dem
         std::vector<double> z(geodetic.size());
         for (std::size_t index = 0; index < geodetic.size(); ++index)
         {
-            x[index] = geodetic[index][0];
-            y[index] = geodetic[index][1];
-            z[index] = geodetic[index][2];
+            x[index] = geodetic[index].longitudeDegrees;
+            y[index] = geodetic[index].latitudeDegrees;
+            z[index] = geodetic[index].heightMeters;
         }
         if (!transformation->Transform(static_cast<int>(geodetic.size()), x.data(), y.data(), z.data()))
         {
@@ -172,14 +171,14 @@ namespace xjw::stereo_dem
         projected->resize(geodetic.size());
         for (std::size_t index = 0; index < geodetic.size(); ++index)
         {
-            (*projected)[index] = {x[index], y[index], geodetic[index][2]};
+            (*projected)[index] = {x[index], y[index], geodetic[index].heightMeters};
         }
         return true;
     }
 
     bool projectedRowToGeodetic(const DemGridData& dem,
                                 int row,
-                                std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate>* geodetic,
+                                std::vector<placamera::GeodeticCoordinate>* geodetic,
                                 QString* errorMessage)
     {
         if (!geodetic || row < 0 || row >= dem.height || dem.width <= 0)

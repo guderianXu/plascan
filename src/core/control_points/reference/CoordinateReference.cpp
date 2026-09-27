@@ -1,7 +1,7 @@
 #include "CoordinateReference.h"
 
-#include "coordinate_system/context/CoordinateContext.h"
-#include "coordinate_system/gdal/GdalCoordinateTransform.h"
+#include <placoordinate/context/CoordinateContext.h>
+#include <placoordinate/gdal/GdalCoordinateTransform.h>
 
 #include <cpl_conv.h>
 #include <cpl_error.h>
@@ -110,9 +110,9 @@ namespace xjw::control_points
             }
         };
 
-        xjw::coordinate_system::CoordinateAxisOrder coordinateAxisOrder(AxisOrder order)
+        placoordinate::CoordinateAxisOrder coordinateAxisOrder(AxisOrder order)
         {
-            using xjw::coordinate_system::CoordinateAxisOrder;
+            using placoordinate::CoordinateAxisOrder;
             switch (order)
             {
             case AxisOrder::TraditionalGis:
@@ -127,10 +127,10 @@ namespace xjw::control_points
             return CoordinateAxisOrder::TraditionalGis;
         }
 
-        xjw::coordinate_system::VerticalReference verticalReference(const ReferenceCoordinate& coordinate,
+        placoordinate::VerticalReference verticalReference(const ReferenceCoordinate& coordinate,
                                                                     const CoordinateReference& source)
         {
-            using xjw::coordinate_system::VerticalReference;
+            using placoordinate::VerticalReference;
             if (source.isGeocentric())
             {
                 return VerticalReference::NotApplicable;
@@ -159,9 +159,9 @@ namespace xjw::control_points
         MetricReferenceCoordinateResult resolveWithContext(const ReferenceCoordinate& coordinate,
                                                            AxisOrder axisOrder,
                                                            const CoordinateReference& source,
-                                                           const xjw::coordinate_system::CoordinateContext& context)
+                                                           const placoordinate::CoordinateContext& context)
         {
-            using namespace xjw::coordinate_system;
+            using namespace placoordinate;
             MetricReferenceCoordinateResult result;
             if (!context.solverFrame().hasMetricScale())
             {
@@ -508,7 +508,7 @@ namespace xjw::control_points
 
     MetricReferenceCoordinateResult
     resolveMetricReferenceCoordinate(const ReferenceCoordinate& coordinate,
-                                     const xjw::coordinate_system::CoordinateContext* context)
+                                     const placoordinate::CoordinateContext* context)
     {
         MetricReferenceCoordinateResult result;
         const ReferenceCoordinateAssessment assessment = assessReferenceCoordinate(coordinate);

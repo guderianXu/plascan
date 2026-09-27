@@ -25,6 +25,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace xjw::aerial_triangulation
@@ -93,7 +94,7 @@ namespace xjw::aerial_triangulation
                 {
                     continue;
                 }
-                const std::array<double, 3> centerA = reconstruction.camera(imageA).cameraCenter();
+                const std::array<double, 3> centerA = reconstruction.camera(imageA).pose().center;
                 for (std::size_t second = first + 1; second < point.track.elements.size(); ++second)
                 {
                     const ImageId imageB = point.track.elements[second].imageId;
@@ -101,7 +102,7 @@ namespace xjw::aerial_triangulation
                     {
                         continue;
                     }
-                    const std::array<double, 3> centerB = reconstruction.camera(imageB).cameraCenter();
+                    const std::array<double, 3> centerB = reconstruction.camera(imageB).pose().center;
                     const std::array<double, 3> rayA{
                         point.xyz[0] - centerA[0], point.xyz[1] - centerA[1], point.xyz[2] - centerA[2]};
                     const std::array<double, 3> rayB{
@@ -131,7 +132,7 @@ namespace xjw::aerial_triangulation
                 {
                     continue;
                 }
-                const std::array<double, 3> centerA = reconstruction.camera(imageA).cameraCenter();
+                const std::array<double, 3> centerA = reconstruction.camera(imageA).pose().center;
                 for (std::size_t second = first + 1; second < point.track.elements.size(); ++second)
                 {
                     const ImageId imageB = point.track.elements[second].imageId;
@@ -139,7 +140,7 @@ namespace xjw::aerial_triangulation
                     {
                         continue;
                     }
-                    const std::array<double, 3> centerB = reconstruction.camera(imageB).cameraCenter();
+                    const std::array<double, 3> centerB = reconstruction.camera(imageB).pose().center;
                     const std::array<double, 3> rayA{
                         point.xyz[0] - centerA[0], point.xyz[1] - centerA[1], point.xyz[2] - centerA[2]};
                     const std::array<double, 3> rayB{
@@ -378,6 +379,26 @@ namespace xjw::aerial_triangulation
             CollectedSparseQuality collected;
             SparseCleanupCounters cleanupCounters;
             cleanupCounters.reconstructionPoints = static_cast<int>(reconstruction.numPoints3D());
+            std::unordered_map<ImageId, placamera::CameraModelPtr<placamera::FramePinholeModel>> qualityCameras;
+            if (serializeDetails)
+            {
+                qualityCameras.reserve(reconstruction.numRegisteredImages());
+                for (const ImageId imageId : reconstruction.registeredImageIds())
+                {
+                    if (!reconstruction.hasCamera(imageId))
+                    {
+                        continue;
+                    }
+                    const auto& camera = reconstruction.camera(imageId);
+                    auto model =
+                        camera.toModel(camera.instanceId(),
+                                       placamera::CameraDefinitionId("quality-report-" + camera.instanceId().value()));
+                    if (model)
+                    {
+                        qualityCameras.emplace(imageId, model.value());
+                    }
+                }
+            }
             std::vector<SparsePublishCandidate> displayCandidates;
             if (serializeDetails)
             {
@@ -442,13 +463,11 @@ namespace xjw::aerial_triangulation
                         continue;
                     }
 
-                    QString canonicalImageId;
-                    if (reconstruction.hasCamera(element.imageId) &&
-                        reconstruction.camera(element.imageId).hasBoundIdentity())
-                    {
-                        canonicalImageId = QString::fromStdString(
-                            reconstruction.camera(element.imageId).imageId().value());
-                    }
+                    const auto qualityCamera = qualityCameras.find(element.imageId);
+                    const placamera::FramePinholeModel* camera =
+                        qualityCamera == qualityCameras.end() ? nullptr : qualityCamera->second.get();
+                    const QString canonicalImageId =
+                        camera ? QString::fromStdString(camera->imageId().value()) : QString{};
                     QJsonObject observation{
                         {QStringLiteral("camera_index"), static_cast<int>(element.imageId)},
                         {QStringLiteral("image_id"), canonicalImageId},
@@ -458,21 +477,18 @@ namespace xjw::aerial_triangulation
                     };
                     qualityCameraIds.push_back(element.imageId);
 
-                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* cleanCamera =
-                        reconstruction.hasCamera(element.imageId) ? &reconstruction.camera(element.imageId) : nullptr;
-                    cleanTiePointObservations.push_back({cleanCamera, rawMeasurementScale, {keypoint.x, keypoint.y}});
+                    cleanTiePointObservations.push_back({camera, rawMeasurementScale, {keypoint.x, keypoint.y}});
 
-                    if (reconstruction.hasCamera(element.imageId))
+                    if (camera)
                     {
-                        double projected[2]{};
-                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
-                            reconstruction.camera(element.imageId);
-                        qualityObservations.push_back({&camera, measurementScale, {keypoint.x, keypoint.y}});
-                        const bool projectedOk = camera.projectWorldPoint(point.xyz.data(), projected) ||
-                                                 camera.projectWorldPointSigned(point.xyz.data(), projected);
-                        if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))
+                        qualityObservations.push_back({camera, measurementScale, {keypoint.x, keypoint.y}});
+                        const auto projected = camera->groundToImageSigned({camera->groundFrame(), point.xyz});
+                        if (projected && std::isfinite(projected.value().image.sample) &&
+                            std::isfinite(projected.value().image.line))
                         {
-                            observation.insert(QStringLiteral("projected_xy"), QJsonArray{projected[0], projected[1]});
+                            observation.insert(
+                                QStringLiteral("projected_xy"),
+                                QJsonArray{projected.value().image.sample, projected.value().image.line});
                         }
                     }
                     else
@@ -645,8 +661,7 @@ namespace xjw::aerial_triangulation
             {
                 canonicalImageId = QString::fromStdString(input.imageIds.at(static_cast<std::size_t>(index)).value());
             }
-            if (canonicalImageId.isEmpty() && registered && reconstruction.hasCamera(imageId) &&
-                reconstruction.camera(imageId).hasBoundIdentity())
+            if (canonicalImageId.isEmpty() && registered && reconstruction.hasCamera(imageId))
             {
                 canonicalImageId = QString::fromStdString(reconstruction.camera(imageId).imageId().value());
             }

@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -17,10 +18,34 @@ namespace
     xjw::mesh::VisualHullView makeView(double centerX, const std::array<double, 3>& origin = {0.0, 0.0, 0.0})
     {
         xjw::mesh::VisualHullView view;
-        view.camera.setIntrinsics(60.0, 61.0, 32.0, 32.0);
-        view.camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                            {origin[0] + centerX, origin[1], origin[2] - 3.0});
-        view.camera.setDistortion(0.002, -0.0001, 0.0, 0.0002, -0.0001);
+        const placamera::FrameId ground_frame("visual-hull-backend-world");
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = 60.0;
+        intrinsics.focalY = 61.0;
+        intrinsics.principalX = 32.0;
+        intrinsics.principalY = 32.0;
+        placamera::BrownConradyDistortion distortion;
+        distortion.radialK1 = 0.002;
+        distortion.radialK2 = -0.0001;
+        distortion.tangentialP1 = 0.0002;
+        distortion.tangentialP2 = -0.0001;
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("visual-hull-backend-definition"),
+            intrinsics,
+            distortion,
+            placamera::PixelConvention::PixelCenter,
+            ground_frame);
+        const std::string suffix = std::to_string(centerX);
+        view.camera = std::make_shared<const placamera::FramePinholeModel>(
+            placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("visual-hull-backend-" + suffix),
+                placamera::ImageId("visual-hull-backend-image-" + suffix),
+                definition,
+                {64, 64},
+                placamera::Pose::create(
+                    ground_frame,
+                    {origin[0] + centerX, origin[1], origin[2] - 3.0},
+                    {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
         view.silhouetteMask = cv::Mat::zeros(64, 64, CV_8UC1);
         cv::circle(view.silhouetteMask, cv::Point(32, 32), 15, cv::Scalar(255), cv::FILLED);
         view.depthMap = cv::Mat(64, 64, CV_32FC1, cv::Scalar(3.0f));
@@ -192,6 +217,36 @@ TEST(VisualHullFieldBackendTest, DeviceBackendsMatchCpuField)
     {
         GTEST_SKIP() << "no CUDA or OpenCL device is available";
     }
+}
+
+TEST(VisualHullFieldBackendTest, RejectsMixedGroundFramesBeforeEvaluation)
+{
+    auto views = makeViews();
+    const placamera::FrameId other_frame("other-visual-hull-world");
+    const auto& original = *views[1].camera;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("other-visual-hull-definition"),
+        original.pinholeDefinition().intrinsics(),
+        original.pinholeDefinition().distortion(),
+        placamera::PixelConvention::PixelCenter,
+        other_frame);
+    views[1].camera = std::make_shared<const placamera::FramePinholeModel>(
+        placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("other-visual-hull-instance"),
+            placamera::ImageId("other-visual-hull-image"),
+            definition,
+            original.imageSize(),
+            placamera::Pose::create(other_frame,
+                                    original.pose().center,
+                                    original.pose().cameraToWorldRotation)));
+
+    xjw::mesh::VisualHullConfig config;
+    config.computeBackend = xjw::mesh::VisualHullComputeBackend::Cpu;
+    std::vector<float> field;
+    std::string error;
+    EXPECT_FALSE(xjw::mesh::detail::evaluateVisualHullFieldGrid(
+        views, config, makeGrid(), &field, nullptr, &error));
+    EXPECT_NE(error.find("different ground frames"), std::string::npos);
 }
 
 TEST(VisualHullFieldBackendTest, LargeWorldCoordinatesMatchCpuField)

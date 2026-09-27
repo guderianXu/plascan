@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 
 #include <cstdint>
 #include <functional>
@@ -25,7 +25,7 @@ struct DepthTsdfLayout;
  */
 struct DepthTsdfNarrowBandFrameView
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera = nullptr;
+    const placamera::FramePinholeNumericState* camera = nullptr;
     const cv::Mat *depth = nullptr;
     const cv::Mat *depthValidMask = nullptr;
     const cv::Mat *supportMask = nullptr;

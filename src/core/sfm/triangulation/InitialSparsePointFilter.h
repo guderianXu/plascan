@@ -10,10 +10,11 @@
 //   - 供 GUI 层和后续无头流程统一复用。
 // ============================================================
 
-#include "BundleAdjustSolver.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <plabundle/problem.h>
+#include <placamera/frame_camera.h>
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -76,8 +77,8 @@ public:
      * @return 过滤后的初始稀疏点结果
      */
     static InitialSparseTriangulationResult filter(
-        const std::vector<camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-        const std::vector<BATrack> &tracks,
+        const std::vector<std::shared_ptr<const placamera::FramePinholeModel>>& cameras,
+        const std::vector<plabundle::Track> &tracks,
         const InitialSparseTriangulationOptions &options = InitialSparseTriangulationOptions());
 };
 

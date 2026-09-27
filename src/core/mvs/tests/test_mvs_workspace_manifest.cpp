@@ -5,6 +5,7 @@
 #include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
+#include "pipeline/MvsPipelineInternals.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 
@@ -169,32 +170,12 @@ namespace
         ASSERT_GT(file.write(QJsonDocument(object).toJson()), 0);
     }
 
-    QJsonArray doubleArray(const double* values, int count)
+    QJsonObject cameraJson(const placamera::FramePinholeModel& camera)
     {
-        QJsonArray result;
-        for (int index = 0; index < count; ++index)
-        {
-            result.append(values[index]);
-        }
-        return result;
+        return xjw::mvs::pipeline_detail::cameraModelToJson(camera);
     }
 
-    QJsonObject cameraJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
-    {
-        const auto intrinsics = camera.intrinsics();
-        const auto rotation = camera.worldToCameraRotation();
-        const auto translation = camera.worldToCameraTranslation();
-        const auto center = camera.cameraCenter();
-        return QJsonObject{{QStringLiteral("fx"), intrinsics.focalX},
-                           {QStringLiteral("fy"), intrinsics.focalY},
-                           {QStringLiteral("cx"), intrinsics.principalX},
-                           {QStringLiteral("cy"), intrinsics.principalY},
-                           {QStringLiteral("rotation_world_to_camera"), doubleArray(rotation.data(), 9)},
-                           {QStringLiteral("translation_world_to_camera"), doubleArray(translation.data(), 3)},
-                           {QStringLiteral("camera_center"), doubleArray(center.data(), 3)}};
-    }
-
-    QJsonObject cameraJsonWithIdentity(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    QJsonObject cameraJsonWithIdentity(const placamera::FramePinholeModel& camera,
                                        int index,
                                        const QString& prefix = QStringLiteral("prepared"))
     {
@@ -205,14 +186,25 @@ namespace
         return object;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeBrownCamera()
+    placamera::FramePinholeModel makeBrownCamera(const std::string& instance_id = "brown-instance",
+                                                 const std::string& image_id = "brown-image",
+                                                 const std::string& frame_name = "brown-world",
+                                                 bool distorted = true)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-        camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
-        camera.setImageSize(xjw::camera_core::ImageSize{64, 48});
-        return camera;
+        const placamera::FrameId frame(frame_name);
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId(instance_id + "-definition"),
+            placamera::FrameIntrinsics{40.0, 42.0, 32.0, 24.0},
+            distorted ? placamera::BrownConradyDistortion{0.35, -0.08, 0.01, 0.006, -0.004}
+                      : placamera::BrownConradyDistortion{},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId(instance_id),
+            placamera::ImageId(image_id),
+            definition,
+            {64, 48},
+            placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
     }
 
     void attachPreparedArtifactFiles(const QTemporaryDir& temporaryDirectory, MvsDepthFrameRecord* record)
@@ -852,9 +844,8 @@ TEST(MvsWorkspaceReplay, RestoresOrderedViewsAndProjectMasks)
     ASSERT_EQ(views.size(), 2);
     EXPECT_EQ(views[0].imageWidth, 18);
     EXPECT_EQ(views[0].imageHeight, 12);
-    EXPECT_TRUE(views[0].camera.isValid());
-    EXPECT_TRUE(views[0].camera.hasBoundIdentity());
-    EXPECT_EQ(views[0].camera.worldFrame().value(), "manifest-world");
+    ASSERT_NE(views[0].camera, nullptr);
+    EXPECT_EQ(views[0].camera->groundFrame().value(), "manifest-world");
     EXPECT_FALSE(views[0].validRegionMaskPath.empty());
 }
 
@@ -889,16 +880,16 @@ TEST(MvsWorkspaceReplay, RejectsCameraArtifactWithoutExplicitIdentity)
 
 TEST(MvsWorkspaceReplay, RestoresOptionalBrownDistortion)
 {
-    QJsonObject camera = cameraJson(makeBrownCamera());
+    QJsonObject camera = cameraJsonWithIdentity(makeBrownCamera(), 0);
     camera.insert(QStringLiteral("k1"), 0.11);
     camera.insert(QStringLiteral("k2"), -0.012);
     camera.insert(QStringLiteral("k3"), 0.0013);
     camera.insert(QStringLiteral("p1"), 0.0004);
     camera.insert(QStringLiteral("p2"), -0.0005);
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-    ASSERT_TRUE(xjw::mvs::cameraFromMvsWorkspaceJson(camera, &parsed, false));
-    const auto distortion = parsed.distortion();
+    const auto parsed = xjw::mvs::cameraFromMvsWorkspaceJson(camera, {64, 48});
+    ASSERT_NE(parsed, nullptr);
+    const auto distortion = parsed->pinholeDefinition().distortion();
     EXPECT_DOUBLE_EQ(distortion.radialK1, 0.11);
     EXPECT_DOUBLE_EQ(distortion.radialK2, -0.012);
     EXPECT_DOUBLE_EQ(distortion.radialK3, 0.0013);
@@ -908,33 +899,30 @@ TEST(MvsWorkspaceReplay, RestoresOptionalBrownDistortion)
 
 TEST(MvsWorkspaceReplay, RejectsMissingRequiredCameraScalar)
 {
-    QJsonObject camera = cameraJson(makeBrownCamera());
+    QJsonObject camera = cameraJsonWithIdentity(makeBrownCamera(), 0);
     camera.remove(QStringLiteral("cx"));
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-    EXPECT_FALSE(xjw::mvs::cameraFromMvsWorkspaceJson(camera, &parsed, false));
+    EXPECT_EQ(xjw::mvs::cameraFromMvsWorkspaceJson(camera, {64, 48}), nullptr);
 }
 
 TEST(MvsWorkspaceReplay, RejectsNonNumericOptionalDistortion)
 {
-    QJsonObject camera = cameraJson(makeBrownCamera());
+    QJsonObject camera = cameraJsonWithIdentity(makeBrownCamera(), 0);
     camera.insert(QStringLiteral("k1"), QStringLiteral("not-a-number"));
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-    EXPECT_FALSE(xjw::mvs::cameraFromMvsWorkspaceJson(camera, &parsed, false));
+    EXPECT_EQ(xjw::mvs::cameraFromMvsWorkspaceJson(camera, {64, 48}), nullptr);
 }
 
 TEST(MvsWorkspaceReplay, RejectsNegativeFocalLengthAndNonOrthonormalPose)
 {
-    QJsonObject negative_focal = cameraJson(makeBrownCamera());
+    QJsonObject negative_focal = cameraJsonWithIdentity(makeBrownCamera(), 0);
     negative_focal.insert(QStringLiteral("fx"), -40.0);
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-    EXPECT_FALSE(xjw::mvs::cameraFromMvsWorkspaceJson(negative_focal, &parsed, false));
+    EXPECT_EQ(xjw::mvs::cameraFromMvsWorkspaceJson(negative_focal, {64, 48}), nullptr);
 
-    QJsonObject non_orthonormal = cameraJson(makeBrownCamera());
+    QJsonObject non_orthonormal = cameraJsonWithIdentity(makeBrownCamera(), 0);
     non_orthonormal.insert(QStringLiteral("rotation_world_to_camera"),
                            QJsonArray{2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
-    EXPECT_FALSE(xjw::mvs::cameraFromMvsWorkspaceJson(non_orthonormal, &parsed, false));
+    EXPECT_EQ(xjw::mvs::cameraFromMvsWorkspaceJson(non_orthonormal, {64, 48}), nullptr);
 }
 
 TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorkspace)
@@ -944,9 +932,10 @@ TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorksp
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("brown-prepared-raster"));
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = makeBrownCamera();
     for (int index = 0; index < 2; ++index)
     {
+        const auto source_model = makeBrownCamera(
+            "prepared-instance-" + std::to_string(index), "prepared-image-" + std::to_string(index), "prepared-world");
         cv::Mat source_color(48, 64, CV_8UC3);
         for (int row = 0; row < source_color.rows; ++row)
         {
@@ -968,11 +957,11 @@ TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorksp
         cv::rectangle(source_valid_mask, cv::Rect(20, 14, 18, 16), cv::Scalar(0), cv::FILLED);
         cv::Mat prepared_gray;
         cv::Mat prepared_valid_mask;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
+        std::shared_ptr<const placamera::FramePinholeModel> prepared_camera;
         std::string preparation_error;
         ASSERT_TRUE(xjw::mvs::prepareMvsImageAndMask(source_gray,
                                                      source_valid_mask,
-                                                     source_camera,
+                                                     source_model,
                                                      &prepared_gray,
                                                      &prepared_valid_mask,
                                                      &prepared_camera,
@@ -981,7 +970,7 @@ TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorksp
 
         xjw::mvs::MvsPreparedRasterArtifact prepared_artifact;
         ASSERT_TRUE(xjw::mvs::saveMvsPreparedRasterArtifact(xjw::common::io::toUtf8Path(source_path),
-                                                            source_camera,
+                                                            source_model,
                                                             prepared_valid_mask,
                                                             xjw::common::io::toUtf8Path(temporary_directory.path()),
                                                             index,
@@ -993,8 +982,16 @@ TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorksp
         record.preparedImage = xjw::common::io::fromUtf8Path(prepared_artifact.imagePath);
         record.preparedValidMaskPath = xjw::common::io::fromUtf8Path(prepared_artifact.validMaskPath);
         record.maskSource = index == 0 ? QStringLiteral("content") : QStringLiteral("project");
-        record.preparedCameraModel = cameraJsonWithIdentity(prepared_artifact.camera, index);
-        record.cameraModel = cameraJsonWithIdentity(prepared_artifact.camera.scaledIntrinsics(0.5, 0.5), index);
+        ASSERT_TRUE(prepared_artifact.camera);
+        record.preparedCameraModel = xjw::mvs::pipeline_detail::cameraModelToJson(*prepared_artifact.camera);
+        const auto grid_definition = prepared_artifact.camera->pinholeDefinition().scaledIntrinsics(
+            placamera::CameraDefinitionId("prepared-grid-definition-" + std::to_string(index)), 0.5, 0.5);
+        const auto grid_camera = placamera::FramePinholeModel::create(prepared_artifact.camera->instanceId(),
+                                                                      prepared_artifact.camera->imageId(),
+                                                                      grid_definition,
+                                                                      {32, 24},
+                                                                      prepared_artifact.camera->pose());
+        record.cameraModel = xjw::mvs::pipeline_detail::cameraModelToJson(grid_camera);
         record.gridWidth = 32;
         record.gridHeight = 24;
         manifest.markCompleted(record);
@@ -1009,8 +1006,9 @@ TEST(MvsWorkspaceReplay, UsesPreparedRasterAndFullResolutionCameraForBrownWorksp
     ASSERT_EQ(views.size(), 2);
     EXPECT_EQ(views[0].imageWidth, 64);
     EXPECT_EQ(views[0].imageHeight, 48);
-    EXPECT_DOUBLE_EQ(views[0].camera.focalX(), 40.0);
-    EXPECT_DOUBLE_EQ(views[0].camera.focalY(), 42.0);
+    ASSERT_NE(views[0].camera, nullptr);
+    EXPECT_DOUBLE_EQ(views[0].camera->pinholeDefinition().intrinsics().focalX, 40.0);
+    EXPECT_DOUBLE_EQ(views[0].camera->pinholeDefinition().intrinsics().focalY, 42.0);
     EXPECT_FALSE(views[0].preparedImagePath.empty());
     EXPECT_FALSE(views[0].preparedValidMaskPath.empty());
     EXPECT_EQ(views[0].preparedValidMaskSource, "content");
@@ -1042,23 +1040,18 @@ TEST(DepthFrameUtils, StoredNativeGridRestoresPreparedRasterDomainBeforeFusionDo
                                                          cv::Mat(12, 16, CV_32FC1, cv::Scalar(0.01f)))
                     .ok);
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera = makeBrownCamera();
-    std::string camera_bind_error;
-    ASSERT_TRUE(prepared_camera.bindIdentity(xjw::camera_core::CameraInstanceId("stored-instance-0"),
-                                             xjw::camera_core::ImageId("stored-image-0"),
-                                             xjw::coordinate_system::CoordinateFrameId("stored-world"),
-                                             &camera_bind_error))
-        << camera_bind_error;
-    prepared_camera.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState grid_camera =
-        prepared_camera.scaledIntrinsics(0.25, 0.25);
+    const auto prepared_camera = makeBrownCamera("stored-instance-0", "stored-image-0", "stored-world", false);
+    const auto grid_definition = prepared_camera.pinholeDefinition().scaledIntrinsics(
+        placamera::CameraDefinitionId("stored-grid-definition-0"), 0.25, 0.25);
+    const auto grid_camera = placamera::FramePinholeModel::create(
+        prepared_camera.instanceId(), prepared_camera.imageId(), grid_definition, {16, 12}, prepared_camera.pose());
 
     xjw::core::project::StoredDepthFrameRecord stored;
     stored.sceneProfile = QStringLiteral("aerial_terrain");
     stored.refIndex = 0;
     stored.refImage = directory.filePath(QStringLiteral("source.png"));
     stored.preparedImage = directory.filePath(QStringLiteral("prepared.png"));
-    touchFile(stored.preparedImage);
+    ASSERT_TRUE(cv::imwrite(stored.preparedImage.toStdString(), cv::Mat(48, 64, CV_8UC3, cv::Scalar(80, 90, 100))));
     stored.preparedCameraModel = cameraJsonWithIdentity(prepared_camera, 0, QStringLiteral("stored"));
     stored.cameraModel = cameraJsonWithIdentity(grid_camera, 0, QStringLiteral("stored"));
     stored.rawDepthPath = raw_depth_path;
@@ -1082,13 +1075,11 @@ TEST(DepthFrameUtils, StoredNativeGridRestoresPreparedRasterDomainBeforeFusionDo
 
     const auto result = xjw::core::project::buildStoredFusionFrame(stored, prepared_camera, fusion_config, 3, 8);
     ASSERT_TRUE(result.status.ok) << result.status.errorMessage.toStdString();
-    ASSERT_TRUE(result.frame.sourceCamera.imageSize().has_value());
-    EXPECT_EQ(result.frame.sourceCamera.imageSize()->samples, 64);
-    EXPECT_EQ(result.frame.sourceCamera.imageSize()->lines, 48);
+    EXPECT_EQ(result.frame.preparedRasterSize, cv::Size(64, 48));
     EXPECT_EQ(result.frame.depthMap.size(), cv::Size(8, 6));
-    ASSERT_TRUE(result.frame.cameraModel.imageSize().has_value());
-    EXPECT_EQ(result.frame.cameraModel.imageSize()->samples, 8);
-    EXPECT_EQ(result.frame.cameraModel.imageSize()->lines, 6);
+    ASSERT_TRUE(result.frame.cameraModel);
+    EXPECT_EQ(result.frame.cameraModel->imageSize().samples, 8);
+    EXPECT_EQ(result.frame.cameraModel->imageSize().lines, 6);
 
     xjw::core::project::StoredDepthFrameRecord missing_diagnostics = stored;
     missing_diagnostics.pixelDomainDiagnostics = QJsonObject{};
@@ -1969,7 +1960,9 @@ TEST(MvsWorkspaceManifest, DepthInputHashTracksRasterAndMaskContents)
     view.validRegionMaskPath = xjw::common::io::toUtf8Path(project_mask_path);
     view.imageWidth = 64;
     view.imageHeight = 48;
-    view.camera = makeBrownCamera();
+    view.camera = std::make_shared<const placamera::FramePinholeModel>(
+        makeBrownCamera("instance-original", "image-original", "world-original"));
+    ASSERT_NE(view.camera, nullptr);
 
     xjw::mvs::DepthGenConfig config;
     xjw::mvs::SparseCloud sparse;
@@ -1997,20 +1990,15 @@ TEST(MvsWorkspaceManifest, DepthInputHashTracksRasterAndMaskContents)
     EXPECT_NE(previous_hash, current_hash) << "Changing the prepared raster content must invalidate depth reuse";
 
     xjw::mvs::CameraView bound_view = view;
-    std::string bind_error;
-    ASSERT_TRUE(bound_view.camera.bindIdentity(xjw::camera_core::CameraInstanceId("instance-a"),
-                                               xjw::camera_core::ImageId("image-a"),
-                                               xjw::coordinate_system::CoordinateFrameId("world-a"),
-                                               &bind_error))
-        << bind_error;
+    bound_view.camera =
+        std::make_shared<const placamera::FramePinholeModel>(makeBrownCamera("instance-a", "image-a", "world-a"));
+    ASSERT_NE(bound_view.camera, nullptr);
     EXPECT_NE(xjw::mvs::makeMvsDepthInputHash(config, {view}, sparse),
               xjw::mvs::makeMvsDepthInputHash(config, {bound_view}, sparse));
     xjw::mvs::CameraView other_bound_view = view;
-    ASSERT_TRUE(other_bound_view.camera.bindIdentity(xjw::camera_core::CameraInstanceId("instance-b"),
-                                                      xjw::camera_core::ImageId("image-b"),
-                                                      xjw::coordinate_system::CoordinateFrameId("world-b"),
-                                                      &bind_error))
-        << bind_error;
+    other_bound_view.camera =
+        std::make_shared<const placamera::FramePinholeModel>(makeBrownCamera("instance-b", "image-b", "world-b"));
+    ASSERT_NE(other_bound_view.camera, nullptr);
     EXPECT_NE(xjw::mvs::makeMvsDepthInputHash(config, {bound_view}, sparse),
               xjw::mvs::makeMvsDepthInputHash(config, {other_bound_view}, sparse));
 }

@@ -311,6 +311,18 @@ if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
 else()
   set(PLAMATRIX_WITH_OPENCL OFF CACHE BOOL "Build PlaMatrix OpenCL infrastructure" FORCE)
 endif()
+if(PLASCAN_ENABLE_VULKAN)
+  find_package(Vulkan 1.1 QUIET)
+  find_program(PLASCAN_GLSLANG_VALIDATOR glslangValidator)
+endif()
+if(PLASCAN_ENABLE_VULKAN AND Vulkan_FOUND AND PLASCAN_GLSLANG_VALIDATOR)
+  set(PLAMATRIX_WITH_VULKAN ON CACHE BOOL "Build PlaMatrix Vulkan compute acceleration" FORCE)
+else()
+  set(PLAMATRIX_WITH_VULKAN OFF CACHE BOOL "Build PlaMatrix Vulkan compute acceleration" FORCE)
+  if(PLASCAN_ENABLE_VULKAN)
+    message(STATUS "plascan: Vulkan loader/headers or glslangValidator not found; Vulkan compute disabled")
+  endif()
+endif()
 set(PLAPOINT_WITH_OPENCL ${PLAMATRIX_WITH_OPENCL}
   CACHE BOOL "Build PlaPoint OpenCL acceleration on PlaMatrix" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plamatrix ${CMAKE_BINARY_DIR}/3rdparty/plamatrix)
@@ -323,6 +335,39 @@ if(MSVC)
   )
 endif()
 message(STATUS "plascan: using plamatrix from 3rdparty/")
+
+# ── plabundle (submodule) ─────────────────────────────────────────────────────
+# PlaBundle consumes the PlaMatrix target above and is pinned by the parent
+# repository through 3rdparty/plabundle.
+add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plabundle ${CMAKE_BINARY_DIR}/3rdparty/plabundle)
+message(STATUS "plascan: using plabundle from 3rdparty/")
+
+# ── placoordinate (local extraction tree) ─────────────────────────────────────
+# PlaCoordinate owns the shared frame/time/context types used by PlaScan and
+# PlaCamera. PlaScan enables its optional persistence and GDAL adapters, while
+# leaving standalone install rules to the library's own top-level build.
+set(PLACOORDINATE_BUILD_GDAL ON CACHE BOOL "Build PlaCoordinate GDAL support" FORCE)
+set(PLACOORDINATE_BUILD_PRESETS ON CACHE BOOL "Build PlaCoordinate projection presets" FORCE)
+set(PLACOORDINATE_BUILD_STATE ON CACHE BOOL "Build PlaCoordinate JSON state support" FORCE)
+set(PLACOORDINATE_BUILD_TESTS ${BUILD_TESTS} CACHE BOOL "Build PlaCoordinate tests" FORCE)
+set(PLACOORDINATE_BUILD_EXAMPLES OFF CACHE BOOL "Build PlaCoordinate examples" FORCE)
+set(PLACOORDINATE_INSTALL OFF CACHE BOOL "Generate PlaCoordinate install rules" FORCE)
+add_subdirectory(
+  ${CMAKE_SOURCE_DIR}/3rdparty/placoordinate
+  ${CMAKE_BINARY_DIR}/3rdparty/placoordinate)
+message(STATUS "plascan: using placoordinate from 3rdparty/")
+
+# ── placamera (local extraction tree) ─────────────────────────────────────────
+# PlaCamera depends only on PlaCoordinate's dependency-free types component.
+# Its production models and tests are part of PlaScan's normal build gates.
+set(PLACAMERA_BUILD_TESTS ${BUILD_TESTS} CACHE BOOL "Build PlaCamera tests" FORCE)
+set(PLACAMERA_BUILD_REFERENCE ON CACHE BOOL "Build PlaCamera reference support" FORCE)
+set(PLACAMERA_BUILD_GDAL ON CACHE BOOL "Build PlaCamera raster RPC support" FORCE)
+set(PLACAMERA_INSTALL OFF CACHE BOOL "Generate PlaCamera install rules" FORCE)
+add_subdirectory(
+  ${CMAKE_SOURCE_DIR}/3rdparty/placamera
+  ${CMAKE_BINARY_DIR}/3rdparty/placamera)
+message(STATUS "plascan: using placamera from 3rdparty/")
 
 # ── plapoint (submodule) ───────────────────────────────────────────────────────
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plapoint ${CMAKE_BINARY_DIR}/3rdparty/plapoint)

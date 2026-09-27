@@ -14,10 +14,9 @@ endif()
 
 target_compile_features(stereo_dem PUBLIC cxx_std_20)
 target_link_libraries(stereo_dem
-    PUBLIC
-        camera
-        terrain
+    PUBLIC terrain
     PRIVATE
+        camera
         Qt6::Core
         plascan_common_io
         ${PLASCAN_GDAL_TARGET}

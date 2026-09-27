@@ -7,7 +7,7 @@
 #include "ReconstructionPipelineRunner.h"
 #include "ReconstructionPipelineReportContext.h"
 
-#include "ProjectCameraIO.h"
+#include "project/ProjectCameraIO.h"
 #include "ReconstructionCliOptions.h"
 #include "ReconstructionCliProgress.h"
 #include "ReconstructionCliReport.h"
@@ -17,9 +17,7 @@
 #include "CliConsole.h"
 #include "CliJsonIO.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/project/CameraProjectRuntime.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "DenseCloudQualityFilter.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
@@ -39,10 +37,12 @@
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectSession.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/features/normal_estimation.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/search/kdtree.h>
+
+#include <placamera/frame_camera.h>
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -75,154 +75,154 @@
 namespace
 {
 
-using InputItem = xjw::cli::PhotogrammetryInputItem;
+    using InputItem = xjw::cli::PhotogrammetryInputItem;
 
-struct CanonicalMvsCameraSet
-{
-    QMap<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
-    QString error;
-
-    bool ok() const noexcept
+    struct CanonicalMvsCameraSet
     {
-        return error.isEmpty();
-    }
-};
+        QMap<QString, std::shared_ptr<const placamera::FramePinholeModel>> cameras;
+        QString error;
 
-QStringList resolveCanonicalMvsImagePaths(const QJsonObject& projectMeta,
-                                          const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
-                                          const std::vector<InputItem>& items,
-                                          QString* error)
-{
-    if (error)
-    {
-        error->clear();
-    }
+        bool ok() const noexcept
+        {
+            return error.isEmpty();
+        }
+    };
 
-    QMap<QString, QString> projectPathsByNormalized;
-    QMap<QString, QStringList> projectPathsByFileName;
-    QMap<QString, QString> projectPathByImageId;
-    for (const QJsonValue& value : xjw::common::project::projectImageEntries(projectMeta))
-    {
-        const QJsonObject image = value.toObject();
-        const QString rawPath = image.value(QStringLiteral("path")).toString();
-        const QString normalized = xjw::common::project::normalizePath(rawPath);
-        if (normalized.isEmpty())
-        {
-            continue;
-        }
-        projectPathsByNormalized.insert(normalized, normalized);
-        projectPathsByFileName[QFileInfo(normalized).fileName().toCaseFolded()].append(normalized);
-        const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-        if (!imageId.isEmpty())
-        {
-            projectPathByImageId.insert(imageId, normalized);
-        }
-    }
-
-    QSet<QString> selectedProjectPaths;
-    for (const InputItem& item : items)
-    {
-        if (item.imagePath.trimmed().isEmpty())
-        {
-            continue;
-        }
-        const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
-        QString projectPath;
-        const auto exactProject = projectPathsByNormalized.constFind(itemPath);
-        if (exactProject != projectPathsByNormalized.constEnd())
-        {
-            projectPath = exactProject.value();
-        }
-        else
-        {
-            const QString fileName = QFileInfo(itemPath).fileName().toCaseFolded();
-            const QStringList candidates = projectPathsByFileName.value(fileName);
-            if (candidates.size() == 1)
-            {
-                projectPath = candidates.front();
-            }
-        }
-        if (!projectPath.isEmpty())
-        {
-            selectedProjectPaths.insert(projectPath);
-        }
-    }
-
-    QSet<QString> updateImageIds;
-    for (const auto& update : cameraUpdates)
-    {
-        const QString imageId = QString::fromStdString(update.imageId.value()).trimmed();
-        if (imageId.isEmpty() || updateImageIds.contains(imageId))
-        {
-            if (error)
-            {
-                *error = QStringLiteral("SFM 相机写回包含空或重复 ImageId");
-            }
-            return {};
-        }
-        updateImageIds.insert(imageId);
-        const QString projectPath = projectPathByImageId.value(imageId);
-        if (projectPath.isEmpty())
-        {
-            if (error)
-            {
-                *error = QStringLiteral("SFM 相机写回引用了工程中不存在的 ImageId: %1").arg(imageId);
-            }
-            return {};
-        }
-        if (!selectedProjectPaths.contains(projectPath))
-        {
-            if (error)
-            {
-                *error = QStringLiteral("SFM 相机写回的 ImageId 不在本次输入影像中: %1").arg(imageId);
-            }
-            return {};
-        }
-    }
-
-    QStringList registered;
-    for (const InputItem& item : items)
-    {
-        const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
-        QString projectPath = projectPathsByNormalized.value(itemPath);
-        if (projectPath.isEmpty())
-        {
-            const QStringList candidates = projectPathsByFileName.value(QFileInfo(itemPath).fileName().toCaseFolded());
-            if (candidates.size() == 1)
-            {
-                projectPath = candidates.front();
-            }
-        }
-        QString imageId;
-        for (auto imageIt = projectPathByImageId.cbegin(); imageIt != projectPathByImageId.cend(); ++imageIt)
-        {
-            if (imageIt.value() == projectPath)
-            {
-                imageId = imageIt.key();
-                break;
-            }
-        }
-        if (!projectPath.isEmpty() && !imageId.isEmpty() && updateImageIds.contains(imageId))
-        {
-            registered.append(projectPath);
-        }
-    }
-
-    if (registered.size() != static_cast<int>(cameraUpdates.size()))
+    QStringList resolveCanonicalMvsImagePaths(const QJsonObject& projectMeta,
+                                              const placamera::CameraInstanceSet& cameraInstances,
+                                              const std::vector<InputItem>& items,
+                                              QString* error)
     {
         if (error)
         {
-            *error = QStringLiteral("SFM 相机写回后无法按 ImageId 绑定全部工程影像（已绑定 %1/%2）")
-                         .arg(registered.size())
-                         .arg(static_cast<int>(cameraUpdates.size()));
+            error->clear();
         }
-        return {};
-    }
-    return registered;
+
+        QMap<QString, QString> projectPathsByNormalized;
+        QMap<QString, QStringList> projectPathsByFileName;
+        QMap<QString, QString> projectPathByImageId;
+        for (const QJsonValue& value : xjw::common::project::projectImageEntries(projectMeta))
+        {
+            const QJsonObject image = value.toObject();
+            const QString rawPath = image.value(QStringLiteral("path")).toString();
+            const QString normalized = xjw::common::project::normalizePath(rawPath);
+            if (normalized.isEmpty())
+            {
+                continue;
+            }
+            projectPathsByNormalized.insert(normalized, normalized);
+            projectPathsByFileName[QFileInfo(normalized).fileName().toCaseFolded()].append(normalized);
+            const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+            if (!imageId.isEmpty())
+            {
+                projectPathByImageId.insert(imageId, normalized);
+            }
+        }
+
+        QSet<QString> selectedProjectPaths;
+        for (const InputItem& item : items)
+        {
+            if (item.imagePath.trimmed().isEmpty())
+            {
+                continue;
+            }
+            const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
+            QString projectPath;
+            const auto exactProject = projectPathsByNormalized.constFind(itemPath);
+            if (exactProject != projectPathsByNormalized.constEnd())
+            {
+                projectPath = exactProject.value();
+            }
+            else
+            {
+                const QString fileName = QFileInfo(itemPath).fileName().toCaseFolded();
+                const QStringList candidates = projectPathsByFileName.value(fileName);
+                if (candidates.size() == 1)
+                {
+                    projectPath = candidates.front();
+                }
+            }
+            if (!projectPath.isEmpty())
+            {
+                selectedProjectPaths.insert(projectPath);
+            }
+        }
+
+        QSet<QString> updateImageIds;
+        for (const auto& camera : cameraInstances.values())
+        {
+            const QString imageId = QString::fromStdString(camera->imageId().value()).trimmed();
+            if (imageId.isEmpty() || updateImageIds.contains(imageId))
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("SFM 相机写回包含空或重复 ImageId");
+                }
+                return {};
+            }
+            updateImageIds.insert(imageId);
+            const QString projectPath = projectPathByImageId.value(imageId);
+            if (projectPath.isEmpty())
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("SFM 相机写回引用了工程中不存在的 ImageId: %1").arg(imageId);
+                }
+                return {};
+            }
+            if (!selectedProjectPaths.contains(projectPath))
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("SFM 相机写回的 ImageId 不在本次输入影像中: %1").arg(imageId);
+                }
+                return {};
+            }
+        }
+
+        QStringList registered;
+        for (const InputItem& item : items)
+        {
+            const QString itemPath = xjw::common::project::normalizePath(item.imagePath);
+            QString projectPath = projectPathsByNormalized.value(itemPath);
+            if (projectPath.isEmpty())
+            {
+                const QStringList candidates =
+                    projectPathsByFileName.value(QFileInfo(itemPath).fileName().toCaseFolded());
+                if (candidates.size() == 1)
+                {
+                    projectPath = candidates.front();
+                }
+            }
+            QString imageId;
+            for (auto imageIt = projectPathByImageId.cbegin(); imageIt != projectPathByImageId.cend(); ++imageIt)
+            {
+                if (imageIt.value() == projectPath)
+                {
+                    imageId = imageIt.key();
+                    break;
+                }
+            }
+            if (!projectPath.isEmpty() && !imageId.isEmpty() && updateImageIds.contains(imageId))
+            {
+                registered.append(projectPath);
+            }
+        }
+
+        if (registered.size() != static_cast<int>(cameraInstances.size()))
+        {
+            if (error)
+            {
+                *error = QStringLiteral("SFM 相机写回后无法按 ImageId 绑定全部工程影像（已绑定 %1/%2）")
+                             .arg(registered.size())
+                             .arg(static_cast<int>(cameraInstances.size()));
+            }
+            return {};
+        }
+        return registered;
 }
 
-CanonicalMvsCameraSet loadCanonicalMvsCameras(const QJsonObject& projectMeta,
-                                              const QStringList& imagePaths)
+CanonicalMvsCameraSet loadCanonicalMvsCameras(const QJsonObject& projectMeta, const QStringList& imagePaths)
 {
     CanonicalMvsCameraSet result;
     const QJsonObject projectFiles = xjw::common::project::projectFilesRootObject(projectMeta);
@@ -233,19 +233,17 @@ CanonicalMvsCameraSet loadCanonicalMvsCameras(const QJsonObject& projectMeta,
         return result;
     }
 
-    const xjw::camera_project::CameraProjectRuntimeResult runtime =
-        xjw::camera_project::CameraProjectRuntime::load(
-            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-    if (!runtime.ok())
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+    if (!loaded.ok())
     {
         result.error = QStringLiteral("SFM 写回后的 canonical 相机集合无效: %1")
-                           .arg(runtime.errors.join(QStringLiteral("; ")));
+                           .arg(loaded.errors.join(QStringLiteral("; ")));
         return result;
     }
 
     const QMap<QString, QJsonObject> imageMetadata =
         xjw::common::project::projectImageMetaByPath(projectMeta, true);
-    std::vector<xjw::camera_core::ImageId> imageIds;
+    std::vector<placamera::ImageId> imageIds;
     imageIds.reserve(static_cast<std::size_t>(imagePaths.size()));
     for (const QString& imagePath : imagePaths)
     {
@@ -279,47 +277,56 @@ CanonicalMvsCameraSet loadCanonicalMvsCameras(const QJsonObject& projectMeta,
         }
     }
 
-    const xjw::camera_core::CameraOperationPlan cameraPlan =
-        runtime.planOperationForImages(imageIds, xjw::camera_core::CameraOperation::DenseMvs);
-    if (!cameraPlan.ok())
+    placamera::CameraInstanceSet selected;
+    for (const auto& image_id : imageIds)
     {
-        result.error = QStringLiteral("MVS 相机能力校验失败：%1")
-                           .arg(QString::fromStdString(cameraPlan.failureMessage()));
+        const auto lookup = loaded.instances.forImage(image_id);
+        if (!lookup.ok() || !selected.add(lookup.value()).ok())
+        {
+            result.error = QStringLiteral("MVS 找不到 PlaCamera 实例：%1")
+                               .arg(QString::fromStdString(image_id.value()));
+            return result;
+        }
+    }
+    const auto capabilityCheck = selected.requireCapabilities({placamera::CapabilityKind::Projection,
+                                                                placamera::CapabilityKind::ImagingLocus,
+                                                                placamera::CapabilityKind::StaticPose,
+                                                                placamera::CapabilityKind::Optimization});
+    const auto frameCheck = selected.requireCommonGroundFrame();
+    if (!capabilityCheck.ok() || !frameCheck.ok())
+    {
+        result.error = QStringLiteral("MVS 相机能力或地面坐标系校验失败");
         return result;
     }
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
-    std::string stateError;
-    if (!runtime.framePinholeStatesForImages(imageIds, &states, &stateError))
+    QMap<QString, std::shared_ptr<const placamera::FramePinholeModel>> cameras;
+    for (std::size_t index = 0; index < imageIds.size(); ++index)
     {
-        result.error = QStringLiteral("MVS 面阵针孔数值状态解析失败: %1")
-                           .arg(QString::fromStdString(stateError));
-        return result;
-    }
-    if (states.size() != imagePaths.size())
-    {
-        result.error = QStringLiteral("MVS 相机状态与输入影像数量不一致");
-        return result;
-    }
-
-    for (std::size_t index = 0; index < imagePaths.size(); ++index)
-    {
+        const auto& image_id = imageIds[index];
+        const auto lookup = loaded.instances.forImage(image_id);
+        const auto pinhole =
+            lookup.ok() ? std::dynamic_pointer_cast<const placamera::FramePinholeModel>(lookup.value()) : nullptr;
+        if (!pinhole)
+        {
+            result.error =
+                QStringLiteral("MVS 仅支持 PlaCamera 面阵针孔实例：%1").arg(QString::fromStdString(image_id.value()));
+            return result;
+        }
         const QString& imagePath = imagePaths.at(static_cast<int>(index));
         const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
-        result.cameras.insert(normalizedPath, std::move(states[index]));
+        cameras.insert(normalizedPath, std::move(pinhole));
     }
+    result.cameras = std::move(cameras);
     return result;
 }
 
 QStringList criticalOutputRelativePaths()
 {
-    QStringList paths = {
-        QStringLiteral("report.json"),
-        QStringLiteral("headless.plascan"),
-        QStringLiteral("sparse"),
-        QStringLiteral("mvs/dense_cloud.ply"),
-        QStringLiteral("model")
-    };
+    QStringList paths = {QStringLiteral("report.json"),
+                         QStringLiteral("headless.plascan"),
+                         QStringLiteral("sparse"),
+                         QStringLiteral("mvs/dense_cloud.ply"),
+                         QStringLiteral("model")};
 #ifndef PLASCAN_THREE_D_ONLY
     paths << QStringLiteral("terrain/products/dem.tif")
           << QStringLiteral("terrain/products/dom.png");
@@ -327,13 +334,13 @@ QStringList criticalOutputRelativePaths()
     return paths;
 }
 
-using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using PlaCloud = plapoint::GeometryCloud<float>;
 
 PlaCloud fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
                                  bool keepColor,
                                  bool keepNormals)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(cloud.size(), 3);
+    plamatrix::MatrixXf points(cloud.size(), 3);
     for (std::size_t i = 0; i < cloud.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
@@ -345,7 +352,7 @@ PlaCloud fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
     PlaCloud pointCloud(std::move(points));
     if (keepColor)
     {
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(cloud.size(), 3);
         for (std::size_t i = 0; i < cloud.size(); ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
@@ -358,7 +365,7 @@ PlaCloud fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
 
     if (keepNormals)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(cloud.size(), 3);
+        plamatrix::MatrixXf normals(cloud.size(), 3);
         for (std::size_t i = 0; i < cloud.size(); ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
@@ -380,15 +387,15 @@ std::vector<xjw::mvs::FusedPoint> pointCloudToFusedPoints(const PlaCloud &cloud)
     {
         const auto row = static_cast<plamatrix::Index>(i);
         xjw::mvs::FusedPoint point;
-        point.x = cloud.points().getValue(row, 0);
-        point.y = cloud.points().getValue(row, 1);
-        point.z = cloud.points().getValue(row, 2);
+        point.x = cloud.points().coeff(row, 0);
+        point.y = cloud.points().coeff(row, 1);
+        point.z = cloud.points().coeff(row, 2);
 
         if (cloud.hasNormals())
         {
-            float nx = cloud.normals()->getValue(row, 0);
-            float ny = cloud.normals()->getValue(row, 1);
-            float nz = cloud.normals()->getValue(row, 2);
+            float nx = cloud.normals()->coeff(row, 0);
+            float ny = cloud.normals()->coeff(row, 1);
+            float nz = cloud.normals()->coeff(row, 2);
             const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
             if (std::isfinite(length) && length > 1.0e-12f)
             {
@@ -408,9 +415,9 @@ std::vector<xjw::mvs::FusedPoint> pointCloudToFusedPoints(const PlaCloud &cloud)
 
         if (cloud.hasColors())
         {
-            point.r = cloud.colors()->getValue(row, 0);
-            point.g = cloud.colors()->getValue(row, 1);
-            point.b = cloud.colors()->getValue(row, 2);
+            point.r = cloud.colors()->coeff(row, 0);
+            point.g = cloud.colors()->coeff(row, 1);
+            point.b = cloud.colors()->coeff(row, 2);
         }
         points.push_back(point);
     }
@@ -419,7 +426,7 @@ std::vector<xjw::mvs::FusedPoint> pointCloudToFusedPoints(const PlaCloud &cloud)
 
 PlaCloud cloneCloudValue(const PlaCloud &cloud, bool includeNormals = true)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(cloud.size(), 3);
+    plamatrix::MatrixXf points(cloud.size(), 3);
     for (std::size_t i = 0; i < cloud.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
@@ -647,11 +654,10 @@ PlaCloud voxelDownsample(const PlaCloud &cloud,
     return plapoint::voxelDownsample(cloud, leafSize, processingDevice, report);
 }
 
-plamatrix::DenseMatrix<float, plamatrix::Device::CPU> estimateNormals(
-    const PlaCloud &cloud,
-    int normalK,
-    plapoint::ProcessingDevice processingDevice,
-    plapoint::ProcessingReport *report = nullptr)
+plamatrix::MatrixXf estimateNormals(const PlaCloud& cloud,
+                                    int normalK,
+                                    plapoint::ProcessingDevice processingDevice,
+                                    plapoint::ProcessingReport* report = nullptr)
 {
     return plapoint::estimateNormals(cloud, normalK, processingDevice, report);
 }
@@ -1056,9 +1062,18 @@ bool fuseDepthMapsStreamingFromDisk(
             return false;
         }
 
+        if (!views[static_cast<std::size_t>(stored.refIndex)].camera)
+        {
+            if (loaderError)
+            {
+                *loaderError = "Stored depth frame has no PlaCamera model";
+            }
+            return false;
+        }
+
         auto loaded =
             xjw::core::project::buildStoredFusionFrame(stored,
-                                                       views[static_cast<std::size_t>(stored.refIndex)].camera,
+                                                       *views[static_cast<std::size_t>(stored.refIndex)].camera,
                                                        depthConfig.fusion,
                                                        frame_count,
                                                        denseSettings.fusionMaxImageDim);
@@ -1457,7 +1472,6 @@ xjw::cli::ReconstructionCliOptions options;
     std::vector<InputItem> items;
     xjw::cli::PhotogrammetryListOptions listOptions;
     listOptions.allowImageOnlyRows = false;
-    listOptions.loadCameras = true;
     listOptions.requireExistingImages = true;
     listOptions.requireExistingCameras = true;
     if (!xjw::cli::readPhotogrammetryImageList(listPath, listOptions, &items, &error))
@@ -1699,24 +1713,22 @@ xjw::cli::ReconstructionCliOptions options;
             sparseRecord);
     }
     int updatedCameraCount = 0;
-    if (sfmResult.success
-        && !projectSession.updateCameraInstancesById(
-            sfmResult.cameraInstanceUpdates, &updatedCameraCount, &error))
+    if (sfmResult.success &&
+        !projectSession.upsertNativeCameraInstances(
+            sfmResult.cameraInstances, sfmResult.cameraAnnotationsByImageId, &updatedCameraCount, &error))
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
-        report[QStringLiteral("reason")] =
-            QStringLiteral("SFM 相机写回失败: %1").arg(error);
+        report[QStringLiteral("reason")] = QStringLiteral("SFM 相机写回失败: %1").arg(error);
         QJsonObject finalReport;
         reportContext.writeFinalReport(&finalReport);
         return cli::EXIT_IO_ERR;
     }
-    if (sfmResult.success && updatedCameraCount != sfmResult.cameraInstanceUpdates.size())
+    if (sfmResult.success && updatedCameraCount != static_cast<int>(sfmResult.cameraInstances.size()))
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
-        report[QStringLiteral("reason")] =
-            QStringLiteral("SFM 相机写回不完整：已更新 %1/%2 个相机实例")
-                .arg(updatedCameraCount)
-                .arg(sfmResult.cameraInstanceUpdates.size());
+        report[QStringLiteral("reason")] = QStringLiteral("SFM 相机写回不完整：已更新 %1/%2 个相机实例")
+                                               .arg(updatedCameraCount)
+                                               .arg(static_cast<int>(sfmResult.cameraInstances.size()));
         QJsonObject finalReport;
         reportContext.writeFinalReport(&finalReport);
         return cli::EXIT_IO_ERR;
@@ -1812,19 +1824,15 @@ xjw::cli::ReconstructionCliOptions options;
             return cli::EXIT_IO_ERR;
         }
         std::fprintf(stderr, "SFM 失败: %s\n", qUtf8Printable(report.value(QStringLiteral("reason")).toString()));
-        std::fprintf(stderr,
-                     "report=%s\n",
-                     qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
+        std::fprintf(
+            stderr, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
     }
 
     const auto sparsePreprocessStart = std::chrono::steady_clock::now();
     QString registeredImagesError;
-    QStringList registeredImagePaths = resolveCanonicalMvsImagePaths(
-        projectMeta,
-        sfmResult.cameraInstanceUpdates,
-        items,
-        &registeredImagesError);
+    QStringList registeredImagePaths =
+        resolveCanonicalMvsImagePaths(projectMeta, sfmResult.cameraInstances, items, &registeredImagesError);
     if (!registeredImagesError.isEmpty())
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
@@ -1880,15 +1888,14 @@ xjw::cli::ReconstructionCliOptions options;
             std::fprintf(stderr, "MVS canonical 相机缺失: %s\n", qUtf8Printable(imagePath));
             return cli::EXIT_ALGO_ERR;
         }
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameraIt.value();
+        const std::shared_ptr<const placamera::FramePinholeModel>& camera = cameraIt.value();
 
         xjw::mvs::CameraView view;
         view.imagePath = xjw::common::io::toUtf8Path(imagePath);
-        view.camera = camera;
         if (!mvs_mask_dir.isEmpty())
         {
-            const QString mask_path = QDir(mvs_mask_dir).filePath(
-                QFileInfo(imagePath).completeBaseName() + QStringLiteral("_mask.png"));
+            const QString mask_path =
+                QDir(mvs_mask_dir).filePath(QFileInfo(imagePath).completeBaseName() + QStringLiteral("_mask.png"));
             if (QFileInfo::exists(mask_path))
             {
                 view.validRegionMaskPath = xjw::common::io::toUtf8Path(mask_path);
@@ -1896,27 +1903,40 @@ xjw::cli::ReconstructionCliOptions options;
             }
         }
         cv::Mat image = xjw::common::io::readImage(view.imagePath, cv::IMREAD_GRAYSCALE);
-        if (!image.empty())
+        if (image.empty() || image.cols != camera->imageSize().samples || image.rows != camera->imageSize().lines)
         {
-            view.imageWidth = image.cols;
-            view.imageHeight = image.rows;
+            report[QStringLiteral("status")] = QStringLiteral("failed");
+            report[QStringLiteral("reason")] =
+                image.empty() ? QStringLiteral("MVS 无法读取影像：%1").arg(imagePath)
+                              : QStringLiteral("MVS 影像尺寸与 PlaCamera 绑定尺寸不一致：%1（影像 %2×%3，相机 %4×%5）")
+                                    .arg(imagePath)
+                                    .arg(image.cols)
+                                    .arg(image.rows)
+                                    .arg(camera->imageSize().samples)
+                                    .arg(camera->imageSize().lines);
+            QJsonObject finalReport;
+            if (!reportContext.writeFinalReport(&finalReport))
+            {
+                return cli::EXIT_IO_ERR;
+            }
+            std::fprintf(stderr, "%s\n", qUtf8Printable(report.value(QStringLiteral("reason")).toString()));
+            return cli::EXIT_ALGO_ERR;
         }
+        view.imageWidth = image.cols;
+        view.imageHeight = image.rows;
+        view.camera = camera;
         views.push_back(std::move(view));
-
     }
     limitMvsInputsForRegression(&views, &registeredImagePaths, mvsMaxFrames);
-    project_mask_count = static_cast<int>(std::count_if(
-        views.cbegin(),
-        views.cend(),
-        [](const xjw::mvs::CameraView &view) {
-            return !view.validRegionMaskPath.empty();
-        }));
+    project_mask_count = static_cast<int>(std::count_if(views.cbegin(),
+                                                        views.cend(),
+                                                        [](const xjw::mvs::CameraView& view)
+                                                        { return !view.validRegionMaskPath.empty(); }));
     const int mvs_input_image_count = static_cast<int>(registeredImagePaths.size());
     sfmJson[QStringLiteral("mvs_image_paths")] = QJsonArray::fromStringList(registeredImagePaths);
     sfmJson[QStringLiteral("mvs_input_images")] = mvs_input_image_count;
     sfmJson[QStringLiteral("mvs_project_mask_count")] = project_mask_count;
-    sfmJson[QStringLiteral("mvs_project_mask_missing_count")] =
-        std::max(0, mvs_input_image_count - project_mask_count);
+    sfmJson[QStringLiteral("mvs_project_mask_missing_count")] = std::max(0, mvs_input_image_count - project_mask_count);
     if (!mvs_mask_dir.isEmpty())
     {
         sfmJson[QStringLiteral("mvs_mask_dir")] = mvs_mask_dir;

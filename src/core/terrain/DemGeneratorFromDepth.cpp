@@ -17,96 +17,104 @@
 namespace xjw
 {
 
-static float readDepth(const cv::Mat &depthMap, int row, int col)
-{
-    if (depthMap.type() == CV_32FC1)
-        return depthMap.at<float>(row, col);
-    if (depthMap.type() == CV_16UC1)
-        return static_cast<float>(depthMap.at<uint16_t>(row, col));
-    return 0.0f;
-}
-
-bool DemGenerator::generateFromDepthMaps(
-    const std::vector<cv::Mat>& depthMaps,
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-    const DemGenerationOptions& options,
-    DemGridData* demGrid,
-    QString* errorMsg)
-{
-    if (!demGrid)
+    static float readDepth(const cv::Mat& depthMap, int row, int col)
     {
-        if (errorMsg) *errorMsg = "demGrid is null";
-        return false;
-    }
-    if (depthMaps.empty() || cameras.empty())
-    {
-        if (errorMsg) *errorMsg = "depthMaps or cameras is empty";
-        return false;
-    }
-    if (depthMaps.size() != cameras.size())
-    {
-        if (errorMsg)
-            *errorMsg = QString("depthMaps size (%1) != cameras size (%2)")
-                            .arg(depthMaps.size()).arg(cameras.size());
-        return false;
+        if (depthMap.type() == CV_32FC1)
+            return depthMap.at<float>(row, col);
+        if (depthMap.type() == CV_16UC1)
+            return static_cast<float>(depthMap.at<uint16_t>(row, col));
+        return 0.0f;
     }
 
-    for (std::size_t index = 0; index < cameras.size(); ++index)
+    bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
+                                             const std::vector<placamera::FramePinholeModel>& cameras,
+                                             const DemGenerationOptions& options,
+                                             DemGridData* demGrid,
+                                             QString* errorMsg)
     {
-        std::string camera_error;
-        if (!cameras[index].validateNumericalState(&camera_error))
+        if (!demGrid)
         {
             if (errorMsg)
-            {
-                *errorMsg = QStringLiteral("Camera %1 has invalid frame-pinhole numeric state: %2")
-                                .arg(index)
-                                .arg(QString::fromStdString(camera_error));
-            }
+                *errorMsg = "demGrid is null";
             return false;
         }
-    }
-
-    const cv::Mat &refDepth = depthMaps[0];
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam = cameras[0];
-    if (refDepth.empty())
-    {
-        if (errorMsg) *errorMsg = "Reference depth map is empty";
-        return false;
-    }
-
-    const int imgH = refDepth.rows;
-    const int imgW = refDepth.cols;
-    // --- Step 0: Compute depth statistics for outlier filtering ---
-    // For planetary/asteroid imaging, surface is near origin, camera is far away.
-    // Use tight depth filter: median ± 5% covers the expected surface depth range.
-    std::vector<float> allDepths;
-    allDepths.reserve(imgH * imgW / 4);
-    for (int row = 0; row < imgH; row += 2)
-        for (int col = 0; col < imgW; col += 2)
+        if (depthMaps.empty() || cameras.empty())
         {
-            float d = readDepth(refDepth, row, col);
-            if (d > 0.0f && std::isfinite(d))
-                allDepths.push_back(d);
+            if (errorMsg)
+                *errorMsg = "depthMaps or cameras is empty";
+            return false;
+        }
+        if (depthMaps.size() != cameras.size())
+        {
+            if (errorMsg)
+                *errorMsg =
+                    QString("depthMaps size (%1) != cameras size (%2)").arg(depthMaps.size()).arg(cameras.size());
+            return false;
         }
 
-    float depthLo = 0.0f, depthHi = 1e30f;
-    if (allDepths.size() > 100)
-    {
-        std::sort(allDepths.begin(), allDepths.end());
-        size_t n = allDepths.size();
-        float median = allDepths[n / 2];
-        float tolerance = median * 0.05f;
-        depthLo = median - tolerance;
-        depthHi = median + tolerance;
-    }
+        for (std::size_t index = 0; index < cameras.size(); ++index)
+        {
+            if (cameras[index].groundFrame() != cameras[0].groundFrame())
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = QStringLiteral("深度图相机 %1 的世界坐标系与参考相机不一致").arg(index);
+                }
+                return false;
+            }
+            if (!depthMaps[index].empty() && (depthMaps[index].cols != cameras[index].imageSize().samples ||
+                                              depthMaps[index].rows != cameras[index].imageSize().lines))
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = QStringLiteral("深度图 %1 的尺寸与 PlaCamera 模型不一致").arg(index);
+                }
+                return false;
+            }
+        }
 
-    // --- Step 1: Unproject reference depth map to 3D ---
-    cv::Mat wX(imgH, imgW, CV_64FC1, cv::Scalar(0));
-    cv::Mat wY(imgH, imgW, CV_64FC1, cv::Scalar(0));
-    cv::Mat wZ(imgH, imgW, CV_64FC1, cv::Scalar(0));
-    cv::Mat triErr(imgH, imgW, CV_64FC1, cv::Scalar(0));
-    cv::Mat valid(imgH, imgW, CV_8UC1, cv::Scalar(0));
-    int validCount = 0;
+        const cv::Mat& refDepth = depthMaps[0];
+        const placamera::FramePinholeModel& refCam = cameras[0];
+        if (refDepth.empty())
+        {
+            if (errorMsg)
+                *errorMsg = "Reference depth map is empty";
+            return false;
+        }
+
+        const int imgH = refDepth.rows;
+        const int imgW = refDepth.cols;
+        // --- Step 0: Compute depth statistics for outlier filtering ---
+        // For planetary/asteroid imaging, surface is near origin, camera is far away.
+        // Use tight depth filter: median ± 5% covers the expected surface depth range.
+        std::vector<float> allDepths;
+        allDepths.reserve(imgH * imgW / 4);
+        for (int row = 0; row < imgH; row += 2)
+            for (int col = 0; col < imgW; col += 2)
+            {
+                float d = readDepth(refDepth, row, col);
+                if (d > 0.0f && std::isfinite(d))
+                    allDepths.push_back(d);
+            }
+
+        float depthLo = 0.0f, depthHi = 1e30f;
+        if (allDepths.size() > 100)
+        {
+            std::sort(allDepths.begin(), allDepths.end());
+            size_t n = allDepths.size();
+            float median = allDepths[n / 2];
+            float tolerance = median * 0.05f;
+            depthLo = median - tolerance;
+            depthHi = median + tolerance;
+        }
+
+        // --- Step 1: Unproject reference depth map to 3D ---
+        cv::Mat wX(imgH, imgW, CV_64FC1, cv::Scalar(0));
+        cv::Mat wY(imgH, imgW, CV_64FC1, cv::Scalar(0));
+        cv::Mat wZ(imgH, imgW, CV_64FC1, cv::Scalar(0));
+        cv::Mat triErr(imgH, imgW, CV_64FC1, cv::Scalar(0));
+        cv::Mat valid(imgH, imgW, CV_8UC1, cv::Scalar(0));
+        int validCount = 0;
 
     #pragma omp parallel for schedule(dynamic) reduction(+:validCount)
     for (int row = 0; row < imgH; ++row)
@@ -119,14 +127,13 @@ bool DemGenerator::generateFromDepthMaps(
             if (depth < depthLo || depth > depthHi)
                 continue;
 
-            const double pixel[2]{static_cast<double>(col), static_cast<double>(row)};
-            double world[3]{0.0, 0.0, 0.0};
-            if (!refCam.unprojectPixel(pixel, depth, world))
+            const auto world = refCam.imageToGroundAtDepth({static_cast<double>(col), static_cast<double>(row)}, depth);
+            if (!world.ok())
                 continue;
 
-            wX.at<double>(row, col) = world[0];
-            wY.at<double>(row, col) = world[1];
-            wZ.at<double>(row, col) = world[2];
+            wX.at<double>(row, col) = world.value().position[0];
+            wY.at<double>(row, col) = world.value().position[1];
+            wZ.at<double>(row, col) = world.value().position[2];
             valid.at<uchar>(row, col) = 255;
             ++validCount;
         }
@@ -135,9 +142,10 @@ bool DemGenerator::generateFromDepthMaps(
     // Merge secondary depth maps and compute triangulation error
     for (size_t vi = 1; vi < depthMaps.size(); ++vi)
     {
-        if (depthMaps[vi].empty()) continue;
-        const cv::Mat &secDepth = depthMaps[vi];
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secCam = cameras[vi];
+        if (depthMaps[vi].empty())
+            continue;
+        const cv::Mat& secDepth = depthMaps[vi];
+        const placamera::FramePinholeModel& secCam = cameras[vi];
 
         for (int row = 0; row < secDepth.rows; ++row)
         {
@@ -149,24 +157,24 @@ bool DemGenerator::generateFromDepthMaps(
                 if (depth < depthLo || depth > depthHi)
                     continue;
 
-                const double source_pixel[2]{static_cast<double>(col), static_cast<double>(row)};
-                double world[3]{0.0, 0.0, 0.0};
-                if (!secCam.unprojectPixel(source_pixel, depth, world))
+                const auto world =
+                    secCam.imageToGroundAtDepth({static_cast<double>(col), static_cast<double>(row)}, depth);
+                if (!world.ok())
                     continue;
 
-                double pixel[2];
-                if (!refCam.projectWorldPoint(world, pixel))
+                const auto projected = refCam.groundToImage(world.value());
+                if (!projected.ok())
                     continue;
-                int refCol = static_cast<int>(std::round(pixel[0]));
-                int refRow = static_cast<int>(std::round(pixel[1]));
+                int refCol = static_cast<int>(std::round(projected.value().image.sample));
+                int refRow = static_cast<int>(std::round(projected.value().image.line));
                 if (refCol < 0 || refCol >= imgW || refRow < 0 || refRow >= imgH)
                     continue;
 
                 if (valid.at<uchar>(refRow, refCol) == 0)
                 {
-                    wX.at<double>(refRow, refCol) = world[0];
-                    wY.at<double>(refRow, refCol) = world[1];
-                    wZ.at<double>(refRow, refCol) = world[2];
+                    wX.at<double>(refRow, refCol) = world.value().position[0];
+                    wY.at<double>(refRow, refCol) = world.value().position[1];
+                    wZ.at<double>(refRow, refCol) = world.value().position[2];
                     valid.at<uchar>(refRow, refCol) = 255;
                     ++validCount;
                 }
@@ -174,9 +182,9 @@ bool DemGenerator::generateFromDepthMaps(
                 {
                     // Compute triangulation error: distance between 3D points
                     // from reference and secondary cameras
-                    double dx = wX.at<double>(refRow, refCol) - world[0];
-                    double dy = wY.at<double>(refRow, refCol) - world[1];
-                    double dz = wZ.at<double>(refRow, refCol) - world[2];
+                    double dx = wX.at<double>(refRow, refCol) - world.value().position[0];
+                    double dy = wY.at<double>(refRow, refCol) - world.value().position[1];
+                    double dz = wZ.at<double>(refRow, refCol) - world.value().position[2];
                     double err = std::sqrt(dx*dx + dy*dy + dz*dz);
                     triErr.at<double>(refRow, refCol) = err;
                 }
@@ -354,6 +362,6 @@ bool DemGenerator::generateFromDepthMaps(
     }
 
     return demGrid->isValid();
-}
+    }
 
 } // namespace xjw

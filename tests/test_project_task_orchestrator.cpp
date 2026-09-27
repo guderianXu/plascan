@@ -7,9 +7,7 @@
 #include "project/tasks/ProjectBundleAdjustController.h"
 #include "project/tasks/ProjectTaskOrchestrator.h"
 
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 #include "project/ProjectSessionModel.h"
@@ -41,6 +39,7 @@
 #include <QThread>
 #include <QThreadPool>
 #include <QTemporaryDir>
+#include <QTextStream>
 #include <QTimer>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
@@ -48,6 +47,7 @@
 #include <QtTest/QTest>
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
 
 #include <atomic>
 #include <concepts>
@@ -323,6 +323,7 @@ public:
     using Orchestrator = xjw::gui::project::ProjectTaskOrchestrator;
     using TaskContext = xjw::gui::project::ProjectTaskContext;
     using SfmRunner = ProjectCameraSetupManager::SfmRunner;
+    using HeavyWorkEnteredObserver = ProjectCameraSetupManager::HeavyWorkEnteredObserver;
 
     static ProjectCameraSetupManager* controller(Orchestrator* orchestrator)
     {
@@ -334,7 +335,7 @@ public:
         TaskContext context = orchestrator->createIndependentContext(taskId);
         orchestrator->_cameraContext = context;
         orchestrator->_cameraLaneActive = true;
-        orchestrator->_cameraSetup->_sfmContext = context;
+        orchestrator->_cameraSetup->_taskContext = context;
         return context;
     }
 
@@ -358,6 +359,11 @@ public:
         orchestrator->_cameraSetup->setSfmRunnerForTesting(std::move(runner));
     }
 
+    static void setHeavyWorkEnteredObserver(Orchestrator* orchestrator, HeavyWorkEnteredObserver observer)
+    {
+        orchestrator->_cameraSetup->setHeavyWorkEnteredObserverForTesting(std::move(observer));
+    }
+
     static void trackFuture(Orchestrator* orchestrator, QFuture<void> future)
     {
         orchestrator->trackCameraFutureForTesting(std::move(future));
@@ -367,15 +373,33 @@ public:
 namespace
 {
 
-    QJsonObject bundleAdjustCameraMetadata()
+    placamera::CameraInstanceSet bundleAdjustCameraInstances(const QJsonObject& project_meta, double center_x = 1.0)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {1.0, 2.0, 3.0});
-        camera.setImageSize(xjw::camera_core::ImageSize{1024, 768});
-        QJsonObject metadata = xjw::common::project::serializeFramePinholeNumericState(camera);
-        metadata.insert(QStringLiteral("aligned"), true);
-        return metadata;
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("orchestrator-test-definition"),
+                                                      {1200.0, 1200.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        for (const QJsonValue& value : project_meta.value(QStringLiteral("images")).toArray())
+        {
+            const std::string image_id = value.toObject().value(QStringLiteral("image_uuid")).toString().toStdString();
+            const auto added =
+                cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("orchestrator-test-" + image_id),
+                    placamera::ImageId(image_id),
+                    definition,
+                    {1024, 768},
+                    placamera::Pose::create(
+                        frame, {center_x, 2.0, 3.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+            if (!added.ok())
+            {
+                throw std::runtime_error("failed to create native orchestrator camera fixture");
+            }
+        }
+        return cameras;
     }
 
     using MaskSettingsProviderProbe =
@@ -652,7 +676,7 @@ namespace
     template <typename T> concept PublicCameraImport = requires(T & controller, const QString& imagePath)
     {
         controller.importCameraForImage(imagePath);
-        controller.importCamerasByFilenameBatch();
+        controller.importCameraProject();
     };
 
     template <typename T>
@@ -846,6 +870,19 @@ namespace
         return projectData->addImages(*images, errorMessage);
     }
 
+    void writeMiddleburyCameraProject(const QString& directory, const QStringList& images)
+    {
+        ASSERT_TRUE(QDir().mkpath(directory));
+        QFile file(QDir(directory).filePath(QStringLiteral("scene_par.txt")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << images.size() << '\n';
+        for (const QString& image : images)
+        {
+            out << QFileInfo(image).fileName() << " 800 0 16 0 810 12 0 0 1 1 0 0 0 1 0 0 0 1 0 0 0\n";
+        }
+    }
+
     class ProjectTaskOrchestratorTest : public testing::Test
     {
     protected:
@@ -891,10 +928,9 @@ namespace
         {
             return false;
         }
-        const QJsonObject camera = bundleAdjustCameraMetadata();
+        const auto cameras = bundleAdjustCameraInstances(projectData->coreFilesMeta());
         int updatedCount = 0;
-        if (!projectData->setCameraInstances(
-                {{images->at(0), camera}, {images->at(1), camera}}, &updatedCount, errorMessage))
+        if (!projectData->upsertNativeCameraInstances(cameras, {}, &updatedCount, errorMessage))
         {
             return false;
         }
@@ -912,31 +948,16 @@ namespace
                                                 {QStringLiteral("rms_after"), 0.5},
                                                 {QStringLiteral("track_len"), 2},
                                                 {QStringLiteral("point_xyz"), QJsonArray{1.0, 2.0, 3.0}}}}}};
-        const QJsonObject core = projectData->coreFilesMeta();
-        const QJsonArray definitions = core.value(QStringLiteral("camera_definitions")).toArray();
-        if (definitions.isEmpty())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectData->coreFilesMeta());
+        if (!loaded.ok())
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("测试相机定义为空");
+                *errorMessage = loaded.errors.join(QStringLiteral("; "));
             }
             return false;
         }
-        const QString worldFrame = definitions.at(0).toObject().value(QStringLiteral("frame")).toString();
-        for (const QJsonValue& imageValue : core.value(QStringLiteral("images")).toArray())
-        {
-            const QJsonObject image = imageValue.toObject();
-            const QString imageId = image.value(QStringLiteral("image_uuid")).toString();
-            const QJsonObject instance = xjw::camera_project::CameraProjectRecords::instanceForImage(core, imageId);
-            QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image);
-            update.insert(QStringLiteral("world_frame"), worldFrame);
-            update.insert(QStringLiteral("solution"), QStringLiteral("bundle-adjust-preview"));
-            executionResult->serviceResult.cameraInstanceUpdates.push_back(
-                {xjw::camera_core::ImageId(imageId.toStdString()),
-                 xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
-                 xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
-                 update});
-        }
+        executionResult->serviceResult.cameraInstances = bundleAdjustCameraInstances(projectData->coreFilesMeta(), 1.5);
         return true;
     }
 
@@ -1014,7 +1035,7 @@ namespace
         }
         UiDialogResult getItem(QWidget*, const QString&, const QString&, const QStringList&, int) override
         {
-            return {};
+            return itemResult;
         }
         UiDialogResult selectOpenFile(QWidget*, const QString&, const QString&, const QString&, QDir::Filters) override
         {
@@ -1056,6 +1077,7 @@ namespace
         QStringList criticalTexts;
         UiDialogResult openFileResult;
         UiDialogResult directoryResult;
+        UiDialogResult itemResult;
     };
 
     class ScopedLoggerCapture final
@@ -1772,7 +1794,7 @@ namespace
         EXPECT_EQ(orchestrator.findChildren<Controller*>(QString(), Qt::FindDirectChildrenOnly).size(), 1);
     }
 
-    TEST(ProjectCameraSetupTest, SynchronousIntrinsicsInitializationUsesSessionWritePort)
+    TEST(ProjectCameraSetupTest, IntrinsicsInitializationQueuesHeavyWorkAndCommitsThroughSession)
     {
         qtApplication();
         QTemporaryDir temp_dir;
@@ -1784,22 +1806,190 @@ namespace
         xjw::gui::project::ProjectSession session(&project_data);
         AcceptingReviewMessages messages;
         xjw::gui::project::ProjectTaskOrchestrator orchestrator(&session, &messages);
+        ScopedGlobalThreadPoolGate gate;
+        ASSERT_TRUE(gate.isReady());
+        std::atomic<int> heavy_work_entries{0};
+        std::atomic<QThread*> worker_thread{nullptr};
+        ProjectTaskOrchestratorCameraTestPeer::setHeavyWorkEnteredObserver(
+            &orchestrator,
+            [&](const QString& operation)
+            {
+                EXPECT_EQ(operation, QStringLiteral("camera-init-intrinsics"));
+                worker_thread.store(QThread::currentThread(), std::memory_order_relaxed);
+                heavy_work_entries.fetch_add(1, std::memory_order_relaxed);
+            });
+        QSignalSpy finished_spy(&orchestrator, &xjw::gui::project::ProjectTaskOrchestrator::cameraFinished);
 
         const QJsonObject settings{{QStringLiteral("fx"), 800.0},
                                    {QStringLiteral("fy"), 810.0},
                                    {QStringLiteral("distortionModel"), QStringLiteral("none")}};
         ASSERT_TRUE(orchestrator.initializeCamerasFromIntrinsics(settings));
+        EXPECT_TRUE(orchestrator.hasRunningCameraTask());
+        EXPECT_EQ(heavy_work_entries.load(std::memory_order_relaxed), 0);
+        EXPECT_EQ(messages.informationCount, 0);
+
+        bool heartbeat = false;
+        QTimer::singleShot(0, &orchestrator, [&heartbeat]() { heartbeat = true; });
+        QTRY_VERIFY_WITH_TIMEOUT(heartbeat, 1000);
+        const QMap<QString, QJsonObject> before_images =
+            xjw::common::project::projectImageMetaByPath(session.coreMetadata(), true);
+        const auto before_cameras = xjw::placamera_runtime::loadProjectCameras(session.coreMetadata());
+        ASSERT_TRUE(before_cameras.ok()) << before_cameras.errors.join(';').toStdString();
+        for (const QString& image : images)
+        {
+            const QJsonObject image_record = before_images.value(QDir::cleanPath(QFileInfo(image).absoluteFilePath()));
+            const QString image_id = image_record.value(QStringLiteral("image_uuid")).toString();
+            EXPECT_FALSE(before_cameras.instances.forImage(placamera::ImageId(image_id.toStdString())).ok());
+        }
+
+        gate.release();
+        QTRY_COMPARE_WITH_TIMEOUT(finished_spy.count(), 1, 5000);
+        EXPECT_TRUE(finished_spy.constFirst().at(0).toBool());
+        EXPECT_EQ(heavy_work_entries.load(std::memory_order_relaxed), 1);
+        EXPECT_NE(worker_thread.load(std::memory_order_relaxed), QThread::currentThread());
+        EXPECT_FALSE(orchestrator.hasRunningCameraTask());
         EXPECT_EQ(messages.informationCount, 1);
         EXPECT_EQ(messages.warningCount, 0);
         EXPECT_EQ(messages.criticalCount, 0);
 
         const QJsonObject metadata = session.coreMetadata();
+        const auto loaded_cameras = xjw::placamera_runtime::loadProjectCameras(metadata);
+        ASSERT_TRUE(loaded_cameras.ok()) << loaded_cameras.errors.join(';').toStdString();
         const QMap<QString, QJsonObject> image_by_path = xjw::common::project::projectImageMetaByPath(metadata, true);
         for (const QString& image : images)
         {
             const QJsonObject image_record = image_by_path.value(QDir::cleanPath(QFileInfo(image).absoluteFilePath()));
             const QString image_id = image_record.value(QStringLiteral("image_uuid")).toString();
-            EXPECT_FALSE(xjw::camera_project::CameraProjectRecords::instanceForImage(metadata, image_id).isEmpty());
+            const auto selected = loaded_cameras.instances.forImage(placamera::ImageId(image_id.toStdString()));
+            ASSERT_TRUE(selected.ok());
+            const auto* camera = dynamic_cast<const placamera::FramePinholeModel*>(selected.value().get());
+            ASSERT_NE(camera, nullptr);
+            EXPECT_EQ(camera->imageSize().samples, 32);
+            EXPECT_EQ(camera->imageSize().lines, 24);
+            EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalX, 800.0);
+            EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalY, 810.0);
+        }
+    }
+
+    TEST(ProjectCameraSetupTest, CameraProjectImportQueuesParsingAndCommitsOnlyAfterWorkerFinishes)
+    {
+        qtApplication();
+        QTemporaryDir temp_dir;
+        ASSERT_TRUE(temp_dir.isValid());
+        ProjectData project_data;
+        QStringList images;
+        QString error;
+        ASSERT_TRUE(prepareCameraProject(&project_data, temp_dir.path(), &images, &error)) << qPrintable(error);
+        const QString camera_project_dir = temp_dir.filePath(QStringLiteral("camera-project"));
+        writeMiddleburyCameraProject(camera_project_dir, images);
+
+        xjw::gui::project::ProjectSession session(&project_data);
+        AcceptingReviewMessages messages;
+        messages.itemResult = {true, QStringLiteral("工程目录")};
+        messages.directoryResult = {true, camera_project_dir};
+        xjw::gui::project::ProjectTaskOrchestrator orchestrator(&session, &messages);
+        ScopedGlobalThreadPoolGate gate;
+        ASSERT_TRUE(gate.isReady());
+        std::atomic<int> heavy_work_entries{0};
+        std::atomic<QThread*> worker_thread{nullptr};
+        ProjectTaskOrchestratorCameraTestPeer::setHeavyWorkEnteredObserver(
+            &orchestrator,
+            [&](const QString& operation)
+            {
+                EXPECT_EQ(operation, QStringLiteral("camera-import-project"));
+                worker_thread.store(QThread::currentThread(), std::memory_order_relaxed);
+                heavy_work_entries.fetch_add(1, std::memory_order_relaxed);
+            });
+        QSignalSpy finished_spy(&orchestrator, &xjw::gui::project::ProjectTaskOrchestrator::cameraFinished);
+
+        ASSERT_TRUE(orchestrator.importCameraProject());
+        EXPECT_TRUE(orchestrator.hasRunningCameraTask());
+        EXPECT_EQ(heavy_work_entries.load(std::memory_order_relaxed), 0);
+        EXPECT_EQ(messages.informationCount, 0);
+        const auto before_cameras = xjw::placamera_runtime::loadProjectCameras(session.coreMetadata());
+        ASSERT_TRUE(before_cameras.ok()) << before_cameras.errors.join(';').toStdString();
+        for (const QJsonValue& value : session.coreMetadata().value(QStringLiteral("images")).toArray())
+        {
+            const QString image_id = value.toObject().value(QStringLiteral("image_uuid")).toString();
+            EXPECT_FALSE(before_cameras.instances.forImage(placamera::ImageId(image_id.toStdString())).ok());
+        }
+
+        bool heartbeat = false;
+        QTimer::singleShot(0, &orchestrator, [&heartbeat]() { heartbeat = true; });
+        QTRY_VERIFY_WITH_TIMEOUT(heartbeat, 1000);
+        gate.release();
+        QTRY_COMPARE_WITH_TIMEOUT(finished_spy.count(), 1, 5000);
+        EXPECT_TRUE(finished_spy.constFirst().at(0).toBool());
+        EXPECT_EQ(heavy_work_entries.load(std::memory_order_relaxed), 1);
+        EXPECT_NE(worker_thread.load(std::memory_order_relaxed), QThread::currentThread());
+        EXPECT_FALSE(orchestrator.hasRunningCameraTask());
+        EXPECT_EQ(messages.informationCount, 1);
+
+        const QJsonObject metadata = session.coreMetadata();
+        const auto loaded_cameras = xjw::placamera_runtime::loadProjectCameras(metadata);
+        ASSERT_TRUE(loaded_cameras.ok()) << loaded_cameras.errors.join(';').toStdString();
+        const QMap<QString, QJsonObject> image_by_path = xjw::common::project::projectImageMetaByPath(metadata, true);
+        for (const QString& image : images)
+        {
+            const QJsonObject image_record = image_by_path.value(QDir::cleanPath(QFileInfo(image).absoluteFilePath()));
+            const QString image_id = image_record.value(QStringLiteral("image_uuid")).toString();
+            const auto selected = loaded_cameras.instances.forImage(placamera::ImageId(image_id.toStdString()));
+            ASSERT_TRUE(selected.ok());
+            const auto* camera = dynamic_cast<const placamera::FramePinholeModel*>(selected.value().get());
+            ASSERT_NE(camera, nullptr);
+            EXPECT_EQ(camera->imageSize().samples, 32);
+            EXPECT_EQ(camera->imageSize().lines, 24);
+            EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalX, 800.0);
+            EXPECT_DOUBLE_EQ(camera->pinholeDefinition().intrinsics().focalY, 810.0);
+        }
+    }
+
+    TEST(ProjectCameraSetupTest, QueuedCameraInitializationCancelSkipsHeavyWorkAndCommitsNothing)
+    {
+        qtApplication();
+        QTemporaryDir temp_dir;
+        ASSERT_TRUE(temp_dir.isValid());
+        ProjectData project_data;
+        QStringList images;
+        QString error;
+        ASSERT_TRUE(prepareCameraProject(&project_data, temp_dir.path(), &images, &error)) << qPrintable(error);
+        xjw::gui::project::ProjectSession session(&project_data);
+        AcceptingReviewMessages messages;
+        xjw::gui::project::ProjectTaskOrchestrator orchestrator(&session, &messages);
+        ScopedGlobalThreadPoolGate gate;
+        ASSERT_TRUE(gate.isReady());
+        std::atomic<int> heavy_work_entries{0};
+        ProjectTaskOrchestratorCameraTestPeer::setHeavyWorkEnteredObserver(
+            &orchestrator, [&](const QString&) { heavy_work_entries.fetch_add(1, std::memory_order_relaxed); });
+        QSignalSpy finished_spy(&orchestrator, &xjw::gui::project::ProjectTaskOrchestrator::cameraFinished);
+        QSignalSpy progress_spy(&orchestrator, &xjw::gui::project::ProjectTaskOrchestrator::cameraProgressChanged);
+
+        const QJsonObject settings{{QStringLiteral("fx"), 800.0}, {QStringLiteral("fy"), 810.0}};
+        ASSERT_TRUE(orchestrator.initializeCamerasFromIntrinsics(settings));
+        const auto context = ProjectTaskOrchestratorCameraTestPeer::context(&orchestrator);
+        ASSERT_TRUE(context.cancelFlag);
+        const int progress_before_cancelled_worker = progress_spy.count();
+        orchestrator.cancelCameraTask();
+        EXPECT_TRUE(context.cancelFlag->load(std::memory_order_relaxed));
+        EXPECT_TRUE(orchestrator.hasRunningCameraTask());
+
+        gate.release();
+        QTRY_COMPARE_WITH_TIMEOUT(finished_spy.count(), 1, 5000);
+        EXPECT_FALSE(finished_spy.constFirst().at(0).toBool());
+        EXPECT_EQ(heavy_work_entries.load(std::memory_order_relaxed), 0);
+        EXPECT_EQ(progress_spy.count(), progress_before_cancelled_worker);
+        EXPECT_FALSE(orchestrator.hasRunningCameraTask());
+        EXPECT_EQ(messages.informationCount, 0);
+
+        const QJsonObject metadata = session.coreMetadata();
+        const auto loaded_cameras = xjw::placamera_runtime::loadProjectCameras(metadata);
+        ASSERT_TRUE(loaded_cameras.ok()) << loaded_cameras.errors.join(';').toStdString();
+        const QMap<QString, QJsonObject> image_by_path = xjw::common::project::projectImageMetaByPath(metadata, true);
+        for (const QString& image : images)
+        {
+            const QJsonObject image_record = image_by_path.value(QDir::cleanPath(QFileInfo(image).absoluteFilePath()));
+            const QString image_id = image_record.value(QStringLiteral("image_uuid")).toString();
+            EXPECT_FALSE(loaded_cameras.instances.forImage(placamera::ImageId(image_id.toStdString())).ok());
         }
     }
 
@@ -4821,7 +5011,7 @@ namespace
             ->setExecutionRunnerForTesting(
                 [](const QJsonObject&, const QString&, const QStringList&, int, xjw::gui::BaServiceOptions options)
                 {
-                    while (!options.baOpt.cancelFlag->load(std::memory_order_relaxed))
+                    while (!options.baOpt.solver.cancelFlag->load(std::memory_order_relaxed))
                     {
                         QThread::msleep(1);
                     }
@@ -4852,7 +5042,7 @@ namespace
             ->setExecutionRunnerForTesting(
                 [](const QJsonObject&, const QString&, const QStringList&, int, xjw::gui::BaServiceOptions options)
                 {
-                    while (!options.baOpt.cancelFlag->load(std::memory_order_relaxed))
+                    while (!options.baOpt.solver.cancelFlag->load(std::memory_order_relaxed))
                     {
                         QThread::msleep(1);
                     }
@@ -5567,11 +5757,10 @@ namespace
             images.append(path);
         }
         ASSERT_TRUE(project_data.addImages(images));
-        const QJsonObject camera = bundleAdjustCameraMetadata();
+        const auto cameras = bundleAdjustCameraInstances(project_data.coreFilesMeta());
         int updated_count = 0;
         QString camera_error;
-        ASSERT_TRUE(project_data.setCameraInstances(
-            {{images.at(0), camera}, {images.at(1), camera}}, &updated_count, &camera_error))
+        ASSERT_TRUE(project_data.upsertNativeCameraInstances(cameras, {}, &updated_count, &camera_error))
             << qPrintable(camera_error);
 
         xjw::gui::project::BundleAdjustExecutionResult execution_result;
@@ -5588,26 +5777,9 @@ namespace
                                                 {QStringLiteral("rms_after"), 0.5},
                                                 {QStringLiteral("track_len"), 2},
                                                 {QStringLiteral("point_xyz"), QJsonArray{1.0, 2.0, 3.0}}}}}};
-        const QJsonObject core = project_data.coreFilesMeta();
-        const QString world_frame = core.value(QStringLiteral("camera_definitions"))
-                                        .toArray()
-                                        .at(0)
-                                        .toObject()
-                                        .value(QStringLiteral("frame"))
-                                        .toString();
-        for (const QJsonValue& image_value : core.value(QStringLiteral("images")).toArray())
-        {
-            const QJsonObject image = image_value.toObject();
-            const QString image_id = image.value(QStringLiteral("image_uuid")).toString();
-            const QJsonObject instance = xjw::camera_project::CameraProjectRecords::instanceForImage(core, image_id);
-            QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image);
-            update.insert(QStringLiteral("world_frame"), world_frame);
-            execution_result.serviceResult.cameraInstanceUpdates.push_back(
-                {xjw::camera_core::ImageId(image_id.toStdString()),
-                 xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
-                 xjw::coordinate_system::CoordinateFrameId(world_frame.toStdString()),
-                 update});
-        }
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(project_data.coreFilesMeta());
+        ASSERT_TRUE(loaded.ok()) << qPrintable(loaded.errors.join(QStringLiteral("; ")));
+        execution_result.serviceResult.cameraInstances = loaded.instances;
 
         xjw::gui::project::ProjectSession session(&project_data);
         xjw::gui::project::ProjectTaskOrchestrator orchestrator(&session, nullptr);

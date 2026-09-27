@@ -52,7 +52,7 @@ namespace xjw::matchphotos
             return &found.value();
         }
 
-        const camera_reference::ReferenceCameraGeometry* findReferenceCamera(
+        const placamera::reference::ReferenceCameraGeometry* findReferenceCamera(
             const MatchPhotosContext& context,
             const GuidedMatchPolicyCache& cache,
             const QString& imagePath)
@@ -68,7 +68,7 @@ namespace xjw::matchphotos
             }
             try
             {
-                const auto reference = context.referenceCameraGeometries.find(camera_core::ImageId(imageId->toStdString()));
+                const auto reference = context.referenceCameraGeometries.find(placamera::ImageId(imageId->toStdString()));
                 return reference == context.referenceCameraGeometries.cend() ? nullptr : &reference->second;
             }
             catch (...)
@@ -271,13 +271,13 @@ namespace xjw::matchphotos
         ReferencePoseEpipolarGeometry referenceGeometry;
         if (options.guidedUseReferenceCameraPoses)
         {
-            const camera_reference::ReferenceCameraGeometry* camera0 =
+            const placamera::reference::ReferenceCameraGeometry* camera0 =
                 findReferenceCamera(context, cache, record.image0Path);
-            const camera_reference::ReferenceCameraGeometry* camera1 =
+            const placamera::reference::ReferenceCameraGeometry* camera1 =
                 findReferenceCamera(context, cache, record.image1Path);
             if (camera0 && camera1)
             {
-                referenceGeometry = fundamentalFromReferenceCameras(camera0->numericState(), camera1->numericState());
+                referenceGeometry = fundamentalFromReferenceCameras(camera0->model(), camera1->model());
             }
         }
 

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "ReferenceP3p.h"
+
+#include <placamera/frame_camera.h>
 
 #include <array>
 #include <cstddef>
@@ -10,7 +11,7 @@
 namespace xjw
 {
 
-    void refineReferencePose(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    void refineReferencePose(const placamera::FramePinholeDefinition& camera,
                              const std::vector<std::array<double, 3>>& worldPoints,
                              const std::vector<std::array<double, 2>>& imagePoints,
                              const std::vector<std::size_t>& inlierIndices,

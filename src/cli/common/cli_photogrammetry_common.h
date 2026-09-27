@@ -3,9 +3,7 @@
 #include "CliJsonIO.h"
 #include "CliOutputPolicy.h"
 #include "CliPathUtils.h"
-#include "camera/core/types/CameraIds.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -25,8 +23,6 @@ namespace xjw::cli
         QString imagePath;
         QString cameraPath;
         bool hasCameraPath = false;
-        bool hasLoadedCamera = false;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
     };
 
     struct PhotogrammetryListOptions
@@ -34,7 +30,6 @@ namespace xjw::cli
         // 连接点匹配和无先验空三都允许列表里只有影像路径。
         // 旧的一键重建流程才强制要求 image + camera.tsai。
         bool allowImageOnlyRows = true;
-        bool loadCameras = false;
         bool requireExistingImages = true;
         bool requireExistingCameras = false;
     };
@@ -50,22 +45,22 @@ namespace xjw::cli
     QStringList cameraPathsForService(const std::vector<PhotogrammetryInputItem>& items);
     bool resolveProjectImageIds(const QJsonObject& projectFiles,
                                 const QStringList& images,
-                                std::vector<xjw::camera_core::ImageId>* imageIds,
+                                std::vector<placamera::ImageId>* imageIds,
                                 QString* errorMessage);
     bool buildReferenceCameraGeometries(const QJsonObject& projectFiles,
                                         const std::vector<PhotogrammetryInputItem>& items,
                                         const QStringList& images,
-                                        const std::vector<xjw::camera_core::ImageId>& imageIds,
-                                        xjw::camera_reference::ReferenceCameraGeometryMap* geometries,
+                                        const std::vector<placamera::ImageId>& imageIds,
+                                        bool useExternalReferenceCameras,
+                                        placamera::reference::ReferenceCameraGeometryMap* geometries,
                                         QString* errorMessage);
     bool readReferencePositionCsv(const QString& csvPath,
                                   const QJsonObject& projectFiles,
                                   const QStringList& images,
-                                  const std::vector<xjw::camera_core::ImageId>& imageIds,
-                                  xjw::camera_reference::ReferenceCameraPositionMap* positions,
+                                  const std::vector<placamera::ImageId>& imageIds,
+                                  placamera::reference::ReferenceCameraPositionMap* positions,
                                   QString* errorMessage);
 
-    QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
     QJsonArray inputItemsToJson(const std::vector<PhotogrammetryInputItem>& items);
     QJsonArray inputPairsToJson(const std::vector<PhotogrammetryInputItem>& items);
     QJsonObject projectMetaFromInputItems(const std::vector<PhotogrammetryInputItem>& items);

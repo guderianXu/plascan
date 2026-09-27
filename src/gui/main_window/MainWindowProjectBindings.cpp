@@ -39,11 +39,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <utility>
 
 #include "CanvasWidget.h"
 #include "ImageViewRotationSettings.h"
-#include "ProjectCameraIO.h"
+#include "project/ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "MainMenu.h"
@@ -84,6 +85,7 @@
 #include "TiePointWorkflowController.h"
 #include "ProjectTaskStatusController.h"
 #include "ProjectLifecyclePresenter.h"
+#include "ApplicationShutdownCoordinator.h"
 #include "TaskRuntimeService.h"
 #include "tie_points/ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
@@ -99,12 +101,53 @@
 
 void MainWindow::setupProjectManager()
 {
-    _projectData = new ProjectData(this);
+    _projectData = new ProjectData();
     auto* project_manager = new ProjectManager(_projectData, this);
+    _projectData->setParent(project_manager);
     _projectServices = &project_manager->services();
     _projectServices->setObjectName(QStringLiteral("ProjectServiceContainer"));
-    _projectServices->setParent(this);
     _taskRuntimeService = new xjw::gui::runtime::TaskRuntimeService(this);
+    xjw::gui::main_window::ApplicationShutdownCoordinator::Hooks shutdown_hooks;
+    shutdown_hooks.requestResourceCancellation = [this]
+    {
+        if (_projectServices)
+        {
+            _projectServices->resources().cancelActiveTask();
+        }
+    };
+    shutdown_hooks.projectOperationsIdle = [this]
+    {
+        return _projectServices && !_projectServices->cleanup().isRunning() &&
+               !_projectServices->resources().hasPendingWork() && !_projectServices->lifecycle().isBusy();
+    };
+    shutdown_hooks.tryAcquireShutdownGate = [this]
+    { return _projectServices && _projectServices->session().tryBeginOperation(QStringLiteral("退出应用")); };
+    shutdown_hooks.projectTaskDrainInProgress = [this]
+    { return _projectServices && _projectServices->tasks().isSessionDrainInProgress(); };
+    shutdown_hooks.startProjectTaskDrain = [this](std::function<void()> continuation)
+    { return _projectServices && _projectServices->tasks().cancelAndDrainForSessionChange(std::move(continuation)); };
+    shutdown_hooks.requestRuntimeShutdown = [this]
+    {
+        if (_taskRuntimeService)
+        {
+            _taskRuntimeService->shutdownAsync();
+        }
+    };
+    shutdown_hooks.runtimeShutdownComplete = [this]
+    { return !_taskRuntimeService || _taskRuntimeService->isShutdownComplete(); };
+    _shutdownCoordinator = new xjw::gui::main_window::ApplicationShutdownCoordinator(std::move(shutdown_hooks), this);
+    connect(_shutdownCoordinator,
+            &xjw::gui::main_window::ApplicationShutdownCoordinator::progressChanged,
+            this,
+            [this](const QString& message) { statusBar()->showMessage(message); });
+    connect(_shutdownCoordinator,
+            &xjw::gui::main_window::ApplicationShutdownCoordinator::readyToClose,
+            this,
+            [this]
+            {
+                _shutdownReadyToClose = true;
+                QMetaObject::invokeMethod(this, [this] { close(); }, Qt::QueuedConnection);
+            });
     _projectLifecyclePresenter = new ProjectLifecyclePresenter(
         &_projectServices->lifecycle(), &_projectServices->session(), this, statusBar(), this);
     connect(_projectLifecyclePresenter,

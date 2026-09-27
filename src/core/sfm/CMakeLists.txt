@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 project(plascan_sfm LANGUAGES CXX)
 
 set(SFM_CORE_SOURCES
-    geometry/ProjectionGeometry.cpp
     geometry/TriangulationQuality.cpp
     geometry/OpenCvCameraAdapter.cpp
     geometry/SimilarityGaugeNormalizer.cpp
@@ -28,6 +27,7 @@ set(SFM_CORE_SOURCES
     pipeline/ImageRegistrationEngine.cpp
     pipeline/IndependentBlockReconstructor.cpp
     pipeline/HierarchicalBaBlockSolver.cpp
+    pipeline/SfmBundleCameraCodec.cpp
     pipeline/HierarchicalBundleAdjuster.cpp
     pipeline/KnownPoseReconstructor.cpp
     pipeline/SfmBundleAdjustCoordinator.cpp
@@ -37,7 +37,6 @@ set(SFM_CORE_SOURCES
 set(SFM_CORE_HEADERS
     common/DisjointSet.h
     common/SfmTypes.h
-    geometry/ProjectionGeometry.h
     geometry/TriangulationQuality.h
     geometry/OpenCvCameraAdapter.h
     geometry/SimilarityGaugeNormalizer.h
@@ -63,6 +62,7 @@ set(SFM_CORE_HEADERS
     pipeline/ImageRegistrationEngine.h
     pipeline/IndependentBlockReconstructor.h
     pipeline/HierarchicalBaBlockSolver.h
+    pipeline/SfmBundleCameraCodec.h
     pipeline/HierarchicalBundleAdjuster.h
     pipeline/KnownPoseReconstructor.h
     pipeline/SfmBundleAdjustCoordinator.h
@@ -74,20 +74,15 @@ add_library(sfm_core STATIC ${SFM_CORE_SOURCES} ${SFM_CORE_HEADERS})
 target_include_directories(sfm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/../camera
-    ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
-    ${CMAKE_CURRENT_SOURCE_DIR}/../bundle_adjust
     ${CMAKE_CURRENT_SOURCE_DIR}/../control_points
     ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(sfm_core
     PUBLIC
-        camera
-        camera_reference_core
-        camera_models_frame_pinhole
-        intersection
-        bundle_adjust
+        placamera::reference
+        placamera::placamera
+        plabundle::plabundle
         control_network
     PRIVATE
         plapoint::plapoint
@@ -156,6 +151,7 @@ target_link_libraries(sfm_project
         sfm_core
         sfm_postprocess
         control_points
+        plascan::placamera_runtime
         Qt6::Core
     PRIVATE
         image_matching

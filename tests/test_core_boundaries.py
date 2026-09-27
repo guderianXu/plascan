@@ -157,20 +157,27 @@ class CoreBoundaryTest(unittest.TestCase):
         self.assertEqual(4, model_request.count("WorkflowControl execution;"))
 
     def test_removed_ba_solver_aliases_and_options_cannot_return(self):
-        types = (ROOT / "src/core/bundle_adjust/BundleAdjustTypes.h").read_text(encoding="utf-8")
-        self.assertNotIn("LegacyCpu", types)
-        options = (ROOT / "src/core/bundle_adjust/BundleAdjustOptions.h").read_text(encoding="utf-8")
+        old_module = ROOT / "src/core/bundle_adjust"
+        self.assertFalse(any(path.is_file() for path in old_module.rglob("*")))
+
+        backend = (ROOT / "3rdparty/plabundle/include/plabundle/backend.h").read_text(encoding="utf-8")
+        self.assertNotIn("LegacyCpu", backend)
+        options = (ROOT / "3rdparty/plabundle/include/plabundle/options.h").read_text(encoding="utf-8")
         for field in ("maxPointIterations", "maxCameraIterations", "huberDelta", "finiteDiffEps",
                       "damping", "stepTolerance", "maxDenseSchurCameras", "compareAutoBackendWithLegacy",
                       "kLegacyMinPlaMatrixGpuCameras", "kLegacyMinPlaMatrixGpuObservations"):
             self.assertNotIn(field, BOUNDARIES._sanitize_cpp(options, remove_literals=True))
         for path in ("src/cli/reconstruction/cli_bundle_adjust.cpp",
-                     "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp",
+                     "3rdparty/plabundle/benchmark/plabundle_benchmark.cpp",
                      "scripts/bench/run_ba_backend_benchmark.py"):
             self.assertNotIn("legacy_cpu", (ROOT / path).read_text(encoding="utf-8"), path)
-        driver = (ROOT / "src/core/bundle_adjust/BundleAdjust.cpp").read_text(encoding="utf-8")
+        driver = (ROOT / "3rdparty/plabundle/src/solver.cpp").read_text(encoding="utf-8")
         self.assertNotIn("comparedWithLegacy", driver)
         self.assertNotIn("runLegacy", driver)
+
+        self.assertFalse((ROOT / "src/core/plabundle_adapter").exists())
+        core_cmake = (ROOT / "src/core/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertNotIn("add_subdirectory(bundle_adjust)", core_cmake)
 
     def test_tsdf_only_accepts_the_shared_execution_control(self):
         header = (ROOT / "src/core/mesh/DepthTsdfSurfaceBuilder.h").read_text(encoding="utf-8")

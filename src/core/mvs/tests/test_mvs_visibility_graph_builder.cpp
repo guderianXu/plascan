@@ -241,10 +241,17 @@ TEST(MvsVisibilityGraphBuilderTest, OrbitalShortlistCoversLeftRightAndSafeAngles
             sine, 0.0, -cosine,
             -cosine, 0.0, -sine,
             0.0, 1.0, 0.0};
-        views[static_cast<std::size_t>(viewIndex)].camera.setPose(
-            cameraToWorld, {10.0 * cosine, 10.0 * sine, 0.0});
-        views[static_cast<std::size_t>(viewIndex)].camera.setIntrinsics(
-            500.0, 500.0, 500.0, 500.0);
+        const placamera::FrameId frame("visibility-test-world");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("visibility-test-definition"),
+            placamera::FrameIntrinsics{500.0, 500.0, 500.0, 500.0},
+            {}, placamera::PixelConvention::PixelCenter, frame);
+        views[static_cast<std::size_t>(viewIndex)].camera =
+            std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("visibility-instance-" + std::to_string(viewIndex)),
+                placamera::ImageId("visibility-image-" + std::to_string(viewIndex)), definition,
+                placamera::ImageSize{1000, 1000},
+                placamera::Pose::create(frame, {10.0 * cosine, 10.0 * sine, 0.0}, cameraToWorld)));
         views[static_cast<std::size_t>(viewIndex)].imageWidth = 1000;
         views[static_cast<std::size_t>(viewIndex)].imageHeight = 1000;
     }

@@ -109,7 +109,7 @@ doc.json
 
 ### Chunk 坐标上下文
 
-`chunk.coordinate_system` 使用独立 schema，权威值由 Qt-free `coordinate_system_json` 编解码。记录必须保存
+`chunk.coordinate_system` 使用独立 schema，权威值由 Qt-free `placoordinate::state` 编解码。记录必须保存
 完整 canonical WKT2，不能只保存 EPSG code 或 hash；CRS 与 solver 都通过稳定 frame ID 关联，禁止在不同
 记录中复制一份可独立漂移的 frame。当前 schema 1 的核心形状如下（WKT 已缩写）：
 
@@ -189,29 +189,49 @@ CRS/frame 不匹配以及伪造的米制 solver。未定尺度工程使用 `solv
 `project_files.camera_instances[]` 两个规范化集合中。`images[]` 只保存影像身份、路径和
 尺寸等影像元数据，不嵌入相机对象；出现 `images[*].camera` 或 `images[*].camera_file` 会使工程打开和保存校验失败，当前写入路径不会自动删除或迁移这些字段。
 
-定义描述可由多幅影像共享的模型与标定参数，实例描述一幅影像的尺寸、采集时刻和模型状态：
+定义描述可由多幅影像共享的模型、标定参数和传感器安装关系，实例描述一幅影像的尺寸、位姿、
+采集拓扑和滚动快门状态。当前记录直接保存 PlaCamera 的规范参数对象，避免 PlaScan 再维护一套同义字段：
 
 ```json
 {
   "camera_definitions": [
     {
       "id": "camdef-<stable-id>",
-      "model_type": "frame_pinhole",
-      "schema_version": 1,
+      "model_type": "frame_equidistant_fisheye",
+      "schema_version": 3,
       "frame": "project-world",
       "parameters": {
         "intrinsics": {
-          "fx_px": 7000.0,
-          "fy_px": 7000.0,
-          "cx_px": 3600.0,
-          "cy_px": 2400.0,
-          "pixel_pitch_mm": 0.005,
+          "focal_x": 7000.0,
+          "focal_y": 7000.0,
+          "principal_x": 3600.0,
+          "principal_y": 2400.0,
+          "pixel_pitch": 0.005,
           "u_axis_sign": 1,
-          "v_axis_sign": 1
+          "v_axis_sign": 1,
+          "skew": 0.0
         },
-        "distortion": {"k1": 0.0, "k2": 0.0, "k3": 0.0, "p1": 0.0, "p2": 0.0},
-        "pixel_convention": "center",
-        "depth_axis_flipped": false
+        "distortion": {
+          "radial_k1": 0.0,
+          "radial_k2": 0.0,
+          "radial_k3": 0.0,
+          "radial_k4": 0.0,
+          "tangential_p1": 0.0,
+          "tangential_p2": 0.0,
+          "tangential_p3": 0.0,
+          "tangential_p4": 0.0,
+          "tangential_convention": "metashape"
+        },
+        "pixel_convention": "pixel_center",
+        "depth_axis_flipped": false,
+        "projection_model": "frame_equidistant_fisheye",
+        "sensor_mount": {
+          "master_sensor_id": null,
+          "translation": [0.0, 0.0, 0.0],
+          "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+          "fixed_translation": true,
+          "fixed_rotation": true
+        }
       }
     }
   ],
@@ -220,14 +240,27 @@ CRS/frame 不匹配以及伪造的米制 solver。未定尺度工程使用 `solv
       "id": "caminst-<stable-id>",
       "image_uuid": "<image-uuid>",
       "definition_id": "camdef-<stable-id>",
-      "schema_version": 1,
+      "schema_version": 2,
       "image_size": {"samples": 4096, "lines": 3072},
       "pose": {
         "frame": "project-world",
         "center_m": [10.0, 20.0, 30.0],
         "camera_to_world_rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
       },
+      "acquisition": {
+        "role": "regular",
+        "capture_group_id": null,
+        "master_camera_id": null,
+        "layer_index": 0,
+        "rolling_shutter_mode": "disabled",
+        "rolling_shutter": {
+          "translation": [0.0, 0.0, 0.0],
+          "rotation_vector": [0.0, 0.0, 0.0]
+        },
+        "rolling_shutter_initialized": false
+      },
       "state": {
+        "capture_time": {"time_scale": "utc", "seconds": 0.0},
         "metadata": {
           "aligned": true,
           "solution": "adjusted"
@@ -238,63 +271,107 @@ CRS/frame 不匹配以及伪造的米制 solver。未定尺度工程使用 `solv
 }
 ```
 
-内置 `model_type` 使用字符串注册值：`frame_pinhole` 表示面阵针孔，`rpc00b` 表示 RPC00B，
+中心投影相机使用六个注册值：`frame_pinhole`、`frame_fisheye`、`frame_equidistant_fisheye`、
+`frame_equisolid_fisheye`、`frame_spherical` 和 `frame_cylindrical`。`rpc00b` 表示 RPC00B，
 `planetary_linescan` 表示带轨迹和逐行时间的推扫线阵。RPC 实例可提供投影、反投影和近似射线，
 但没有静态光心；推扫实例通过 `trajectory` 和 `line_timing` 描述每一行的姿轨，也没有静态位姿
 能力。需要固定光心的 SfM、BA 或 MVS 阶段必须在调用边界请求 `static_pose` 能力，缺失时报告
 具体影像 UUID 和模型类型，而不是构造一个临时相机中心。
 
-写入 `camera_definitions`/`camera_instances` 前，项目服务使用唯一的模型更新 DTO。模型名和值均区分
-大小写，不执行 trim、别名映射、单位猜测或缺省 frame/姿态补全：
+写入 `camera_definitions`/`camera_instances` 时，项目服务调用 PlaCamera 的状态 codec，并保留其
+`model_type`、schema 和规范对象。外部 COLMAP、Metashape、Middlebury、`.tsai`、RPC GeoTIFF 和
+USGSCSM ISD 先由 PlaCamera 导入为带单位和 frame 的相机对象，再绑定项目影像；外部格式字段不会直接写入工程。
 
-- `frame_pinhole`：必须显式提供 `world_frame`、`intrinsics_unit=mm`、
-  `camera_center_unit=m`、`pixel_convention=center`、`pitch`、`fu/fv/cu/cv`、`C` 和 `R`；影像尺寸
-  使用 `image_width/image_height`。不接受 `fx/fy/cx/cy`、px 内参或嵌套 `intrinsics` 作为更新输入。
-- `rpc00b`：必须使用 `world_frame=EPSG:4978`、`rpc_spec=RPC00B`、`ground_crs=EPSG:4979`、
-  `height_datum=WGS84_ellipsoidal` 和 `pixel_convention=opencv_zero_based_center`，并提供标准 RPC00B
-  偏移、尺度、四组 20 项系数及 `image_samples/image_lines`。
-- `planetary_linescan`：必须提供显式 `world_frame`、`pixel_convention`、`image_samples/image_lines`，
-  以及嵌套 `optics`、`trajectory`、`line_timing`；不接受扁平焦距、像元、轨迹数组或单一行频字段。
-
-`tsai`、`pinhole`、`rpc`、`pushbroom`、`line_scan` 和 `linescan` 不是项目模型标识。外部 `.tsai`、
-RPC GeoTIFF 和 USGSCSM ISD 只能通过各自导入器生成上述 DTO，不能把外部格式字段直接写进工程。
-
-模型参数使用各模型自己的规范对象：面阵针孔使用 `intrinsics`、`distortion` 和显式像素约定，
+模型参数使用各模型自己的规范对象：中心投影相机使用 `intrinsics`、`distortion`、投影类型和显式像素约定，
 RPC00B 使用偏移、尺度和四组 20 项有理多项式系数，推扫使用 `optics`。只属于单幅影像的
 导入来源、对齐状态或解算方案放在对应实例的 `state.metadata`，不会混入可共享的定义。
 
-定义版本按模型独立演进：`frame_pinhole` 与 `rpc00b` 当前为参数 schema 1，
-`planetary_linescan` 为参数 schema 2；实例外层记录当前仍为 schema 1。内置模型版本必须与注册表
-声明完全一致。线阵 schema 1 及旧数组式轨迹不会转换或兼容读取。
+定义版本按模型独立演进：六种中心投影相机当前为参数 schema 4、实例 schema 2；`rpc00b` 为参数
+schema 1、实例 schema 2；`planetary_linescan` 为参数 schema 3、实例 schema 2。读取器仍接受旧版
+`frame_pinhole` 参数 schema 1/2、全部中心投影参数 schema 3、线阵参数 schema 2，以及中心投影、RPC 和
+线阵实例 schema 1；再次写入时统一升级到各模型当前版本。中心投影 schema 4 保存可选的精确
+`image_center + cx_offset/cy_offset` 分解。RPC schema 1 的六参数改正明确迁移为
+`affine_normalized_v1`。线阵实例 schema 1 的直接姿态采样迁移为全部结点固定且没有时间偏移先验。
+更早的数组式轨迹仍不会转换或兼容读取。
+
+读取规范工程相机记录时，中心投影相机的 `pose.frame` 必须与定义的 `frame` 一致；当前
+`pixel_convention` 只接受 `pixel_center` 或 `pixel_corner`，旧 schema 1 接受 `center` 或 `corner`。
+RPC 定义必须声明 `rpc_spec=RPC00B`。
+RPC 的 `ground_crs=EPSG:4979` 与 `height_datum=WGS84_ellipsoidal` 只适用于
+`frame=EPSG:4978` 且椭球参数为 WGS84 的定义。其它椭球只保存显式半长轴和扁率倒数，
+不标成 WGS84。更新已有相机实例时不得改写影像尺寸。
+
+RPC 实例 schema 2 的 `state.image_correction.model` 是必需判别字段。归一化影像域使用
+`affine_normalized_v1`，自变量为未改正 RPC 像点相对 offset/scale 的归一化 sample/line；物理地面域使用
+`affine_ground_coordinates_v1`，自变量为相对 RPC 归一化中心的经度差（度）、纬度差（度）和高程差（米）。
+两类 payload 字段不可混用，也不会隐式换算：
+
+```json
+{
+  "image_correction": {
+    "model": "affine_ground_coordinates_v1",
+    "sample_offset_px": 0.25,
+    "line_offset_px": -0.5,
+    "sample_longitude_px_per_degree": 0.01,
+    "sample_latitude_px_per_degree": 0.0,
+    "sample_height_px_per_m": 0.0,
+    "line_longitude_px_per_degree": 0.0,
+    "line_latitude_px_per_degree": -0.02,
+    "line_height_px_per_m": 0.0
+  }
+}
+```
 
 空三/BA 相机标定报告的 `camera_comparison[]` 只保存 `initial_camera` 和 `adjusted_camera` 完整快照。
 旧的 `fu_before`、`fu_after`、`k1_before`、`k1_after` 等扁平镜像字段不再写入或读取。
 只有诊断对象显式写出 `adaptive_camera_model_fitting_applied=true` 时，报告才会列出实际优化的内参；
 不会根据 `refined` 状态或旧诊断字段推断该结果。
 
-线阵 schema 2 的定义必须显式选择畸变和探元映射。`sample_geometry.type` 只接受
-`uniform_pitch` 或 `detector_affine`：
+线阵参数 schema 3 直接保存 PlaCamera 光学参数、可选探元仿射和可选完整 Metashape 标定。
+完整标定使用零基像素坐标；`pixel_center` 在公开边界施加半像素转换。旧 schema 2 的
+`sample_geometry.type`（`uniform_pitch` 或 `detector_affine`）仍可读取，但再次写入时使用下列结构：
 
 ```json
 {
   "model_type": "planetary_linescan",
-  "schema_version": 2,
+  "schema_version": 3,
   "frame": "MOON_ME",
   "parameters": {
     "optics": {
       "focal_length_mm": 700.0,
+      "sample_pitch_mm": 0.01,
+      "principal_sample": 512.0,
       "distortion_model": "lro_nac_focal_plane",
       "distortion_k1": 0.001,
-      "sample_geometry": {
-        "type": "detector_affine",
-        "detector_sample_summing": 1.0,
-        "detector_line_summing": 1.0,
-        "detector_sample_origin": 512.0,
-        "detector_line_origin": 0.0,
-        "starting_detector_sample": 0.0,
-        "starting_detector_line": 0.0,
+      "detector_geometry": {
+        "sample_summing": 1.0,
+        "line_summing": 1.0,
+        "sample_origin": 512.0,
+        "line_origin": 0.0,
+        "starting_sample": 0.0,
+        "starting_line": 0.0,
         "focal_to_pixel_samples": [0.0, 0.0, 1.0],
         "focal_to_pixel_lines": [0.0, 1.0, 0.0]
+      },
+      "complete_calibration": {
+        "f": 980.0,
+        "cx": 512.25,
+        "cy": 384.75,
+        "b1": 3.0,
+        "b2": -0.4,
+        "k1": 0.01,
+        "k2": -0.001,
+        "k3": 0.0002,
+        "k4": -0.00003,
+        "p1": 0.0005,
+        "p2": -0.0004,
+        "p3": 0.00007,
+        "p4": -0.000005,
+        "principal_point_decomposition": {
+          "image_center": [400.0, 300.0],
+          "cx_offset": 112.25,
+          "cy_offset": 84.75
+        }
       }
     },
     "pixel_convention": "pixel_center"
@@ -306,7 +383,10 @@ RPC00B 使用偏移、尺度和四组 20 项有理多项式系数，推扫使用
 `direct_pose_samples` 时保存世界系姿态采样；为 `frame_composed` 时分别保存惯性系位置/速度、
 惯性到世界的姿态表和惯性到传感器的姿态表。`line_timing` 始终保存 `segments[]`，每段包含
 `start_line`、`start_time_seconds` 和正的 `seconds_per_line`。恒定行频也使用一个分段记录，
-不再另设标量格式。
+不再另设标量格式。schema 2 的每个直接姿态采样还必须保存 `constraints`：位置和旋转分别声明
+`position_fixed`/`rotation_fixed`，可选 `position_sigma_m`/`rotation_sigma_rad` 为三轴先验标准差。
+`state.time_offset_prior` 为 `null` 或含 `mean_seconds`、正 `sigma_seconds` 的对象。组合坐标系轨迹可投影和
+持久化，但不提供直接逐结点求解参数。
 
 外部 GNSS/IMU/POS 参考观测使用独立的 `camera_reference_set.json`，通过 `image_uuid` 关联
 相机实例。参考记录先经过坐标框架、姿态约定、时间尺度和杆臂方向解析，再由比较器与提供

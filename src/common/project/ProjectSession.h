@@ -2,13 +2,15 @@
 
 #include "project/ProjectChunkIndex.h"
 #include "project/ProjectLock.h"
-#include "camera/project/CameraInstanceUpdate.h"
+
+#include <placamera/instance_set.h>
 
 #include <QJsonObject>
 #include <QMap>
 #include <QString>
 
 #include <memory>
+#include <vector>
 
 namespace xjw::common::project
 {
@@ -43,12 +45,16 @@ namespace xjw::common::project
 
         // 合并输入影像。已有影像及其相机字段会保留；新影像自动获得稳定 UUID。
         bool mergeImages(const QJsonArray& images, QString* errorMessage = nullptr);
-        bool updateCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
-                                   int* updatedCount = nullptr,
-                                   QString* errorMessage = nullptr);
-        bool updateCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
-                                       int* updatedCount = nullptr,
-                                       QString* errorMessage = nullptr);
+        bool upsertNativeCameraInstances(const placamera::CameraInstanceSet& instances,
+                                         const QMap<QString, QJsonObject>& annotationsByImageId = {},
+                                         int* writtenCount = nullptr,
+                                         QString* errorMessage = nullptr);
+        bool replaceNativeCameraInstances(const std::vector<placamera::ImageId>& targetImageIds,
+                                          const placamera::CameraInstanceSet& instances,
+                                          const QMap<QString, QJsonObject>& annotationsByImageId = {},
+                                          int* writtenCount = nullptr,
+                                          int* clearedCount = nullptr,
+                                          QString* errorMessage = nullptr);
         void appendResult(const QString& arrayKey, const QJsonObject& record);
         void upsertResultByPath(const QString& arrayKey, const QString& pathKey, const QJsonObject& record);
 

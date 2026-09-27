@@ -39,8 +39,6 @@ namespace xjw::common::project
     // Returns the normalized model adapter metadata for an image. Camera model
     // parameters live in camera_definitions/camera_instances; callers should use
     // this accessor instead of reading a camera object embedded in images[].
-    QJsonObject projectCameraModelParameters(const QJsonObject& metadata, const QJsonObject& image);
-    QJsonObject projectCameraModelParametersForPath(const QJsonObject& metadata, const QString& image_path);
 
     ImageResolveResult resolveProjectImageToken(const QString& token, const QJsonObject& metadata);
     ImageResolveResult resolveProjectImageToken(const QString& token, const QStringList& project_image_paths);

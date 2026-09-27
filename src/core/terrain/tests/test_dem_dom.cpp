@@ -5,11 +5,12 @@
 #include "DomGenerator.h"
 #include "ObjMtlLoader.h"
 #include "TerrainPipeline.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <string>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -43,7 +44,7 @@ protected:
 
     PlaPointCloud makePlaneCloud() const
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(4, 3);
+        plamatrix::MatrixXf pts(4, 3);
         pts(0, 0) = 0.0f; pts(0, 1) = 0.0f; pts(0, 2) = 10.0f;
         pts(1, 0) = 1.0f; pts(1, 1) = 0.0f; pts(1, 2) = 11.0f;
         pts(2, 0) = 0.0f; pts(2, 1) = 1.0f; pts(2, 2) = 12.0f;
@@ -54,7 +55,7 @@ protected:
     PlaPointCloud makeColoredPlaneCloud() const
     {
         PlaPointCloud cloud = makePlaneCloud();
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(4, 3);
+        plamatrix::Matrix<uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(4, 3);
         colors(0, 0) = 51; colors(0, 1) = 51; colors(0, 2) = 51;
         colors(1, 0) = 87; colors(1, 1) = 87; colors(1, 2) = 87;
         colors(2, 0) = 86; colors(2, 1) = 86; colors(2, 2) = 86;
@@ -235,17 +236,24 @@ protected:
         return stdDev[0] * stdDev[0];
     }
 
-    static xjw::camera_models::frame_pinhole::FramePinholeNumericState makeDepthDemCamera(double tx)
+    static placamera::FramePinholeModel
+    makeDepthDemCamera(double tx, const std::string& frame_id = "terrain-depth-frame", bool depth_axis_flipped = false)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(16.0, 16.0, 4.0, 4.0);
-        const std::array<double, 9> rotation{
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0};
-        const std::array<double, 3> center{tx, 0.0, 0.0};
-        camera.setPose(rotation, center);
-        return camera;
+        const placamera::FrameId frame(frame_id);
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("depth-dem-definition:" + frame_id),
+                                                      {16.0, 16.0, 4.0, 4.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame,
+                                                      depth_axis_flipped);
+        const std::string identity = std::to_string(tx);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("depth-dem-instance:" + identity),
+            placamera::ImageId("depth-dem-image:" + identity),
+            definition,
+            {8, 8},
+            placamera::Pose::create(frame, {tx, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
     }
 
 protected:
@@ -358,7 +366,7 @@ TEST_F(TerrainDemDomTest, TerrainPipelineWritesVertexColorsFromIntensityPly)
 
 TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(3, 3);
+    plamatrix::MatrixXf pts(3, 3);
     pts(0, 0) = 0.0f; pts(0, 1) = 0.0f; pts(0, 2) = 1.0f;
     pts(1, 0) = 2.0f; pts(1, 1) = 2.0f; pts(1, 2) = 1.0f;
     pts(2, 0) = 0.9f; pts(2, 1) = 0.9f; pts(2, 2) = 10.0f;
@@ -396,7 +404,7 @@ TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
 
 TEST_F(TerrainDemDomTest, DemGeneratorSkipsPointsOutsideRobustBoundsAndNonFiniteValues)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(202, 3);
+    plamatrix::MatrixXf pts(202, 3);
     for (int i = 0; i < 200; ++i)
     {
         pts(i, 0) = 5.0f;
@@ -589,26 +597,59 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDomFromDemAndImages)
 
 TEST_F(TerrainDemDomTest, TerrainPipelineDepthDemWritesQualityProductPaths)
 {
-    std::vector<cv::Mat> depthMaps{
-        cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f)),
-        cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeDepthDemCamera(0.0),
-                                                                                     makeDepthDemCamera(0.05)};
+    std::vector<cv::Mat> depthMaps{cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f)),
+                                   cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
+    std::vector<placamera::FramePinholeModel> cameras{makeDepthDemCamera(0.0), makeDepthDemCamera(0.05)};
 
     const fs::path outputDir = _tempDir / "depth_dem_quality_output";
 
     QJsonObject result;
     QString error;
-    ASSERT_TRUE(TerrainPipeline::generateDemFromDepthMaps(depthMaps,
-                                                          cameras,
-                                                          QString::fromStdString(outputDir.string()),
-                                                          &result,
-                                                          &error))
+    ASSERT_TRUE(TerrainPipeline::generateDemFromDepthMaps(
+        depthMaps, cameras, QString::fromStdString(outputDir.string()), &result, &error))
         << error.toStdString();
 
     const QString errorPath = result.value(QStringLiteral("error_path")).toString();
     ASSERT_FALSE(errorPath.isEmpty());
     EXPECT_TRUE(fs::exists(errorPath.toStdString())) << errorPath.toStdString();
+}
+
+TEST_F(TerrainDemDomTest, DepthDemRejectsMismatchedCameraFrame)
+{
+    const std::vector<cv::Mat> depthMaps{cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f)),
+                                         cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
+    const std::vector<placamera::FramePinholeModel> cameras{makeDepthDemCamera(0.0),
+                                                            makeDepthDemCamera(0.05, "other-terrain-frame")};
+
+    DemGridData grid;
+    QString error;
+    EXPECT_FALSE(DemGenerator::generateFromDepthMaps(depthMaps, cameras, {}, &grid, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("世界坐标系"))) << error.toStdString();
+}
+
+TEST_F(TerrainDemDomTest, DepthDemRejectsMismatchedImageSize)
+{
+    const std::vector<cv::Mat> depthMaps{cv::Mat(7, 8, CV_32FC1, cv::Scalar(10.0f))};
+    const std::vector<placamera::FramePinholeModel> cameras{makeDepthDemCamera(0.0)};
+
+    DemGridData grid;
+    QString error;
+    EXPECT_FALSE(DemGenerator::generateFromDepthMaps(depthMaps, cameras, {}, &grid, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("尺寸"))) << error.toStdString();
+}
+
+TEST_F(TerrainDemDomTest, DepthDemPreservesPlaCameraDepthAxis)
+{
+    const std::vector<cv::Mat> depthMaps{cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
+    const std::vector<placamera::FramePinholeModel> cameras{makeDepthDemCamera(0.0, "terrain-depth-frame", true)};
+
+    DemGridData grid;
+    QString error;
+    ASSERT_TRUE(DemGenerator::generateFromDepthMaps(depthMaps, cameras, {}, &grid, &error)) << error.toStdString();
+    EXPECT_EQ(grid.validMask.at<uchar>(4, 4), 255);
+    EXPECT_NEAR(grid.worldX.at<float>(4, 4), 0.0f, 1e-6f);
+    EXPECT_NEAR(grid.worldY.at<float>(4, 4), 0.0f, 1e-6f);
+    EXPECT_NEAR(grid.elevation.at<float>(4, 4), -10.0f, 1e-6f);
 }
 
 // ===========================================================================

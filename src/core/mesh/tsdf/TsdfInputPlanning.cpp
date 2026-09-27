@@ -23,6 +23,21 @@ namespace xjw::mesh
             result.errorMessage = QStringLiteral("TSDF bounds require at least 1 primary depth frame");
             return result;
         }
+        const placamera::FrameId* ground_frame = nullptr;
+        for (const DepthTsdfFrame& frame : frames)
+        {
+            if (!frame.camera)
+            {
+                continue;
+            }
+            if (ground_frame != nullptr && frame.camera->groundFrame() != *ground_frame)
+            {
+                result.errorMessage = QStringLiteral("TSDF bounds input frame %1 has a different ground frame")
+                                          .arg(frame.refIndex);
+                return result;
+            }
+            ground_frame = &frame.camera->groundFrame();
+        }
 
         std::array<std::vector<float>, 3> candidate_coordinates;
         std::array<std::vector<float>, 3> trusted_coordinates;
@@ -32,7 +47,7 @@ namespace xjw::mesh
         std::array<std::vector<float>, 3> trusted_frame_highs;
         for (const DepthTsdfFrame& frame : frames)
         {
-            if (frame.auxiliarySurfaceOnly || !frame.camera.isValid() || frame.depth.type() != CV_32FC1 ||
+            if (frame.auxiliarySurfaceOnly || !frame.camera || frame.depth.type() != CV_32FC1 ||
                 frame.depthValidMask.type() != CV_8UC1 || frame.depthValidMask.size() != frame.depth.size() ||
                 frame.supportMask.type() != CV_8UC1 || frame.supportMask.size() != frame.depth.size())
             {
@@ -61,13 +76,13 @@ namespace xjw::mesh
                     {
                         continue;
                     }
-                    const double pixel[2] = {static_cast<double>(column), static_cast<double>(row)};
-                    double world[3] = {};
-                    if (!frame.camera.unprojectPixel(pixel, depth, world) || !std::isfinite(world[0]) ||
-                        !std::isfinite(world[1]) || !std::isfinite(world[2]))
+                    const auto ground = frame.camera->imageToGroundAtDepth(
+                        {static_cast<double>(column), static_cast<double>(row)}, depth);
+                    if (!ground)
                     {
                         continue;
                     }
+                    const auto& world = ground.value().position;
                     const bool trusted = has_geometry_evidence &&
                                          frame.geometrySupportCount.at<std::uint16_t>(row, column) >= 2 &&
                                          (!has_adaptive_evidence ||

@@ -456,11 +456,11 @@ namespace
     {
         auto cloud = std::make_shared<SceneRenderCloud>(
             makePointCloud({QVector3D(0.0f, 0.0f, 1.0f), QVector3D(1.0f, 0.0f, 2.0f), QVector3D(2.0f, 0.0f, 3.0f)}));
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(3, 3);
-        plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> intensities(3, 1);
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> scalars(3, 1);
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture(3, 2);
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(3, 3);
+        plamatrix::MatrixXf normals(3, 3);
+        plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic> intensities(3, 1);
+        plamatrix::MatrixXf scalars(3, 1);
+        plamatrix::MatrixXf texture(3, 2);
         for (int row = 0; row < 3; ++row)
         {
             for (int column = 0; column < 3; ++column)
@@ -490,11 +490,11 @@ namespace
         ASSERT_TRUE(restored.cloud->hasIntensities());
         ASSERT_TRUE(restored.cloud->hasScalarField("quality"));
         ASSERT_TRUE(restored.cloud->hasPointAlignedTextureCoords());
-        EXPECT_EQ(restored.cloud->colors()->getValue(1, 2), 12);
-        EXPECT_FLOAT_EQ(restored.cloud->normals()->getValue(1, 1), 4.0f);
-        EXPECT_EQ(restored.cloud->intensities()->getValue(1, 0), 101);
-        EXPECT_FLOAT_EQ(restored.cloud->scalarFields()->getValue(1, 0), 21.0f);
-        EXPECT_FLOAT_EQ(restored.cloud->textureCoords()->getValue(1, 1), 0.5f);
+        EXPECT_EQ(restored.cloud->colors()->coeff(1, 2), 12);
+        EXPECT_FLOAT_EQ(restored.cloud->normals()->coeff(1, 1), 4.0f);
+        EXPECT_EQ(restored.cloud->intensities()->coeff(1, 0), 101);
+        EXPECT_FLOAT_EQ(restored.cloud->scalarFields()->coeff(1, 0), 21.0f);
+        EXPECT_FLOAT_EQ(restored.cloud->textureCoords()->coeff(1, 1), 0.5f);
         EXPECT_EQ(restored.cloud->materialLibraryFile(), "material.mtl");
         EXPECT_EQ(restored.cloud->textureImageFile(), "texture.png");
     }

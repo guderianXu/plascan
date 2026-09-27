@@ -239,22 +239,23 @@ namespace xjw
         {
             MatchPhotosResult result;
             MatchPhotosContext runtimeContext = context;
-            std::string referenceError;
-            if (!camera_reference::validateReferenceCameraInputs(runtimeContext.imageIds,
-                                                                 static_cast<std::size_t>(runtimeContext.pairInput.images.size()),
-                                                                 runtimeContext.referenceCameraGeometries,
-                                                                 runtimeContext.referencePositions,
-                                                                 &referenceError))
+            const auto referenceValidation = placamera::reference::validateReferenceCameraInputs(
+                runtimeContext.imageIds,
+                static_cast<std::size_t>(runtimeContext.pairInput.images.size()),
+                runtimeContext.referenceCameraGeometries,
+                runtimeContext.referencePositions);
+            if (!referenceValidation)
             {
-                result.errorMessage = QStringLiteral("参考几何输入无效：%1").arg(QString::fromStdString(referenceError));
+                result.errorMessage = QStringLiteral("参考几何输入无效：%1")
+                                          .arg(QString::fromStdString(referenceValidation.message()));
                 return result;
             }
-            if (!camera_reference::commonReferenceWorldFrame(
-                    runtimeContext.referenceCameraGeometries, runtimeContext.referencePositions, &referenceError) &&
-                (!runtimeContext.referenceCameraGeometries.empty() || !runtimeContext.referencePositions.empty()))
+            const auto commonFrame = placamera::reference::commonReferenceWorldFrame(
+                runtimeContext.referenceCameraGeometries, runtimeContext.referencePositions);
+            if (!commonFrame)
             {
                 result.errorMessage = QStringLiteral("参考几何坐标系无效：%1")
-                                          .arg(QString::fromStdString(referenceError));
+                                          .arg(QString::fromStdString(commonFrame.message()));
                 return result;
             }
             if (!runtimeContext.featureCache)

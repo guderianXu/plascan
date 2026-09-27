@@ -1,12 +1,12 @@
 #include "reconstruction/SfmAttemptRunner.h"
 #include "reconstruction/MarkerPriorLoader.h"
 #include "reconstruction/SfmReconstruction.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include "placamera/reference/CameraReferencePosePrior.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "coordinate_system/context/CoordinateContext.h"
-#include "coordinate_system/gdal/GdalCoordinateTransform.h"
-#include "ProjectCameraIO.h"
+#include <placamera/frame_numeric_state.h>
+#include <placoordinate/context/CoordinateContext.h>
+#include <placoordinate/gdal/GdalCoordinateTransform.h>
+#include <placamera/tsai.h>
 #include "io/ImageIO.h"
 #include "io/MarkerSetStore.h"
 
@@ -26,11 +26,29 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace
 {
+
+    placamera::FramePinholeNumericState makeProjectionCamera(const std::string& image_id, double center_x)
+    {
+        const placamera::FrameId frame("sfm-test-world");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("projection-definition-" + image_id),
+            {700.0, 700.0, 320.0, 240.0, 1.0, 1, 1},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return placamera::FramePinholeNumericState::fromModel(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("projection-instance-" + image_id),
+            placamera::ImageId(image_id),
+            definition,
+            {640, 480},
+            placamera::Pose::create(frame, {center_x, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+    }
 
     void writeJson(const QString& path, const QJsonObject& object)
     {
@@ -39,9 +57,9 @@ namespace
         file.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
     }
 
-    xjw::coordinate_system::CoordinateContext makeEarthContext()
+    placoordinate::CoordinateContext makeEarthContext()
     {
-        using namespace xjw::coordinate_system;
+        using namespace placoordinate;
         const auto normalize =
             [](const char* id, const char* frameId, const char* definition, VerticalReference verticalReference)
         {
@@ -72,8 +90,8 @@ namespace
 
     QJsonObject makeKnownPoseTiePoints(const QString& imageA,
                                        const QString& imageB,
-                                       const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraA,
-                                       const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraB)
+                                       const placamera::FramePinholeNumericState& cameraA,
+                                       const placamera::FramePinholeNumericState& cameraB)
     {
         QJsonArray tracks;
         int featureIndex = 0;
@@ -82,10 +100,12 @@ namespace
             for (int column = -3; column <= 3; ++column)
             {
                 const std::array<double, 3> point{column * 0.18, row * 0.16, 5.0 + 0.08 * ((column + row + 8) % 3)};
-                double pixelA[2]{};
-                double pixelB[2]{};
-                EXPECT_TRUE(cameraA.projectWorldPoint(point.data(), pixelA));
-                EXPECT_TRUE(cameraB.projectWorldPoint(point.data(), pixelB));
+                const auto projection_a = cameraA.groundToImage({cameraA.groundFrame(), point});
+                const auto projection_b = cameraB.groundToImage({cameraB.groundFrame(), point});
+                EXPECT_TRUE(projection_a);
+                EXPECT_TRUE(projection_b);
+                const double pixelA[2]{projection_a.value().image.sample, projection_a.value().image.line};
+                const double pixelB[2]{projection_b.value().image.sample, projection_b.value().image.line};
 
                 tracks.append(QJsonObject{
                     {QStringLiteral("confidence"), 1.0},
@@ -281,9 +301,9 @@ TEST(SfmAttemptRunnerTest, RejectsIncompleteExplicitCameraBindingsBeforeReadingI
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
     input.cameraBindings = {
-        {xjw::camera_core::CameraInstanceId("instance-a"),
-         xjw::camera_core::ImageId("image-a"),
-         xjw::coordinate_system::CoordinateFrameId("world")},
+        {placamera::CameraInstanceId("instance-a"),
+         placamera::ImageId("image-a"),
+         placoordinate::CoordinateFrameId("world")},
     };
 
     const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
@@ -296,21 +316,20 @@ TEST(SfmAttemptRunnerTest, RejectsExternalPoseReferencesWithoutCameraBindingsWit
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("a.png")};
 
-    xjw::camera_reference::CameraReferenceObservation observation{xjw::camera_core::ImageId("image-a"),
-                                                                  xjw::camera_core::ReferenceSourceId("gnss"),
-                                                                  xjw::coordinate_system::CoordinateFrameId("world")};
-    xjw::camera_reference::ResolvedCameraReference resolved;
-    resolved.status = xjw::camera_reference::ReferenceResolutionStatus::Resolved;
-    resolved.targetFrame = xjw::coordinate_system::CoordinateFrameId("world");
-    resolved.pose =
-        xjw::camera_core::Pose::create(xjw::coordinate_system::CoordinateFrameId("world"),
-                                       {0.0, 0.0, 0.0},
-                                       xjw::camera_core::Rotation{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}});
+    placamera::reference::CameraReferenceObservation observation{placamera::ImageId("image-a"),
+                                                                 placamera::reference::ReferenceSourceId("gnss"),
+                                                                 placoordinate::CoordinateFrameId("world")};
+    placamera::reference::ResolvedCameraReference resolved;
+    resolved.status = placamera::reference::ReferenceResolutionStatus::Resolved;
+    resolved.targetFrame = placoordinate::CoordinateFrameId("world");
+    resolved.pose = placamera::Pose::create(placoordinate::CoordinateFrameId("world"),
+                                            {0.0, 0.0, 0.0},
+                                            placamera::RotationMatrix{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}});
     resolved.transformProvenanceHash = "provenance-hash";
     resolved.transformHash = "transform-hash";
-    const auto priorResult = xjw::camera_reference::makeResolvedCameraPosePrior(observation, resolved);
-    ASSERT_TRUE(priorResult.ok()) << priorResult.reason;
-    input.cameraReferencePosePriors.push_back(*priorResult.prior);
+    const auto priorResult = placamera::reference::makeResolvedCameraPosePrior(observation, resolved);
+    ASSERT_TRUE(priorResult) << priorResult.message();
+    input.cameraReferencePosePriors.push_back(priorResult.value());
 
     const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
     EXPECT_FALSE(result.result.success);
@@ -320,17 +339,28 @@ TEST(SfmAttemptRunnerTest, RejectsExternalPoseReferencesWithoutCameraBindingsWit
     EXPECT_EQ(result.result.summary, result.result.errorMessage);
 }
 
+TEST(SfmAttemptRunnerTest, RejectsUnboundEstimatedCameraBeforeReadingInputs)
+{
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    input.images = {QStringLiteral("unbound-image.png")};
+
+    const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
+    EXPECT_FALSE(result.result.success);
+    EXPECT_TRUE(result.result.errorMessage.contains(QStringLiteral("canonical cameraBindings")))
+        << qPrintable(result.result.errorMessage);
+}
+
 TEST(SfmAttemptRunnerTest, RejectsDuplicateExplicitCameraBindings)
 {
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
     input.cameraBindings = {
-        {xjw::camera_core::CameraInstanceId("instance-a"),
-         xjw::camera_core::ImageId("image-a"),
-         xjw::coordinate_system::CoordinateFrameId("world")},
-        {xjw::camera_core::CameraInstanceId("instance-a"),
-         xjw::camera_core::ImageId("image-b"),
-         xjw::coordinate_system::CoordinateFrameId("world")},
+        {placamera::CameraInstanceId("instance-a"),
+         placamera::ImageId("image-a"),
+         placoordinate::CoordinateFrameId("world")},
+        {placamera::CameraInstanceId("instance-a"),
+         placamera::ImageId("image-b"),
+         placoordinate::CoordinateFrameId("world")},
     };
 
     const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
@@ -342,14 +372,14 @@ TEST(SfmAttemptRunnerTest, RejectsCameraBindingOrderThatDisagreesWithImageIds)
 {
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
-    input.imageIds = {xjw::camera_core::ImageId("image-a"), xjw::camera_core::ImageId("image-b")};
+    input.imageIds = {placamera::ImageId("image-a"), placamera::ImageId("image-b")};
     input.cameraBindings = {
-        {xjw::camera_core::CameraInstanceId("instance-a"),
-         xjw::camera_core::ImageId("image-b"),
-         xjw::coordinate_system::CoordinateFrameId("world")},
-        {xjw::camera_core::CameraInstanceId("instance-b"),
-         xjw::camera_core::ImageId("image-a"),
-         xjw::coordinate_system::CoordinateFrameId("world")},
+        {placamera::CameraInstanceId("instance-a"),
+         placamera::ImageId("image-b"),
+         placoordinate::CoordinateFrameId("world")},
+        {placamera::CameraInstanceId("instance-b"),
+         placamera::ImageId("image-a"),
+         placoordinate::CoordinateFrameId("world")},
     };
 
     const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
@@ -363,12 +393,12 @@ TEST(SfmAttemptRunnerTest, RejectsExplicitBindingThatDisagreesWithCanonicalProje
     input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
     input.projectMeta = makeCanonicalPinholeProject(input.images.at(0), input.images.at(1));
     input.cameraBindings = {
-        {xjw::camera_core::CameraInstanceId("wrong-instance-a"),
-         xjw::camera_core::ImageId("image-a-uuid"),
-         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
-        {xjw::camera_core::CameraInstanceId("canonical-instance-b"),
-         xjw::camera_core::ImageId("image-b-uuid"),
-         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+        {placamera::CameraInstanceId("wrong-instance-a"),
+         placamera::ImageId("image-a-uuid"),
+         placoordinate::CoordinateFrameId("sfm-test-world")},
+        {placamera::CameraInstanceId("canonical-instance-b"),
+         placamera::ImageId("image-b-uuid"),
+         placoordinate::CoordinateFrameId("sfm-test-world")},
     };
 
     const auto result = xjw::aerial_triangulation::SfmAttemptRunner().run(input);
@@ -381,7 +411,7 @@ TEST(SfmAttemptRunnerTest, RejectsCanonicalRpcBeforeStaticSfMNumericFallback)
 {
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("a.png"), QStringLiteral("b.png")};
-    input.imageIds = {xjw::camera_core::ImageId("image-a-uuid"), xjw::camera_core::ImageId("image-b-uuid")};
+    input.imageIds = {placamera::ImageId("image-a-uuid"), placamera::ImageId("image-b-uuid")};
     input.projectMeta = makeCanonicalRpcProject(input.images.at(0), input.images.at(1));
     input.preparedTiePointGraph = std::make_shared<const xjw::aerial_triangulation::PreparedTiePointGraph>();
 
@@ -395,7 +425,7 @@ TEST(SfmAttemptRunnerTest, RejectsAmbiguousCanonicalImagePathBeforeCameraSelecti
 {
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {QStringLiteral("same.png")};
-    input.imageIds = {xjw::camera_core::ImageId("image-b-uuid")};
+    input.imageIds = {placamera::ImageId("image-b-uuid")};
     input.projectMeta = makeCanonicalPinholeProject(QStringLiteral("same.png"), QStringLiteral("same.png"));
     input.preparedTiePointGraph = std::make_shared<const xjw::aerial_triangulation::PreparedTiePointGraph>();
 
@@ -714,7 +744,7 @@ TEST(SfmAttemptRunnerTest, ResolvesGeographicMarkerReferenceWithCoordinateContex
     ASSERT_TRUE(saved.ok) << qPrintable(saved.error);
 
     const QMap<QString, xjw::ImageId> imageIds{{QStringLiteral("image-a"), 5}, {QStringLiteral("image-b"), 8}};
-    const xjw::coordinate_system::CoordinateContext context = makeEarthContext();
+    const placoordinate::CoordinateContext context = makeEarthContext();
     const xjw::aerial_triangulation::MarkerPriorLoadResult loaded =
         xjw::aerial_triangulation::MarkerPriorLoader::load(markerPath, QJsonObject(), imageIds, &context);
 
@@ -776,17 +806,28 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     ASSERT_TRUE(xjw::common::io::writeImage(imageA, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
     ASSERT_TRUE(xjw::common::io::writeImage(imageB, cv::Mat(480, 640, CV_8UC1, cv::Scalar(127))));
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraA;
-    cameraA.setIntrinsics(700.0, 700.0, 320.0, 240.0);
-    cameraA.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {-0.5, 0.0, 0.0});
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraB;
-    cameraB.setIntrinsics(700.0, 700.0, 320.0, 240.0);
-    cameraB.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.5, 0.0, 0.0});
+    const auto cameraA = makeProjectionCamera("image-a-uuid", -0.5);
+    const auto cameraB = makeProjectionCamera("image-b-uuid", 0.5);
 
     const QString cameraPathA = QDir(tempDir.path()).filePath(QStringLiteral("a.tsai"));
     const QString cameraPathB = QDir(tempDir.path()).filePath(QStringLiteral("b.tsai"));
-    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraA, cameraPathA.toStdString()));
-    ASSERT_TRUE(xjw::common::project::saveFramePinholeNumericState(cameraB, cameraPathB.toStdString()));
+    const placamera::FrameId worldFrame("sfm-test-world");
+    const auto definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("known-pose-camera"),
+                                                  placamera::FrameIntrinsics{700.0, 700.0, 320.0, 240.0, 1.0, 1, 1},
+                                                  placamera::BrownConradyDistortion{},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  worldFrame,
+                                                  false);
+    const placamera::RotationMatrix rotation{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const placamera::TsaiFramePinhole nativeCameraA{definition,
+                                                    placamera::Pose::create(worldFrame, {-0.5, 0.0, 0.0}, rotation)};
+    const placamera::TsaiFramePinhole nativeCameraB{definition,
+                                                    placamera::Pose::create(worldFrame, {0.5, 0.0, 0.0}, rotation)};
+    const auto savedCameraA = placamera::saveTsaiFramePinhole(nativeCameraA, cameraPathA.toStdString());
+    ASSERT_TRUE(savedCameraA) << savedCameraA.message();
+    const auto savedCameraB = placamera::saveTsaiFramePinhole(nativeCameraB, cameraPathB.toStdString());
+    ASSERT_TRUE(savedCameraB) << savedCameraB.message();
 
     const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
     writeJson(tiePointPath, makeKnownPoseTiePoints(imageA, imageB, cameraA, cameraB));
@@ -801,10 +842,12 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     const xjw::control_points::MarkerId markerId =
         markerSet.addMarker(QStringLiteral("manual-tie"), xjw::control_points::MarkerRole::TieMarker);
     const std::array<double, 3> markerPoint{{0.0, 0.0, 5.0}};
-    double markerPixelA[2]{};
-    double markerPixelB[2]{};
-    ASSERT_TRUE(cameraA.projectWorldPoint(markerPoint.data(), markerPixelA));
-    ASSERT_TRUE(cameraB.projectWorldPoint(markerPoint.data(), markerPixelB));
+    const auto marker_projection_a = cameraA.groundToImage({cameraA.groundFrame(), markerPoint});
+    const auto marker_projection_b = cameraB.groundToImage({cameraB.groundFrame(), markerPoint});
+    ASSERT_TRUE(marker_projection_a);
+    ASSERT_TRUE(marker_projection_b);
+    const double markerPixelA[2]{marker_projection_a.value().image.sample, marker_projection_a.value().image.line};
+    const double markerPixelB[2]{marker_projection_b.value().image.sample, marker_projection_b.value().image.line};
     xjw::control_points::MarkerProjection markerProjectionA;
     markerProjectionA.imageId = QStringLiteral("image-a-uuid");
     markerProjectionA.imagePathSnapshot = imageA;
@@ -824,12 +867,12 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {imageA, imageB};
     input.cameraBindings = {
-        {xjw::camera_core::CameraInstanceId("camera-instance-a"),
-         xjw::camera_core::ImageId("image-a-uuid"),
-         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
-        {xjw::camera_core::CameraInstanceId("camera-instance-b"),
-         xjw::camera_core::ImageId("image-b-uuid"),
-         xjw::coordinate_system::CoordinateFrameId("sfm-test-world")},
+        {placamera::CameraInstanceId("camera-instance-a"),
+         placamera::ImageId("image-a-uuid"),
+         placoordinate::CoordinateFrameId("sfm-test-world")},
+        {placamera::CameraInstanceId("camera-instance-b"),
+         placamera::ImageId("image-b-uuid"),
+         placoordinate::CoordinateFrameId("sfm-test-world")},
     };
     input.cameraPaths = {cameraPathA, cameraPathB};
     input.tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("already_prepared.json"));
@@ -851,14 +894,10 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     EXPECT_EQ(result.graph, preparedGraph);
     ASSERT_TRUE(result.reconstruction->hasCamera(0));
     ASSERT_TRUE(result.reconstruction->hasCamera(1));
-    EXPECT_TRUE(result.reconstruction->camera(0).hasBoundIdentity());
-    EXPECT_TRUE(result.reconstruction->camera(1).hasBoundIdentity());
-    EXPECT_EQ(result.reconstruction->camera(0).imageId(), xjw::camera_core::ImageId("image-a-uuid"));
-    EXPECT_EQ(result.reconstruction->camera(1).imageId(), xjw::camera_core::ImageId("image-b-uuid"));
-    EXPECT_EQ(result.reconstruction->camera(0).worldFrame(),
-              xjw::coordinate_system::CoordinateFrameId("sfm-test-world"));
-    EXPECT_EQ(result.reconstruction->camera(1).worldFrame(),
-              xjw::coordinate_system::CoordinateFrameId("sfm-test-world"));
+    EXPECT_EQ(result.reconstruction->camera(0).imageId(), placamera::ImageId("image-a-uuid"));
+    EXPECT_EQ(result.reconstruction->camera(1).imageId(), placamera::ImageId("image-b-uuid"));
+    EXPECT_EQ(result.reconstruction->camera(0).groundFrame(), placoordinate::CoordinateFrameId("sfm-test-world"));
+    EXPECT_EQ(result.reconstruction->camera(1).groundFrame(), placoordinate::CoordinateFrameId("sfm-test-world"));
     EXPECT_EQ(result.result.numRegisteredImages, 2);
     EXPECT_GE(result.result.numPoints3D, 20);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("marker_prior_tracks_loaded")).toInt(), 1);
@@ -881,6 +920,24 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("ba_refined_intrinsic_count")).toInt(), 0);
     EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("ba_shared_focal_scale")).toDouble(), 0.0);
 
+    auto estimatedInput = input;
+    estimatedInput.cameraPaths.clear();
+    estimatedInput.markerSetPath.clear();
+    estimatedInput.estimatedFocalScale = 700.0 / 640.0;
+    estimatedInput.adaptiveCameraModelFitting = false;
+    const auto estimatedResult = xjw::aerial_triangulation::SfmAttemptRunner().run(estimatedInput);
+    ASSERT_TRUE(estimatedResult.result.success) << qPrintable(estimatedResult.result.errorMessage);
+    ASSERT_NE(estimatedResult.reconstruction, nullptr);
+    EXPECT_EQ(estimatedResult.reconstruction->camera(0).imageId(), placamera::ImageId("image-a-uuid"));
+    EXPECT_EQ(estimatedResult.reconstruction->camera(1).imageId(), placamera::ImageId("image-b-uuid"));
+
+    auto unboundInput = input;
+    unboundInput.cameraBindings.clear();
+    const auto unboundResult = xjw::aerial_triangulation::SfmAttemptRunner().run(unboundInput);
+    EXPECT_FALSE(unboundResult.result.success);
+    EXPECT_TRUE(unboundResult.result.errorMessage.contains(QStringLiteral("canonical cameraBindings")))
+        << qPrintable(unboundResult.result.errorMessage);
+
     // A production project already has canonical camera instances.  The
     // runner must propagate those identities when the caller does not repeat
     // the binding vector, while still using the external camera files for the
@@ -894,11 +951,11 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     ASSERT_TRUE(autoBoundResult.reconstruction->hasCamera(0));
     ASSERT_TRUE(autoBoundResult.reconstruction->hasCamera(1));
     EXPECT_EQ(autoBoundResult.reconstruction->camera(0).instanceId(),
-              xjw::camera_core::CameraInstanceId("canonical-instance-a"));
+              placamera::CameraInstanceId("canonical-instance-a"));
     EXPECT_EQ(autoBoundResult.reconstruction->camera(1).instanceId(),
-              xjw::camera_core::CameraInstanceId("canonical-instance-b"));
-    EXPECT_EQ(autoBoundResult.reconstruction->camera(0).imageId(), xjw::camera_core::ImageId("image-a-uuid"));
-    EXPECT_EQ(autoBoundResult.reconstruction->camera(1).imageId(), xjw::camera_core::ImageId("image-b-uuid"));
+              placamera::CameraInstanceId("canonical-instance-b"));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(0).imageId(), placamera::ImageId("image-a-uuid"));
+    EXPECT_EQ(autoBoundResult.reconstruction->camera(1).imageId(), placamera::ImageId("image-b-uuid"));
     EXPECT_EQ(autoBoundResult.result.sfmDiagnostics.value(QStringLiteral("camera_binding_source")).toString(),
               QStringLiteral("canonical_project_instances"));
     EXPECT_EQ(autoBoundResult.result.sfmDiagnostics.value(QStringLiteral("camera_binding_count")).toInt(), 2);

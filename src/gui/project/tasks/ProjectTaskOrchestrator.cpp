@@ -1095,53 +1095,37 @@ namespace xjw::gui::project
 
     bool ProjectTaskOrchestrator::importCameraForImage(const QString& imagePath)
     {
-        return !_destroying && !taskAdmissionBlocked() && _cameraSetup && _cameraSetup->importCameraForImage(imagePath);
+        return startCameraOperation(QStringLiteral("camera-import-single"),
+                                    [this, imagePath](const ProjectTaskContext& context)
+                                    { return _cameraSetup->importCameraForImage(imagePath, context); });
     }
 
-    bool ProjectTaskOrchestrator::importCamerasByFilenameBatch()
+    bool ProjectTaskOrchestrator::importCameraProject()
     {
-        return !_destroying && !taskAdmissionBlocked() && _cameraSetup && _cameraSetup->importCamerasByFilenameBatch();
+        return startCameraOperation(QStringLiteral("camera-import-project"),
+                                    [this](const ProjectTaskContext& context)
+                                    { return _cameraSetup->importCameraProject(context); });
     }
 
     bool ProjectTaskOrchestrator::initializeCamerasFromExifOrDefault(const QJsonObject& settings)
     {
-        return !_destroying && !taskAdmissionBlocked() && _cameraSetup &&
-               _cameraSetup->initializeCamerasFromExifOrDefault(settings);
+        return startCameraOperation(QStringLiteral("camera-init-exif"),
+                                    [this, settings](const ProjectTaskContext& context)
+                                    { return _cameraSetup->initializeCamerasFromExifOrDefault(settings, context); });
     }
 
     bool ProjectTaskOrchestrator::initializeCamerasFromIntrinsics(const QJsonObject& settings)
     {
-        return !_destroying && !taskAdmissionBlocked() && _cameraSetup &&
-               _cameraSetup->initializeCamerasFromIntrinsics(settings);
+        return startCameraOperation(QStringLiteral("camera-init-intrinsics"),
+                                    [this, settings](const ProjectTaskContext& context)
+                                    { return _cameraSetup->initializeCamerasFromIntrinsics(settings, context); });
     }
 
     bool ProjectTaskOrchestrator::initializeCameraPosesWithSFM(const QJsonObject& settings)
     {
-        if (_destroying || taskAdmissionBlocked() || !_cameraSetup)
-        {
-            return false;
-        }
-        if (_cameraLaneActive)
-        {
-            if (_messages)
-            {
-                _messages->information(nullptr,
-                                       QStringLiteral("初始化相机位姿"),
-                                       QStringLiteral("已有相机位姿初始化任务正在运行，请等待或先取消当前任务。"));
-            }
-            return false;
-        }
-
-        _cameraContext = createIndependentContext(
-            QStringLiteral("camera-sfm:%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-        const ProjectTaskContext start_context = _cameraContext;
-        _cameraLaneActive = true;
-        if (!_cameraSetup->initializeCameraPosesWithSFM(settings, start_context))
-        {
-            releaseCameraLaneIfMatches(start_context);
-            return false;
-        }
-        return true;
+        return startCameraOperation(QStringLiteral("camera-sfm"),
+                                    [this, settings](const ProjectTaskContext& context)
+                                    { return _cameraSetup->initializeCameraPosesWithSFM(settings, context); });
     }
 
     bool ProjectTaskOrchestrator::hasRunningCameraTask() const noexcept
@@ -1961,6 +1945,36 @@ namespace xjw::gui::project
         return _cameraLaneActive && context.cancelFlag && _cameraContext.taskId == context.taskId &&
                _cameraContext.cancelFlag == context.cancelFlag &&
                (!requireCurrent || (_session && _session->isCurrent(context.session)));
+    }
+
+    bool ProjectTaskOrchestrator::startCameraOperation(const QString& taskIdPrefix,
+                                                       std::function<bool(const ProjectTaskContext&)> starter)
+    {
+        if (_destroying || taskAdmissionBlocked() || !_cameraSetup || !starter)
+        {
+            return false;
+        }
+        if (_cameraLaneActive)
+        {
+            if (_messages)
+            {
+                _messages->information(nullptr,
+                                       QStringLiteral("相机设置"),
+                                       QStringLiteral("已有相机导入或初始化任务正在运行，请等待或先取消当前任务。"));
+            }
+            return false;
+        }
+
+        _cameraContext = createIndependentContext(
+            QStringLiteral("%1:%2").arg(taskIdPrefix, QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        const ProjectTaskContext start_context = _cameraContext;
+        _cameraLaneActive = true;
+        if (!starter(start_context))
+        {
+            releaseCameraLaneIfMatches(start_context);
+            return false;
+        }
+        return true;
     }
 
     void ProjectTaskOrchestrator::releasePointLane()

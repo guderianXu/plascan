@@ -3,15 +3,15 @@
 
 #include "project/services/ProjectSession.h"
 #include "project/ProjectIO.h"
-#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DualImageViewer.h"
 #include "ImageMatchFile.h"
 #include "Logger.h"
+
+#include <placamera/frame_numeric_state.h>
 
 #include <QComboBox>
 #include <QDateTime>
@@ -117,101 +117,115 @@ namespace
 
     struct IntersectionBatchCandidate
     {
-        QVector<xjw::Intersection::Result> results;
+        QVector<ForwardIntersectionResult> results;
         int validCount = 0;
         int finiteRmsCount = 0;
         double meanRms = std::numeric_limits<double>::infinity();
-        bool camera1DepthFlipped = false;
-        bool camera2DepthFlipped = false;
     };
 
-    IntersectionBatchCandidate
-    evaluateIntersectionBatch(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera1,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera2,
-                              const QVector<QPointF>& points1,
-                              const QVector<QPointF>& points2)
+    double squaredNorm(const placamera::Vector3& vector)
+    {
+        return vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+    }
+
+    double dot(const placamera::Vector3& first, const placamera::Vector3& second)
+    {
+        return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+    }
+
+    placamera::Vector3 subtract(const placamera::Vector3& first, const placamera::Vector3& second)
+    {
+        return {first[0] - second[0], first[1] - second[1], first[2] - second[2]};
+    }
+
+    ForwardIntersectionResult intersectPair(const placamera::FramePinholeNumericState& first,
+                                            const QPointF& firstPoint,
+                                            const placamera::FramePinholeNumericState& second,
+                                            const QPointF& secondPoint)
+    {
+        ForwardIntersectionResult result;
+        const placamera::ImageCoordinate first_image{firstPoint.x(), firstPoint.y()};
+        const placamera::ImageCoordinate second_image{secondPoint.x(), secondPoint.y()};
+        const auto intersection =
+            placamera::FramePinholeNumericState::triangulatePair(first, first_image, second, second_image);
+        if (!intersection)
+        {
+            return result;
+        }
+        result.point = intersection.value().point.position;
+
+        const auto first_ray = first.imageToImagingLocus(first_image);
+        const auto second_ray = second.imageToImagingLocus(second_image);
+        const auto first_projection = first.groundToImage(intersection.value().point);
+        const auto second_projection = second.groundToImage(intersection.value().point);
+        if (!first_ray || !second_ray || !first_projection || !second_projection)
+        {
+            return result;
+        }
+
+        const auto first_offset = subtract(result.point, first_ray.value().origin.position);
+        const auto second_offset = subtract(result.point, second_ray.value().origin.position);
+        const double first_depth = dot(first_offset, first_ray.value().direction);
+        const double second_depth = dot(second_offset, second_ray.value().direction);
+        placamera::Vector3 first_nearest{};
+        placamera::Vector3 second_nearest{};
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            first_nearest[axis] =
+                first_ray.value().origin.position[axis] + first_depth * first_ray.value().direction[axis];
+            second_nearest[axis] =
+                second_ray.value().origin.position[axis] + second_depth * second_ray.value().direction[axis];
+        }
+        result.ray_miss_distance = std::sqrt(squaredNorm(subtract(first_nearest, second_nearest)));
+
+        const double angle_cosine =
+            dot(first_offset, second_offset) / std::sqrt(squaredNorm(first_offset) * squaredNorm(second_offset));
+        result.angle_deg = std::acos(std::clamp(angle_cosine, -1.0, 1.0)) * 180.0 / std::acos(-1.0);
+
+        const auto first_error = placamera::Vector3{first_projection.value().image.sample - first_image.sample,
+                                                    first_projection.value().image.line - first_image.line,
+                                                    0.0};
+        const auto second_error = placamera::Vector3{second_projection.value().image.sample - second_image.sample,
+                                                     second_projection.value().image.line - second_image.line,
+                                                     0.0};
+        result.reproj_error_cam1 = std::sqrt(squaredNorm(first_error));
+        result.reproj_error_cam2 = std::sqrt(squaredNorm(second_error));
+        result.reproj_error_rms = std::sqrt((squaredNorm(first_error) + squaredNorm(second_error)) / 2.0);
+        result.valid = first_depth > 0.0 && second_depth > 0.0 && std::isfinite(result.angle_deg) &&
+                       std::isfinite(result.ray_miss_distance) && std::isfinite(result.reproj_error_rms);
+        return result;
+    }
+
+    IntersectionBatchCandidate evaluateIntersectionBatch(const placamera::FramePinholeModel& first,
+                                                         const placamera::FramePinholeModel& second,
+                                                         const QVector<QPointF>& points1,
+                                                         const QVector<QPointF>& points2)
     {
         IntersectionBatchCandidate candidate;
-        candidate.camera1DepthFlipped = camera1.depthAxisFlipped();
-        candidate.camera2DepthFlipped = camera2.depthAxisFlipped();
-
+        const auto first_state = placamera::FramePinholeNumericState::fromModel(first);
+        const auto second_state = placamera::FramePinholeNumericState::fromModel(second);
         const int count = std::min(static_cast<int>(points1.size()), static_cast<int>(points2.size()));
         candidate.results.reserve(count);
-
-        double rmsSum = 0.0;
+        double rms_sum = 0.0;
         for (int index = 0; index < count; ++index)
         {
-            const xjw::Intersection::Result result = xjw::Intersection::intersectPair(camera1,
-                                                                                      points1.at(index).x(),
-                                                                                      points1.at(index).y(),
-                                                                                      camera2,
-                                                                                      points2.at(index).x(),
-                                                                                      points2.at(index).y());
+            const auto result = intersectPair(first_state, points1.at(index), second_state, points2.at(index));
             candidate.results.push_back(result);
-
             if (result.valid)
             {
                 ++candidate.validCount;
             }
             if (std::isfinite(result.reproj_error_rms))
             {
-                rmsSum += result.reproj_error_rms;
+                rms_sum += result.reproj_error_rms;
                 ++candidate.finiteRmsCount;
             }
         }
-
         if (candidate.finiteRmsCount > 0)
         {
-            candidate.meanRms = rmsSum / static_cast<double>(candidate.finiteRmsCount);
+            candidate.meanRms = rms_sum / static_cast<double>(candidate.finiteRmsCount);
         }
-
         return candidate;
-    }
-
-    IntersectionBatchCandidate
-    selectBestIntersectionBatch(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& baseCamera1,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& baseCamera2,
-                                const QVector<QPointF>& points1,
-                                const QVector<QPointF>& points2)
-    {
-        IntersectionBatchCandidate bestCandidate;
-        bool hasBestCandidate = false;
-
-        for (int flipMask = 0; flipMask < 4; ++flipMask)
-        {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = baseCamera1;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = baseCamera2;
-            if ((flipMask & 0x1) != 0)
-            {
-                camera1.setDepthAxisFlipped(!camera1.depthAxisFlipped());
-            }
-            if ((flipMask & 0x2) != 0)
-            {
-                camera2.setDepthAxisFlipped(!camera2.depthAxisFlipped());
-            }
-
-            IntersectionBatchCandidate candidate = evaluateIntersectionBatch(camera1, camera2, points1, points2);
-            LOG_INFO(
-                QStringLiteral("[前方交汇] 深度组合评估: cam1Flip=%1 cam2Flip=%2 valid=%3/%4 finiteRms=%5 meanRms=%6")
-                    .arg(candidate.camera1DepthFlipped ? QStringLiteral("true") : QStringLiteral("false"))
-                    .arg(candidate.camera2DepthFlipped ? QStringLiteral("true") : QStringLiteral("false"))
-                    .arg(candidate.validCount)
-                    .arg(candidate.results.size())
-                    .arg(candidate.finiteRmsCount)
-                    .arg(candidate.meanRms, 0, 'f', 6));
-
-            if (!hasBestCandidate || candidate.validCount > bestCandidate.validCount ||
-                (candidate.validCount == bestCandidate.validCount &&
-                 candidate.finiteRmsCount > bestCandidate.finiteRmsCount) ||
-                (candidate.validCount == bestCandidate.validCount &&
-                 candidate.finiteRmsCount == bestCandidate.finiteRmsCount && candidate.meanRms < bestCandidate.meanRms))
-            {
-                bestCandidate = std::move(candidate);
-                hasBestCandidate = true;
-            }
-        }
-
-        return bestCandidate;
     }
 
 } // namespace
@@ -293,8 +307,9 @@ void ForwardIntersectionCheckDialog::setupUi()
                 const bool manual = (_pickModeCombo->currentData().toString() == QStringLiteral("manual"));
                 _deleteSelectedBtn->setEnabled(manual);
                 _clearManualBtn->setEnabled(manual);
-                _hintLabel->setText(manual ? tr("手动模式：右键依次在左右图像选点完成配对。")
-                                           : tr("自动模式：将读取匹配结果中的全部连接点进行批量交汇检验。"));
+                _hintLabel->setText(manual
+                                        ? tr("手动模式：右键依次在左右图像选点完成配对。")
+                                        : tr("自动模式：将读取匹配结果中的全部连接点进行批量交汇检验。"));
                 if (!manual)
                 {
                     _pendingFirstSide = -1;
@@ -347,15 +362,23 @@ void ForwardIntersectionCheckDialog::loadImagesWithCamera()
 
     if (!_session)
         return;
-    const QJsonObject meta = _session->metadata();
-    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
+    const QJsonArray images = xjw::common::project::projectImageEntries(_session->metadata());
+    QStringList paths;
     for (const QJsonValue& v : images)
     {
-        const QJsonObject obj = v.toObject();
-        const QString path = obj.value(QStringLiteral("path")).toString();
-        const QJsonObject cam = xjw::common::project::projectCameraModelParameters(meta, obj);
-        if (path.isEmpty() || cam.isEmpty())
+        const QString path = v.toObject().value(QStringLiteral("path")).toString();
+        if (!path.isEmpty())
+        {
+            paths.append(path);
+        }
+    }
+    const auto cameras = _session->getPinholeModelsForImages(paths);
+    for (const QString& path : paths)
+    {
+        if (!cameras.contains(normalizePath(path)))
+        {
             continue;
+        }
         const QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
         _image1Combo->addItem(name, path);
         _image2Combo->addItem(name, path);
@@ -399,66 +422,6 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF>* pts
     }
 
     return false;
-}
-
-bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(
-    const QJsonObject& imgObj,
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState* cam,
-    QString* errorMsg) const
-{
-    if (!cam)
-        return false;
-    const QJsonObject camObj =
-        _session ? xjw::common::project::projectCameraModelParameters(_session->metadata(), imgObj) : QJsonObject();
-    if (camObj.isEmpty())
-    {
-        if (errorMsg)
-            *errorMsg = tr("影像缺少相机参数");
-        return false;
-    }
-
-    if (!xjw::common::project::decodeFramePinholeNumericState(camObj, cam))
-    {
-        if (errorMsg)
-        {
-            *errorMsg = tr("相机参数解析失败（请检查单位字段、C/R 或 pitch）");
-        }
-        return false;
-    }
-
-    const auto intrinsics = cam->intrinsics();
-    const auto center = cam->cameraCenter();
-    const QString depthFieldPresent =
-        camObj.contains(QStringLiteral("depth_axis_flipped")) ? QStringLiteral("true") : QStringLiteral("false");
-    LOG_INFO(QStringLiteral("[前方交汇] 相机解析: image=%1 fu_px=%2 fv_px=%3 cu_px=%4 cv_px=%5 "
-                            "pitch=%6 depthFlip=%7 depthFieldPresent=%8 C=(%9,%10,%11)")
-                 .arg(QFileInfo(imgObj.value(QStringLiteral("path")).toString()).fileName())
-                 .arg(intrinsics.focalX, 0, 'f', 6)
-                 .arg(intrinsics.focalY, 0, 'f', 6)
-                 .arg(intrinsics.principalX, 0, 'f', 6)
-                 .arg(intrinsics.principalY, 0, 'f', 6)
-                 .arg(intrinsics.pixelPitch, 0, 'f', 9)
-                 .arg(cam->depthAxisFlipped() ? QStringLiteral("true") : QStringLiteral("false"))
-                 .arg(depthFieldPresent)
-                 .arg(center[0], 0, 'f', 6)
-                 .arg(center[1], 0, 'f', 6)
-                 .arg(center[2], 0, 'f', 6));
-    return true;
-}
-
-QJsonObject ForwardIntersectionCheckDialog::findImageMetaByPath(const QString& imagePath) const
-{
-    if (!_session)
-        return QJsonObject();
-    const QJsonObject meta = _session->metadata();
-    const QString target = normalizePath(imagePath);
-    for (const QJsonValue& v : xjw::common::project::projectImageEntries(meta))
-    {
-        const QJsonObject obj = v.toObject();
-        if (normalizePath(obj.value(QStringLiteral("path")).toString()) == target)
-            return obj;
-    }
-    return QJsonObject();
 }
 
 void ForwardIntersectionCheckDialog::refreshViewer(bool reloadImages)
@@ -515,7 +478,7 @@ void ForwardIntersectionCheckDialog::refreshPairTable()
     }
 }
 
-void ForwardIntersectionCheckDialog::fillResultTable(const QVector<xjw::Intersection::Result>& results)
+void ForwardIntersectionCheckDialog::fillResultTable(const QVector<ForwardIntersectionResult>& results)
 {
     // 重新填充时重置排序状态
     _resultSortCol = -1;
@@ -592,7 +555,8 @@ void ForwardIntersectionCheckDialog::clearAllSelections()
 
 QJsonObject ForwardIntersectionCheckDialog::buildBatchResultJson(const QVector<QPointF>& pts1,
                                                                  const QVector<QPointF>& pts2,
-                                                                 const QVector<xjw::Intersection::Result>& results,
+                                                                 const QVector<ForwardIntersectionResult>& results,
+                                                                 const QString& groundFrame,
                                                                  const QString& mode,
                                                                  const QString& autoSource) const
 {
@@ -602,6 +566,7 @@ QJsonObject ForwardIntersectionCheckDialog::buildBatchResultJson(const QVector<Q
     obj[QStringLiteral("image1_path")] = normalizePath(selectedImage2());
     obj[QStringLiteral("image0_name")] = QFileInfo(selectedImage1()).fileName();
     obj[QStringLiteral("image1_name")] = QFileInfo(selectedImage2()).fileName();
+    obj[QStringLiteral("ground_frame")] = groundFrame;
     obj[QStringLiteral("pick_mode")] = mode;
     if (!autoSource.isEmpty())
         obj[QStringLiteral("auto_source")] = autoSource;
@@ -1052,20 +1017,19 @@ void ForwardIntersectionCheckDialog::onRunCheck()
         return;
     }
 
-    const QJsonObject imgObj1 = findImageMetaByPath(img1);
-    const QJsonObject imgObj2 = findImageMetaByPath(img2);
-    if (imgObj1.isEmpty() || imgObj2.isEmpty())
+    const auto cameras = _session->getPinholeModelsForImages({img1, img2});
+    const auto first_it = cameras.constFind(normalizePath(img1));
+    const auto second_it = cameras.constFind(normalizePath(img2));
+    if (first_it == cameras.cend() || second_it == cameras.cend())
     {
-        QMessageBox::warning(this, tr("提示"), tr("无法读取影像元数据"));
+        QMessageBox::warning(this, tr("提示"), tr("所选影像缺少 canonical PlaCamera 面阵针孔相机"));
         return;
     }
-
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam1;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cam2;
-    QString err;
-    if (!buildCameraFromImageMeta(imgObj1, &cam1, &err) || !buildCameraFromImageMeta(imgObj2, &cam2, &err))
+    const auto& cam1 = *first_it.value();
+    const auto& cam2 = *second_it.value();
+    if (cam1.groundFrame() != cam2.groundFrame())
     {
-        QMessageBox::critical(this, tr("错误"), err);
+        QMessageBox::critical(this, tr("错误"), tr("两台相机的地面坐标系不同，无法执行前方交汇"));
         return;
     }
 
@@ -1099,21 +1063,20 @@ void ForwardIntersectionCheckDialog::onRunCheck()
     clearAllSelections();
     refreshPairTable();
 
-    const IntersectionBatchCandidate bestCandidate = selectBestIntersectionBatch(cam1, cam2, pts1, pts2);
-    LOG_INFO(QStringLiteral("[前方交汇] 采用深度组合: cam1Flip=%1 cam2Flip=%2 valid=%3/%4 meanRms=%5")
-                 .arg(bestCandidate.camera1DepthFlipped ? QStringLiteral("true") : QStringLiteral("false"))
-                 .arg(bestCandidate.camera2DepthFlipped ? QStringLiteral("true") : QStringLiteral("false"))
-                 .arg(bestCandidate.validCount)
-                 .arg(bestCandidate.results.size())
-                 .arg(bestCandidate.meanRms, 0, 'f', 6));
+    const IntersectionBatchCandidate candidate = evaluateIntersectionBatch(cam1, cam2, pts1, pts2);
+    LOG_INFO(QStringLiteral("[前方交汇] PlaCamera 交汇: valid=%1/%2 meanRms=%3")
+                 .arg(candidate.validCount)
+                 .arg(candidate.results.size())
+                 .arg(candidate.meanRms, 0, 'f', 6));
 
-    QVector<xjw::Intersection::Result> results = bestCandidate.results;
+    const QVector<ForwardIntersectionResult>& results = candidate.results;
 
     _currentResults = results;
     refreshViewer(false);
     fillResultTable(results);
 
-    QJsonObject saveObj = buildBatchResultJson(pts1, pts2, results, mode, autoSource);
+    QJsonObject saveObj =
+        buildBatchResultJson(pts1, pts2, results, QString::fromStdString(cam1.groundFrame().value()), mode, autoSource);
     QString saveErr;
     if (!_session->appendIntersectionResult(saveObj, &saveErr))
     {

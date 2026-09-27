@@ -4,9 +4,9 @@
 #include "project/ProjectIO.h"
 #include "project/ProjectPackageLayout.h"
 #include "project/ProjectSession.h"
-#include "ProjectCameraIO.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
 
 #include <gtest/gtest.h>
 
@@ -35,18 +35,6 @@ namespace
         const QByteArray bytes = archive.readEntry(QString::fromLatin1(PortableProjectFormat::DocumentEntry), &error);
         EXPECT_TRUE(error.isEmpty()) << qPrintable(error);
         return QJsonDocument::fromJson(bytes).object();
-    }
-
-    QJsonObject canonicalFrameCamera(int width, int height)
-    {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setPixelPitch(0.01);
-        camera.setIntrinsics(1200.0, 1200.0, width * 0.5, height * 0.5);
-        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 1.0});
-        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
-        result.insert(QStringLiteral("registered"), true);
-        return result;
     }
 
 } // namespace
@@ -150,12 +138,14 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
     EXPECT_EQ(QDir::cleanPath(materialized), QDir::cleanPath(artifact));
 }
 
-TEST(ProjectSessionTest, UpdatesImportedImageCameraFromOriginalSourcePath)
+TEST(ProjectSessionTest, NativeCameraWriteAndReplacementRoundTrip)
 {
-    QTemporaryDir temporary;
+    const QString temporaryRoot = QStringLiteral(TEST_REPO_ROOT "/build/tmp");
+    ASSERT_TRUE(QDir().mkpath(temporaryRoot));
+    QTemporaryDir temporary(QDir(temporaryRoot).filePath(QStringLiteral("placamera-cli-session-XXXXXX")));
     ASSERT_TRUE(temporary.isValid());
-    const QString projectPath = QDir(temporary.path()).filePath(QStringLiteral("camera.plascan"));
-    const QString imagePath = QDir(temporary.path()).filePath(QStringLiteral("source.png"));
+    const QString projectPath = QDir(temporary.path()).filePath(QStringLiteral("native-camera.plascan"));
+    const QString imagePath = QDir(temporary.path()).filePath(QStringLiteral("image.tif"));
     QFile imageFile(imagePath);
     ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
     ASSERT_EQ(imageFile.write("image"), 5);
@@ -163,34 +153,64 @@ TEST(ProjectSessionTest, UpdatesImportedImageCameraFromOriginalSourcePath)
 
     ProjectSession session;
     QString error;
-    ASSERT_TRUE(session.create(projectPath, QStringLiteral("相机写回工程"), &error)) << qPrintable(error);
+    ASSERT_TRUE(session.create(projectPath, QStringLiteral("原生相机工程"), &error)) << qPrintable(error);
     ASSERT_TRUE(session.mergeImages(QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
-                                                           {QStringLiteral("samples"), 64},
-                                                           {QStringLiteral("lines"), 48}}},
+                                                           {QStringLiteral("samples"), 100},
+                                                           {QStringLiteral("lines"), 80}}},
                                     &error))
         << qPrintable(error);
+    const QString imageId = session.projectFiles()
+                                .value(QStringLiteral("images"))
+                                .toArray()
+                                .first()
+                                .toObject()
+                                .value(QStringLiteral("image_uuid"))
+                                .toString();
+    ASSERT_FALSE(imageId.isEmpty());
 
-    const QString importedPath = session.projectFiles()
-                                     .value(QStringLiteral("images"))
-                                     .toArray()
-                                     .first()
-                                     .toObject()
-                                     .value(QStringLiteral("path"))
-                                     .toString();
-    ASSERT_EQ(QDir::cleanPath(importedPath), QDir::cleanPath(imagePath));
+    const placamera::FrameId frame("project-world");
+    const auto definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("cli-native-definition"),
+                                                  {120.0, 120.0, 50.0, 40.0, 0.01, 1, 1},
+                                                  {},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  frame);
+    placamera::CameraInstanceSet cameras;
+    ASSERT_TRUE(
+        cameras
+            .add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("cli-native-instance"),
+                placamera::ImageId(imageId.toStdString()),
+                definition,
+                {100, 80},
+                placamera::Pose::create(frame, {1.0, 2.0, 3.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))))
+            .ok());
+    int written = 0;
+    ASSERT_TRUE(session.upsertNativeCameraInstances(cameras, {}, &written, &error)) << qPrintable(error);
+    EXPECT_EQ(written, 1);
+    ASSERT_TRUE(session.save(&error)) << qPrintable(error);
+    session.close();
 
-    const QJsonObject camera = canonicalFrameCamera(64, 48);
-    int updatedCount = 0;
-    ASSERT_TRUE(session.updateCameraInstances(QMap<QString, QJsonObject>{{imagePath, camera}}, &updatedCount, &error))
+    ASSERT_TRUE(session.open(projectPath, &error)) << qPrintable(error);
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(session.projectFiles());
+    ASSERT_TRUE(loaded.ok()) << qPrintable(loaded.errors.join(QStringLiteral("; ")));
+    ASSERT_EQ(loaded.instances.size(), 1U);
+    EXPECT_EQ(loaded.instances.values().front()->instanceId().value(), "cli-native-instance");
+
+    int cleared = 0;
+    EXPECT_FALSE(session.replaceNativeCameraInstances(
+        {placamera::ImageId("unknown-image")}, {}, {}, &written, &cleared, &error));
+    EXPECT_EQ(written, 0);
+    EXPECT_EQ(cleared, 0);
+    EXPECT_EQ(xjw::placamera_runtime::loadProjectCameras(session.projectFiles()).instances.size(), 1U);
+
+    ASSERT_TRUE(session.replaceNativeCameraInstances(
+        {placamera::ImageId(imageId.toStdString())}, {}, {}, &written, &cleared, &error))
         << qPrintable(error);
-    EXPECT_EQ(updatedCount, 1);
-    const QJsonObject projectFiles = session.projectFiles();
-    EXPECT_EQ(projectFiles.value(QStringLiteral("camera_instances")).toArray().size(), 1);
-    const QJsonObject imageEntry = projectFiles.value(QStringLiteral("images")).toArray().first().toObject();
-    const QJsonObject storedCamera =
-        xjw::camera_project::CameraProjectRecords::modelParametersForImage(projectFiles, imageEntry);
-    EXPECT_EQ(storedCamera.value(QStringLiteral("model")).toString(), QStringLiteral("frame_pinhole"));
-    EXPECT_DOUBLE_EQ(storedCamera.value(QStringLiteral("fu")).toDouble(), 12.0);
+    EXPECT_EQ(written, 0);
+    EXPECT_EQ(cleared, 1);
+    EXPECT_TRUE(xjw::placamera_runtime::loadProjectCameras(session.projectFiles()).instances.empty());
+    session.close();
 }
 
 TEST(ProjectSessionTest, RejectsLegacyCameraFileOnImageMerge)
@@ -207,10 +227,10 @@ TEST(ProjectSessionTest, RejectsLegacyCameraFileOnImageMerge)
     ProjectSession session;
     QString error;
     ASSERT_TRUE(session.create(projectPath, QStringLiteral("拒绝旧相机字段"), &error)) << qPrintable(error);
-    EXPECT_FALSE(session.mergeImages(
-        QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
-                               {QStringLiteral("camera_file"), QStringLiteral("old.tsai")}}},
-        &error));
+    EXPECT_FALSE(
+        session.mergeImages(QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath},
+                                                   {QStringLiteral("camera_file"), QStringLiteral("old.tsai")}}},
+                            &error));
     EXPECT_TRUE(error.contains(QStringLiteral("camera_file")));
     EXPECT_TRUE(session.projectFiles().value(QStringLiteral("images")).toArray().isEmpty());
 }

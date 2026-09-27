@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 #include "DepthAnchoredHoleInterpolator.h"
 #include "DepthGeometryHypothesisReranker.h"
 #include "DepthLayerReliability.h"
@@ -109,8 +109,8 @@ struct DominantDepthLayerSelectionStats
 
 cv::Mat
 projectSourceDepthToReference(const cv::Mat& sourceDepth,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+                              const placamera::FramePinholeModel& sourceCamera,
+                              const placamera::FramePinholeModel& referenceCamera,
                               const cv::Size& referenceSize,
                               float maximumProjectionDistancePixels,
                               std::uint64_t* projectedCandidateCount = nullptr,
@@ -160,7 +160,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat* geometrySourceMask = nullptr,
     cv::Mat* sourceInverseDepthSum = nullptr,
     cv::Mat* sourceInverseDepthSquaredSum = nullptr,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* referenceCamera = nullptr,
+    const placamera::FramePinholeModel* referenceCamera = nullptr,
     const cv::Mat* guideGray = nullptr,
     cv::Mat* anchoredInterpolationMask = nullptr,
     int rowWorkerCount = 1,

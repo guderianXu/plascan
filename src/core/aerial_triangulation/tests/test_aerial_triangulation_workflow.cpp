@@ -1,8 +1,7 @@
 ﻿#include "workflow/AerialTriangulationWorkflow.h"
 #include "search/SfmSearchPolicy.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
-#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
+#include <placamera/frame_camera.h>
 
 #include <gtest/gtest.h>
 
@@ -13,6 +12,7 @@
 
 #include <cmath>
 #include <array>
+#include <memory>
 #include <string>
 
 namespace
@@ -24,9 +24,9 @@ namespace
         options.images = {QDir(root).filePath(QStringLiteral("a.png")),
                           QDir(root).filePath(QStringLiteral("b.png")),
                           QDir(root).filePath(QStringLiteral("c.png"))};
-        options.imageIds = {xjw::camera_core::ImageId("a"),
-                            xjw::camera_core::ImageId("b"),
-                            xjw::camera_core::ImageId("c")};
+        options.imageIds = {placamera::ImageId("a"),
+                            placamera::ImageId("b"),
+                            placamera::ImageId("c")};
         options.projectPath = QDir(root).filePath(QStringLiteral("project.plascan"));
         options.outputDir = QDir(root).filePath(QStringLiteral("assets/aerial_triangulation"));
         options.assetsDir = QDir(root).filePath(QStringLiteral("assets"));
@@ -34,32 +34,28 @@ namespace
         return options;
     }
 
-    xjw::camera_reference::ReferenceCameraGeometry makeInwardRingCamera(double angle, const std::string& imageId)
+    placamera::reference::ReferenceCameraGeometry makeInwardRingCamera(double angle, const std::string& imageId)
     {
         const double cosine = std::cos(angle);
         const double sine = std::sin(angle);
-        using namespace xjw::camera_models::frame_pinhole;
-        const auto definition = FramePinholeDefinition::create(
-            xjw::camera_core::CameraDefinitionId("ring-definition-" + imageId),
-            Intrinsics{1200.0, 1200.0, 320.0, 240.0, 1.0, 1, 1},
-            Distortion{},
-            PixelConvention::PixelCenter,
-            xjw::coordinate_system::CoordinateFrameId("world"));
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("ring-definition-" + imageId),
+            placamera::FrameIntrinsics{1200.0, 1200.0, 320.0, 240.0, 1.0, 1, 1},
+            placamera::BrownConradyDistortion{},
+            placamera::PixelConvention::PixelCenter,
+            placamera::FrameId("world"));
         const std::array<double, 9> rotation{{sine, 0.0, -cosine, -cosine, 0.0, -sine, 0.0, 1.0, 0.0}};
-        const auto pose = xjw::camera_core::Pose::create(
-            xjw::coordinate_system::CoordinateFrameId("world"), {5.0 * cosine, 5.0 * sine, 0.0}, rotation);
-        const auto instance = FramePinholeInstance::create(xjw::camera_core::CameraInstanceId("ring-instance-" + imageId),
-                                                           xjw::camera_core::ImageId(imageId),
-                                                           definition,
-                                                           {640, 480},
-                                                           pose);
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
-        std::string error;
-        EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &state, &error))
-            << error;
-        auto geometry = xjw::camera_reference::ReferenceCameraGeometry::create(std::move(state), &error);
-        EXPECT_TRUE(geometry.has_value()) << error;
-        return std::move(*geometry);
+        const auto pose =
+            placamera::Pose::create(placamera::FrameId("world"), {5.0 * cosine, 5.0 * sine, 0.0}, rotation);
+        auto model = std::make_shared<const placamera::FramePinholeModel>(
+            placamera::FramePinholeModel::create(placamera::CameraInstanceId("ring-instance-" + imageId),
+                                                 placamera::ImageId(imageId),
+                                                 definition,
+                                                 placamera::ImageSize{640, 480},
+                                                 pose));
+        auto geometry = placamera::reference::ReferenceCameraGeometry::create(std::move(model));
+        EXPECT_TRUE(geometry) << geometry.message();
+        return geometry.takeValue();
     }
 
     QString writeTiePointLimitHeader(const QString& assetsDir, int tiePointLimit)
@@ -415,7 +411,7 @@ TEST(AerialTriangulationWorkflowTest, EstimatedInwardRingKeepsClosedSequenceGeom
         const std::string imageId = "ring-" + std::to_string(index);
         options.imageIds.emplace_back(imageId);
         options.referenceCameraGeometries.emplace(
-            xjw::camera_core::ImageId(imageId),
+            placamera::ImageId(imageId),
             makeInwardRingCamera(2.0 * 3.14159265358979323846 * index / 8.0, imageId));
     }
 

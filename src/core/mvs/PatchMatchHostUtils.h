@@ -3,6 +3,7 @@
 #include <array>
 
 #include <opencv2/core.hpp>
+#include <placamera/frame_camera.h>
 
 #include "MvsTypes.h"
 
@@ -16,8 +17,8 @@ namespace mvs
 /// the local result is converted to float, preserving small baselines at large
 /// world-coordinate origins.
 std::array<float, 16>
-buildPatchMatchSourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+buildPatchMatchSourceCameraData(const placamera::FramePinholeModel& reference,
+                                const placamera::FramePinholeModel& source,
                                 int downsampleFactor);
 
 /// Applies the shared host-side PatchMatch depth filters.

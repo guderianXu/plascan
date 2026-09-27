@@ -253,7 +253,7 @@ class SyntheticE2ETest(unittest.TestCase):
         self.assertIn("orbital_object", object_command)
         self.assertIn("--sfm-guided-rematching", object_command)
         self.assertIn("--skip-terrain", object_command)
-        self.assertIn("object\\mvs_masks", object_command)
+        self.assertIn(str(Path("object") / "mvs_masks"), object_command)
 
         terrain_command = runner.build_pipeline_command(
             Path("reconstruct_pipeline_cli"),

@@ -9,7 +9,12 @@ target_include_directories(mvs_contracts INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/core
 )
-target_link_libraries(mvs_contracts INTERFACE camera camera_models_frame_pinhole plapoint::plapoint Qt6::Core ${OpenCV_LIBS})
+target_link_libraries(mvs_contracts INTERFACE
+    placamera::placamera
+    plapoint::plapoint
+    Qt6::Core
+    ${OpenCV_LIBS}
+)
 target_compile_features(mvs_contracts INTERFACE cxx_std_20)
 
 # Persisted workspace and artifact IO depend only on data contracts, never the
@@ -287,7 +292,7 @@ target_link_libraries(mvs_backend
         mvs_contracts
         mvs_depth_processing
         mvs_storage
-        camera
+        placamera::placamera
         plascan_common_log
         plascan_common_io
         plapoint::plapoint
@@ -377,7 +382,6 @@ if(BUILD_TESTS)
         )
         target_include_directories(test_mvs_rectifier_unit PRIVATE
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/core/camera
         )
         gtest_discover_tests(test_mvs_rectifier_unit)
 
@@ -491,7 +495,6 @@ if(BUILD_TESTS)
         )
         target_include_directories(test_mvs_stage_snapshot PRIVATE
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/core/camera
         )
         gtest_discover_tests(test_mvs_stage_snapshot)
 
@@ -614,13 +617,11 @@ if(BUILD_TESTS)
         )
         target_link_libraries(test_mvs_cross_view_hole_repair PRIVATE
             mvs_pipeline
-            camera
             ${OpenCV_LIBS}
             GTest::gtest_main
         )
         target_include_directories(test_mvs_cross_view_hole_repair PRIVATE
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/core/camera
         )
         gtest_discover_tests(test_mvs_cross_view_hole_repair DISCOVERY_MODE PRE_TEST)
 
@@ -638,7 +639,6 @@ if(BUILD_TESTS)
         )
         target_include_directories(test_mvs_types PRIVATE
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/core/camera
             ${CMAKE_SOURCE_DIR}/src/core
         )
         target_compile_definitions(test_mvs_types PRIVATE
@@ -678,14 +678,12 @@ if(BUILD_TESTS)
         endif()
         target_link_libraries(test_mvs_pipeline PRIVATE
             mvs_pipeline
-            camera
             Qt6::Core
             ${OpenCV_LIBS}
             GTest::gtest_main
         )
         target_include_directories(test_mvs_pipeline PRIVATE
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/core/camera
             ${CMAKE_SOURCE_DIR}/src/core
         )
         gtest_discover_tests(test_mvs_pipeline)

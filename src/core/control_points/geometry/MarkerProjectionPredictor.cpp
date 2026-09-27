@@ -1,43 +1,65 @@
 #include "MarkerProjectionPredictor.h"
 
 #include <algorithm>
+#include <string>
 
 namespace xjw::control_points
 {
 
-MarkerPredictionResult MarkerProjectionPredictor::predict(
-    const Marker &marker,
-    const QVector<MarkerCamera> &cameras,
-    const MarkerTriangulationOptions &options)
-{
-    MarkerPredictionResult result;
-    result.triangulation = triangulateMarker(marker, cameras, options);
-    if (!result.triangulation.success) return result;
-
-    for (const MarkerCamera &camera : cameras)
+    MarkerPredictionResult MarkerProjectionPredictor::predict(const Marker& marker,
+                                                              const QVector<MarkerImageView>& views,
+                                                              const MarkerTriangulationOptions& options)
     {
-        const bool already_observed = std::any_of(
-            marker.projections.cbegin(), marker.projections.cend(), [&camera](const MarkerProjection &projection)
+        MarkerPredictionResult result;
+        result.triangulation = triangulateMarker(marker, views, options);
+        if (!result.triangulation.success || !result.triangulation.groundFrame)
         {
-            return projection.imageId == camera.imageId;
-        });
-        if (already_observed || camera.depth(result.triangulation.point) <= 0.0) continue;
+            return result;
+        }
 
-        const QPointF pixel = camera.project(result.triangulation.point);
-        if (!camera.contains(pixel)) continue;
-        if (camera.acceptsPixel && !camera.acceptsPixel(pixel)) continue;
+        const auto& point = result.triangulation.point;
+        const placamera::GroundCoordinate ground{*result.triangulation.groundFrame, {point.x, point.y, point.z}};
+        placamera::EvaluationOptions evaluation_options;
+        evaluation_options.requireInsideImage = true;
 
-        MarkerProjection projection;
-        projection.imageId = camera.imageId;
-        projection.imagePathSnapshot = camera.imagePath;
-        projection.xy = pixel;
-        projection.state = ProjectionState::Predicted;
-        projection.sigmaPx = std::max(1.0, result.triangulation.rmsReprojectionPx);
-        projection.confidence = 1.0 / (1.0 + result.triangulation.rmsReprojectionPx);
-        projection.source = QStringLiteral("geometry_prediction");
-        result.predictions.push_back(projection);
+        for (const MarkerImageView& view : views)
+        {
+            if (!view.camera)
+            {
+                continue;
+            }
+            const QString image_id = QString::fromStdString(std::string(view.camera->imageId().value()));
+            const bool already_observed =
+                std::any_of(marker.projections.cbegin(),
+                            marker.projections.cend(),
+                            [&image_id](const MarkerProjection& projection) { return projection.imageId == image_id; });
+            if (already_observed)
+            {
+                continue;
+            }
+
+            const auto projected = view.camera->groundToImage(ground, evaluation_options);
+            if (!projected)
+            {
+                continue;
+            }
+            const QPointF pixel(projected.value().image.sample, projected.value().image.line);
+            if (view.acceptsPixel && !view.acceptsPixel(pixel))
+            {
+                continue;
+            }
+
+            MarkerProjection projection;
+            projection.imageId = image_id;
+            projection.imagePathSnapshot = view.imagePath;
+            projection.xy = pixel;
+            projection.state = ProjectionState::Predicted;
+            projection.sigmaPx = std::max(1.0, result.triangulation.rmsReprojectionPx);
+            projection.confidence = 1.0 / (1.0 + result.triangulation.rmsReprojectionPx);
+            projection.source = QStringLiteral("geometry_prediction");
+            result.predictions.push_back(projection);
+        }
+        return result;
     }
-    return result;
-}
 
 } // namespace xjw::control_points

@@ -1,4 +1,5 @@
 #include "MvsImagePreprocessor.h"
+#include "MvsTypes.h"
 
 #include "io/PathIO.h"
 
@@ -17,161 +18,148 @@ namespace xjw
 {
 namespace mvs
 {
-namespace
-{
-
-    bool isFiniteDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion)
+    namespace
     {
-        return std::isfinite(distortion.radialK1) && std::isfinite(distortion.radialK2) &&
-               std::isfinite(distortion.radialK3) && std::isfinite(distortion.tangentialP1) &&
-               std::isfinite(distortion.tangentialP2);
-}
 
-bool hasDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion) noexcept
-{
-    constexpr double epsilon = 1e-15;
-    return std::fabs(distortion.radialK1) > epsilon
-        || std::fabs(distortion.radialK2) > epsilon
-        || std::fabs(distortion.radialK3) > epsilon
-        || std::fabs(distortion.tangentialP1) > epsilon
-        || std::fabs(distortion.tangentialP2) > epsilon;
-}
-
-bool writePngAtomic(const QString &path,
-                    const cv::Mat &image,
-                    std::string *errorMessage)
-{
-    std::vector<std::uint8_t> encoded;
-    try
-    {
-        if (!cv::imencode(".png", image, encoded) || encoded.empty())
+        bool isFiniteDistortion(const placamera::BrownConradyDistortion& distortion)
         {
-            if (errorMessage)
+            return std::isfinite(distortion.radialK1) && std::isfinite(distortion.radialK2) &&
+                   std::isfinite(distortion.radialK3) && std::isfinite(distortion.tangentialP1) &&
+                   std::isfinite(distortion.tangentialP2);
+        }
+
+        bool hasDistortion(const placamera::BrownConradyDistortion& distortion) noexcept
+        {
+            constexpr double epsilon = 1e-15;
+            return std::fabs(distortion.radialK1) > epsilon || std::fabs(distortion.radialK2) > epsilon ||
+                   std::fabs(distortion.radialK3) > epsilon || std::fabs(distortion.tangentialP1) > epsilon ||
+                   std::fabs(distortion.tangentialP2) > epsilon;
+        }
+
+        bool writePngAtomic(const QString& path, const cv::Mat& image, std::string* errorMessage)
+        {
+            std::vector<std::uint8_t> encoded;
+            try
             {
-                *errorMessage = "无法编码 MVS prepared PNG: " +
-                    xjw::common::io::toUtf8Path(path);
+                if (!cv::imencode(".png", image, encoded) || encoded.empty())
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = "无法编码 MVS prepared PNG: " + xjw::common::io::toUtf8Path(path);
+                    }
+                    return false;
+                }
             }
-            return false;
+            catch (const cv::Exception& exception)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = std::string("编码 MVS prepared PNG 失败: ") + exception.what();
+                }
+                return false;
+            }
+
+            const QByteArray payload(reinterpret_cast<const char*>(encoded.data()),
+                                     static_cast<qsizetype>(encoded.size()));
+            QString write_error;
+            if (!xjw::common::io::writeFileBytesAtomic(path, payload, &write_error))
+            {
+                if (errorMessage)
+                {
+                    const QByteArray write_error_utf8 = write_error.toUtf8();
+                    *errorMessage =
+                        "无法原子写入 MVS prepared PNG: " + xjw::common::io::toUtf8Path(path) + " (" +
+                        std::string(write_error_utf8.constData(), static_cast<std::size_t>(write_error_utf8.size())) +
+                        ")";
+                }
+                return false;
+            }
+            return true;
         }
-    }
-    catch (const cv::Exception &exception)
+
+    } // namespace
+
+    bool mvsImagePreparationRequiresDistinctPixels(const placamera::BrownConradyDistortion& distortion) noexcept
     {
-        if (errorMessage)
+        return hasDistortion(distortion);
+    }
+
+    cv::Mat normalizeMvsPhotometry(const cv::Mat& source, MvsSceneProfile sceneProfile)
+    {
+        if (source.empty() || source.type() != CV_8UC1)
         {
-            *errorMessage = std::string("编码 MVS prepared PNG 失败: ") +
-                exception.what();
+            return source;
         }
-        return false;
-    }
 
-    const QByteArray payload(
-        reinterpret_cast<const char *>(encoded.data()),
-        static_cast<qsizetype>(encoded.size()));
-    QString write_error;
-    if (!xjw::common::io::writeFileBytesAtomic(path, payload, &write_error))
-    {
-        if (errorMessage)
+        const double image_mean = cv::mean(source)[0];
+        cv::Mat normalized;
+        if (sceneProfile == MvsSceneProfile::OrbitalObject)
         {
-            const QByteArray write_error_utf8 = write_error.toUtf8();
-            *errorMessage = "无法原子写入 MVS prepared PNG: " +
-                xjw::common::io::toUtf8Path(path) + " (" +
-                std::string(write_error_utf8.constData(),
-                            static_cast<std::size_t>(write_error_utf8.size())) +
-                ")";
+            // Planetary/orbital sequences commonly mix strongly illuminated and
+            // shadowed surface views. Apply one moderate transform to the whole
+            // batch; the previous mean-threshold branch enhanced only part of a
+            // sequence and damaged cross-view photometric comparability.
+            cv::createCLAHE(2.0, cv::Size(8, 8))->apply(source, normalized);
+            return normalized;
         }
-        return false;
-    }
-    return true;
-}
 
-} // namespace
+        if (image_mean >= 80.0)
+        {
+            return source;
+        }
+        if (image_mean < 30.0)
+        {
+            cv::Mat float_image;
+            source.convertTo(float_image, CV_32F, 1.0 / 255.0);
+            cv::pow(float_image, 0.4, float_image);
+            float_image.convertTo(normalized, CV_8U, 255.0);
+            cv::createCLAHE(8.0, cv::Size(8, 8))->apply(normalized, normalized);
+            return normalized;
+        }
 
-bool mvsImagePreparationRequiresDistinctPixels(
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera) noexcept
-{
-    return hasDistortion(camera.distortion());
-}
-
-cv::Mat normalizeMvsPhotometry(const cv::Mat &source,
-                               MvsSceneProfile sceneProfile)
-{
-    if (source.empty() || source.type() != CV_8UC1)
-    {
-        return source;
-    }
-
-    const double image_mean = cv::mean(source)[0];
-    cv::Mat normalized;
-    if (sceneProfile == MvsSceneProfile::OrbitalObject)
-    {
-        // Planetary/orbital sequences commonly mix strongly illuminated and
-        // shadowed surface views. Apply one moderate transform to the whole
-        // batch; the previous mean-threshold branch enhanced only part of a
-        // sequence and damaged cross-view photometric comparability.
-        cv::createCLAHE(2.0, cv::Size(8, 8))->apply(source, normalized);
+        cv::createCLAHE(4.0, cv::Size(8, 8))->apply(source, normalized);
         return normalized;
-    }
-
-    if (image_mean >= 80.0)
-    {
-        return source;
-    }
-    if (image_mean < 30.0)
-    {
-        cv::Mat float_image;
-        source.convertTo(float_image, CV_32F, 1.0 / 255.0);
-        cv::pow(float_image, 0.4, float_image);
-        float_image.convertTo(normalized, CV_8U, 255.0);
-        cv::createCLAHE(8.0, cv::Size(8, 8))->apply(
-            normalized, normalized);
-        return normalized;
-    }
-
-    cv::createCLAHE(4.0, cv::Size(8, 8))->apply(source, normalized);
-    return normalized;
 }
 
 bool prepareMvsImage(const cv::Mat& source,
-                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                     const placamera::FramePinholeModel& sourceCamera,
                      cv::Mat* prepared,
-                     xjw::camera_models::frame_pinhole::FramePinholeNumericState* preparedCamera,
+                     std::shared_ptr<const placamera::FramePinholeModel>* preparedCamera,
                      std::string* errorMessage)
 {
     cv::Mat unused_valid_mask;
-    return prepareMvsImageAndMask(source,
-                                  cv::Mat(),
-                                  sourceCamera,
-                                  prepared,
-                                  &unused_valid_mask,
-                                  preparedCamera,
-                                  errorMessage);
+    return prepareMvsImageAndMask(
+        source, cv::Mat(), sourceCamera, prepared, &unused_valid_mask, preparedCamera, errorMessage);
 }
 
 bool prepareMvsImageAndMask(const cv::Mat& source,
                             const cv::Mat& sourceValidMask,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
+                            const placamera::FramePinholeModel& sourceCamera,
                             cv::Mat* prepared,
                             cv::Mat* preparedValidMask,
-                            xjw::camera_models::frame_pinhole::FramePinholeNumericState* preparedCamera,
+                            std::shared_ptr<const placamera::FramePinholeModel>* preparedCamera,
                             std::string* errorMessage)
 {
     if (prepared == nullptr || preparedValidMask == nullptr || preparedCamera == nullptr)
     {
-        if (errorMessage) *errorMessage = "MVS 影像预处理输出指针不能为空";
+        if (errorMessage)
+            *errorMessage = "MVS 影像预处理输出指针不能为空";
         return false;
     }
     if (source.empty())
     {
-        if (errorMessage) *errorMessage = "MVS 影像预处理输入影像为空";
+        if (errorMessage)
+            *errorMessage = "MVS 影像预处理输入影像为空";
         return false;
     }
-    if (!sourceCamera.isValid())
+    if (sourceCamera.imageSize().samples != source.cols || sourceCamera.imageSize().lines != source.rows ||
+        sourceCamera.pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
     {
-        if (errorMessage) *errorMessage = "MVS 影像预处理相机无效";
+        if (errorMessage)
+            *errorMessage = "MVS 影像预处理相机尺寸或像素中心约定与输入栅格不一致";
         return false;
     }
-    if (!sourceValidMask.empty() &&
-        (sourceValidMask.type() != CV_8UC1 || sourceValidMask.size() != source.size()))
+    if (!sourceValidMask.empty() && (sourceValidMask.type() != CV_8UC1 || sourceValidMask.size() != source.size()))
     {
         if (errorMessage)
         {
@@ -180,15 +168,17 @@ bool prepareMvsImageAndMask(const cv::Mat& source,
         return false;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState normalized = sourceCamera.normalizedForPositiveDepth();
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = normalized.intrinsics();
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = normalized.distortion();
-    if (!(intrinsics.focalX > 0.0) || !(intrinsics.focalY > 0.0)
-        || !std::isfinite(intrinsics.focalX) || !std::isfinite(intrinsics.focalY)
-        || !std::isfinite(intrinsics.principalX) || !std::isfinite(intrinsics.principalY)
-        || !isFiniteDistortion(distortion))
+    const auto normalized = sourceCamera.normalizedForPositiveDepth(
+        placamera::CameraDefinitionId(sourceCamera.instanceId().value() + "-mvs-normalized-definition"),
+        sourceCamera.instanceId());
+    const auto intrinsics = normalized.pinholeDefinition().intrinsics();
+    const auto distortion = normalized.pinholeDefinition().distortion();
+    if (!(intrinsics.focalX > 0.0) || !(intrinsics.focalY > 0.0) || !std::isfinite(intrinsics.focalX) ||
+        !std::isfinite(intrinsics.focalY) || !std::isfinite(intrinsics.principalX) ||
+        !std::isfinite(intrinsics.principalY) || !isFiniteDistortion(distortion))
     {
-        if (errorMessage) *errorMessage = "MVS 影像预处理相机包含非法内参或畸变参数";
+        if (errorMessage)
+            *errorMessage = "MVS 影像预处理相机包含非法内参或畸变参数";
         return false;
     }
 
@@ -275,14 +265,26 @@ bool prepareMvsImageAndMask(const cv::Mat& source,
         return false;
     }
 
-    normalized.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
-    *preparedCamera = normalized;
-    if (errorMessage) errorMessage->clear();
+    const auto prepared_definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId(sourceCamera.instanceId().value() + "-mvs-prepared-definition"),
+        intrinsics,
+        placamera::BrownConradyDistortion{},
+        placamera::PixelConvention::PixelCenter,
+        normalized.groundFrame());
+    *preparedCamera = std::make_shared<const placamera::FramePinholeModel>(
+        placamera::FramePinholeModel::create(normalized.instanceId(),
+                                             normalized.imageId(),
+                                             prepared_definition,
+                                             normalized.imageSize(),
+                                             normalized.pose(),
+                                             normalized.captureTime()));
+    if (errorMessage)
+        errorMessage->clear();
     return true;
 }
 
 bool saveMvsPreparedRasterArtifact(const std::string& inputRasterPath,
-                                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& inputCamera,
+                                   const placamera::FramePinholeModel& inputCamera,
                                    const cv::Mat& preparedValidMask,
                                    const std::string& workspaceDirectory,
                                    int frameIndex,
@@ -298,26 +300,20 @@ bool saveMvsPreparedRasterArtifact(const std::string& inputRasterPath,
         return false;
     }
 
-    const cv::Mat source_color = xjw::common::io::readImage(
-        inputRasterPath, cv::IMREAD_COLOR);
+    const cv::Mat source_color = xjw::common::io::readImage(inputRasterPath, cv::IMREAD_COLOR);
     if (source_color.empty())
     {
         if (errorMessage)
         {
-            *errorMessage = "无法读取 MVS prepared raster 输入彩色影像: " +
-                inputRasterPath;
+            *errorMessage = "无法读取 MVS prepared raster 输入彩色影像: " + inputRasterPath;
         }
         return false;
     }
 
     cv::Mat prepared_color;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
+    std::shared_ptr<const placamera::FramePinholeModel> prepared_camera;
     std::string preparation_error;
-    if (!prepareMvsImage(source_color,
-                         inputCamera,
-                         &prepared_color,
-                         &prepared_camera,
-                         &preparation_error))
+    if (!prepareMvsImage(source_color, inputCamera, &prepared_color, &prepared_camera, &preparation_error))
     {
         if (errorMessage)
         {
@@ -349,39 +345,48 @@ bool saveMvsPreparedRasterArtifact(const std::string& inputRasterPath,
             preparedValidMask, valid_mask, 0.0, 255.0, cv::THRESH_BINARY);
     }
 
-    QDir workspace_directory(
-        xjw::common::io::fromUtf8Path(workspaceDirectory));
+    if (!prepared_camera)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "MVS prepared raster 相机无法构造有效的 PlaCamera 面阵针孔模型";
+        }
+        return false;
+    }
+    if (prepared_camera->pinholeDefinition().depthAxisFlipped() ||
+        prepared_camera->pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "MVS prepared raster 相机必须使用正深度和像素中心约定";
+        }
+        return false;
+    }
+
+    QDir workspace_directory(xjw::common::io::fromUtf8Path(workspaceDirectory));
     const QString prepared_directory_name = QStringLiteral("prepared_images");
     if (!workspace_directory.mkpath(prepared_directory_name))
     {
         if (errorMessage)
         {
             *errorMessage = "无法创建 MVS prepared raster 目录: " +
-                xjw::common::io::toUtf8Path(
-                    workspace_directory.filePath(prepared_directory_name));
+                            xjw::common::io::toUtf8Path(workspace_directory.filePath(prepared_directory_name));
         }
         return false;
     }
-    const QDir prepared_directory(
-        workspace_directory.filePath(prepared_directory_name));
-    const QString stem = QStringLiteral("frame_%1").arg(
-        frameIndex, 6, 10, QLatin1Char('0'));
-    const QString image_path = prepared_directory.filePath(
-        stem + QStringLiteral(".png"));
-    const QString valid_mask_path = prepared_directory.filePath(
-        stem + QStringLiteral("_valid.png"));
+    const QDir prepared_directory(workspace_directory.filePath(prepared_directory_name));
+    const QString stem = QStringLiteral("frame_%1").arg(frameIndex, 6, 10, QLatin1Char('0'));
+    const QString image_path = prepared_directory.filePath(stem + QStringLiteral(".png"));
+    const QString valid_mask_path = prepared_directory.filePath(stem + QStringLiteral("_valid.png"));
     if (!writePngAtomic(image_path, prepared_color, errorMessage) ||
         !writePngAtomic(valid_mask_path, valid_mask, errorMessage))
     {
         return false;
     }
 
-    prepared_camera.setImageSize(camera_core::ImageSize{
-        prepared_color.cols,
-        prepared_color.rows});
     artifact->imagePath = xjw::common::io::toUtf8Path(image_path);
     artifact->validMaskPath = xjw::common::io::toUtf8Path(valid_mask_path);
-    artifact->camera = prepared_camera;
+    artifact->camera = std::move(prepared_camera);
     if (errorMessage)
     {
         errorMessage->clear();

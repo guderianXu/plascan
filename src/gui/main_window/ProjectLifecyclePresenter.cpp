@@ -40,10 +40,19 @@ bool ProjectLifecyclePresenter::isCloseSavePending() const
     return _closeSavePending;
 }
 
-void ProjectLifecyclePresenter::requestCloseAfterSave()
+bool ProjectLifecyclePresenter::requestCloseAfterSave()
 {
+    if (_closeSavePending)
+    {
+        return true;
+    }
     _closeSavePending = true;
-    _lifecycle->saveProject();
+    if (!_lifecycle->saveProject())
+    {
+        _closeSavePending = false;
+        return false;
+    }
+    return true;
 }
 
 void ProjectLifecyclePresenter::showOpenProgress(const QString &projectPath)

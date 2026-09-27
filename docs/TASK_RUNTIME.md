@@ -24,6 +24,11 @@
 journal 当前 schema 为 v2，以临时文件加替换方式写入；保存队列、运行状态、检查点引用、结果摘要和结构化错误。
 载入时，遗留的 Running、PauseRequested、CancelRequested 会转换为 Interrupted，绝不会伪装成仍在执行。
 
+项目或 Chunk 切换采用异步 session transition：GUI 线程只更新 epoch、停止旧 scheduler 接单并发出协作取消，随后把
+旧 scheduler 和不可变 snapshot 移交后台，串行完成旧 journal 保存、worker join 与新 journal 读取。transition 期间新的
+任务命令返回 `runtime_transitioning`；连续切换只保留最后一个目标 session。窗口关闭通过主窗口关闭屏障等待该 transition
+和运行时 shutdown 完成后再销毁 QObject，因此正常关闭路径不会在 GUI 线程等待 scheduler worker。
+
 ## 状态与命令语义
 
 主要路径为 `Queued/Blocked -> Running -> Succeeded/Failed/Cancelled`。支持暂停的 executor 在安全点收到 pause 后，
@@ -86,7 +91,8 @@ python3 scripts/dev/browser_agent.py task-command --action move_before --run-id 
 
 - 尚无生产摄影测量 `ITaskExecutor` 注册，因此现有业务按钮不会自动进入新队列；当前 executor 覆盖来自核心和 GUI 集成测试。
 - 尚未提供通用 `submit` 调试 RPC。任意 payload 提交需要先建立受限任务 kind/schema 注册表和权限校验。
-- 项目切换会请求 scheduler shutdown，并依赖 executor 协作退出；对忽略取消的第三方调用还没有安全的有界 drain。
+- 项目切换与关闭已把 scheduler drain 移出 GUI 线程，但仍依赖 executor 协作退出；对忽略取消的第三方调用没有安全的
+  线程强杀方式，界面会保持响应并显示正在等待安全退出。
 - journal schema v1 不自动迁移到 v2。此功能尚未发布过，当前选择明确拒绝未知 schema，避免误恢复。
 - 没有操作系统线程挂起、CUDA kernel 冻结、跨进程/跨机器 worker、多用户调度或分布式资源租约。
 

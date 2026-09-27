@@ -84,9 +84,6 @@ public slots:
     /// 打开工作流程历史报告对话框。
     void openWorkflowReportDialog();
 
-    /// 打开通用相机格式转换对话框。
-    void openCameraConvertDialog();
-
     /// 打开只读相机校准对比窗口，查看空三前后的内参变化。
     void openCameraCalibrationDialog();
 

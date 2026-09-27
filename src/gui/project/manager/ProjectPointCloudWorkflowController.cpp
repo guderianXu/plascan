@@ -18,9 +18,7 @@
 #include "DepthFrameUtils.h"
 #include "../tasks/DepthMapTask.h"
 #include "StreamingDepthFusionService.h"
-#include "camera/core/capabilities/CameraOperationPlan.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/project/CameraProjectRuntime.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "io/PathIO.h"
 #include "Logger.h"
 
@@ -34,8 +32,11 @@
 #include <QPointer>
 #include <QSet>
 
+#include <placamera/frame_camera.h>
+
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -235,13 +236,13 @@ QStringList selectedImagesFromRecord(const QJsonObject &record,
     return images;
 }
 
-using PinholeStatesByImageId =
-    std::unordered_map<xjw::camera_core::ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>;
+using PinholeModelsByImageId =
+    std::unordered_map<placamera::ImageId, std::shared_ptr<const placamera::FramePinholeModel>>;
 
-bool loadMvsCameras(const QJsonObject &metadata,
-                    const std::vector<xjw::camera_core::ImageId> &image_ids,
-                    PinholeStatesByImageId *cameras,
-                    QString *error_message)
+bool loadMvsCameras(const QJsonObject& metadata,
+                    const std::vector<placamera::ImageId>& image_ids,
+                    PinholeModelsByImageId* cameras,
+                    QString* error_message)
 {
     if (!cameras)
     {
@@ -253,61 +254,78 @@ bool loadMvsCameras(const QJsonObject &metadata,
     }
     cameras->clear();
 
-    const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-        xjw::common::project::projectFilesRootObject(metadata),
-        xjw::camera_models::makeBuiltinCameraModelRegistry());
-    const auto plan = runtime.planOperationForImages(
-        image_ids, xjw::camera_core::CameraOperation::DenseMvs);
-    if (!plan.ok())
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(
+        xjw::common::project::projectFilesRootObject(metadata));
+    if (!loaded.ok())
     {
         if (error_message)
         {
-            *error_message = QStringLiteral("MVS 相机能力校验失败：%1")
-                                 .arg(QString::fromStdString(plan.failureMessage()));
+            *error_message = QStringLiteral("MVS 相机数据加载失败：%1")
+                                 .arg(loaded.errors.join(QStringLiteral("; ")));
         }
         return false;
     }
-
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
-    std::string state_error;
-    if (!runtime.framePinholeStatesForImages(image_ids, &states, &state_error))
+    placamera::CameraInstanceSet selected;
+    for (const auto &image_id : image_ids)
     {
-        if (error_message)
+        const auto lookup = loaded.instances.forImage(image_id);
+        if (!lookup.ok() || !selected.add(lookup.value()).ok())
         {
-            *error_message = QStringLiteral("MVS 面阵针孔数值状态解析失败：%1")
-                                 .arg(QString::fromStdString(state_error));
+            if (error_message)
+            {
+                *error_message = QStringLiteral("MVS 找不到 PlaCamera 实例：%1")
+                                     .arg(QString::fromStdString(image_id.value()));
+            }
+            return false;
         }
-        return false;
     }
-    if (states.size() != image_ids.size())
+    const auto capability_check = selected.requireCapabilities({placamera::CapabilityKind::Projection,
+                                                                 placamera::CapabilityKind::ImagingLocus,
+                                                                 placamera::CapabilityKind::StaticPose,
+                                                                 placamera::CapabilityKind::Optimization});
+    const auto frame_check = selected.requireCommonGroundFrame();
+    if (!capability_check.ok() || !frame_check.ok())
     {
         if (error_message)
         {
-            *error_message = QStringLiteral("MVS 相机状态与 ImageId 数量不一致");
+            *error_message = QStringLiteral("MVS 相机能力或地面坐标系校验失败");
         }
         return false;
     }
     cameras->reserve(image_ids.size());
-    for (std::size_t index = 0; index < image_ids.size(); ++index)
+    for (const auto &image_id : image_ids)
     {
-        const auto &state = states[index];
-        if (!state.hasBoundIdentity() || state.imageId() != image_ids[index])
+        const auto lookup = loaded.instances.forImage(image_id);
+        const auto pinhole =
+            lookup.ok() ? std::dynamic_pointer_cast<const placamera::FramePinholeModel>(lookup.value()) : nullptr;
+        if (!pinhole)
         {
             if (error_message)
             {
-                *error_message = QStringLiteral("MVS 相机状态的 canonical identity 不匹配");
+                *error_message = QStringLiteral("MVS 仅支持 PlaCamera 面阵针孔实例：%1")
+                                     .arg(QString::fromStdString(image_id.value()));
             }
             cameras->clear();
             return false;
         }
-        cameras->emplace(image_ids[index], state);
+        if (pinhole->imageId() != image_id || !pinhole->imageSize().isValid())
+        {
+            if (error_message)
+            {
+                *error_message = QStringLiteral("MVS PlaCamera 影像身份或尺寸无效：%1")
+                                     .arg(QString::fromStdString(image_id.value()));
+            }
+            cameras->clear();
+            return false;
+        }
+        cameras->emplace(image_id, pinhole);
     }
     return true;
 }
 
-bool cameraForImage(const PinholeStatesByImageId& cameras,
-                    const xjw::camera_core::ImageId& imageId,
-                    xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera)
+bool cameraForImage(const PinholeModelsByImageId& cameras,
+                    const placamera::ImageId& imageId,
+                    std::shared_ptr<const placamera::FramePinholeModel>* camera)
 {
     if (!camera)
     {
@@ -318,7 +336,7 @@ bool cameraForImage(const PinholeStatesByImageId& cameras,
     {
         return false;
     }
-    if (!it->second.hasBoundIdentity() || it->second.imageId() != imageId)
+    if (!it->second || it->second->imageId() != imageId)
     {
         return false;
     }
@@ -326,12 +344,12 @@ bool cameraForImage(const PinholeStatesByImageId& cameras,
     return true;
 }
 
-bool buildMvsViews(const QString &projectPath,
-                   const QStringList &images,
-                   const std::vector<xjw::camera_core::ImageId> &imageIds,
-                   const PinholeStatesByImageId &cameras,
-                   std::vector<xjw::mvs::CameraView> *views,
-                   QString *errorMessage)
+bool buildMvsViews(const QString& projectPath,
+                   const QStringList& images,
+                   const std::vector<placamera::ImageId>& imageIds,
+                   const PinholeModelsByImageId& cameras,
+                   std::vector<xjw::mvs::CameraView>* views,
+                   QString* errorMessage)
 {
     if (!views)
     {
@@ -345,7 +363,7 @@ bool buildMvsViews(const QString &projectPath,
         }
         return false;
     }
-    std::unordered_set<xjw::camera_core::ImageId> seenImageIds;
+    std::unordered_set<placamera::ImageId> seenImageIds;
     seenImageIds.reserve(imageIds.size());
     views->clear();
     views->reserve(static_cast<std::size_t>(images.size()));
@@ -374,7 +392,8 @@ bool buildMvsViews(const QString &projectPath,
         view.imagePath = xjw::common::io::toUtf8Path(image_path);
         view.validRegionMaskPath = xjw::common::io::toUtf8Path(
             xjw::common::project::ProjectIO::findMaskForImage(projectPath, image_path));
-        if (!cameraForImage(cameras, imageId, &view.camera))
+        std::shared_ptr<const placamera::FramePinholeModel> camera;
+        if (!cameraForImage(cameras, imageId, &camera))
         {
             if (errorMessage)
             {
@@ -385,11 +404,23 @@ bool buildMvsViews(const QString &projectPath,
 
         // QImageReader 仅读取文件头，不在 GUI 准备阶段解码整幅高分辨率影像。
         const QSize size = QImageReader(image_path).size();
-        if (size.isValid())
+        if (!size.isValid() || camera->imageSize().samples != size.width() ||
+            camera->imageSize().lines != size.height())
         {
-            view.imageWidth = size.width();
-            view.imageHeight = size.height();
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("影像尺寸与 PlaCamera 相机不一致：%1（影像 %2×%3，相机 %4×%5）")
+                                    .arg(image_path)
+                                    .arg(size.width())
+                                    .arg(size.height())
+                                    .arg(camera->imageSize().samples)
+                                    .arg(camera->imageSize().lines);
+            }
+            return false;
         }
+        view.imageWidth = size.width();
+        view.imageHeight = size.height();
+        view.camera = std::move(camera);
         views->push_back(std::move(view));
     }
     return true;
@@ -446,7 +477,7 @@ bool clearDepthWorkspace(xjw::gui::project::ProjectSession* session,
     return session->persistMetadata(taskContext.session, metadata, true, errorMessage);
 }
 
-std::vector<xjw::camera_core::ImageId>
+std::vector<placamera::ImageId>
 imageIdsForImages(const QJsonObject& metadata, const QStringList& images, bool* allResolved)
 {
     if (allResolved)
@@ -456,7 +487,7 @@ imageIdsForImages(const QJsonObject& metadata, const QStringList& images, bool* 
     const QMap<QString, QJsonObject> image_meta_by_path =
         xjw::common::project::projectImageMetaByPath(
             xjw::common::project::projectFilesRootObject(metadata), true);
-    std::vector<xjw::camera_core::ImageId> result;
+    std::vector<placamera::ImageId> result;
     result.reserve(static_cast<std::size_t>(images.size()));
     QSet<QString> seen_ids;
     for (const QString &image_path : images)
@@ -695,9 +726,9 @@ bool ProjectPointCloudWorkflowController::startWorkflow(const QJsonObject& setti
     }
 
     bool all_image_ids = false;
-    const std::vector<xjw::camera_core::ImageId> image_ids =
+    const std::vector<placamera::ImageId> image_ids =
         imageIdsForImages(metadata, context->selectedImages, &all_image_ids);
-    PinholeStatesByImageId cameras;
+    PinholeModelsByImageId cameras;
     QString camera_error;
     if (!all_image_ids || !loadMvsCameras(metadata, image_ids, &cameras, &camera_error))
     {
@@ -1071,9 +1102,9 @@ void ProjectPointCloudWorkflowController::startFusion(
         frame_images.push_back(frame.refImage);
     }
     bool all_image_ids = false;
-    const std::vector<xjw::camera_core::ImageId> frame_image_ids =
+    const std::vector<placamera::ImageId> frame_image_ids =
         imageIdsForImages(_session->metadata(), frame_images, &all_image_ids);
-    PinholeStatesByImageId cameras;
+    PinholeModelsByImageId cameras;
     QString camera_error;
     if (!all_image_ids ||
         !loadMvsCameras(_session->metadata(), frame_image_ids, &cameras, &camera_error))
@@ -1111,13 +1142,12 @@ void ProjectPointCloudWorkflowController::startFusion(
 
             const int frame_count = static_cast<int>(stored.frames.size());
             const xjw::mvs::FusionConfig fusion_config =
-                xjw::core::project::buildDepthGenConfig(
-                    context->request, frame_count).fusion;
+                xjw::core::project::buildDepthGenConfig(context->request, frame_count).fusion;
             const xjw::mvs::FusionFrameLoader loader =
                 [stored, frame_image_ids, cameras, fusion_config, context](
                     int index, xjw::mvs::FusionFrameInput* frame, std::string* error_message)
             {
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+                std::shared_ptr<const placamera::FramePinholeModel> camera;
                 if (index < 0 || index >= static_cast<int>(frame_image_ids.size()) ||
                     !cameraForImage(cameras, frame_image_ids[static_cast<std::size_t>(index)], &camera))
                 {
@@ -1128,7 +1158,7 @@ void ProjectPointCloudWorkflowController::startFusion(
                     return false;
                 }
                 auto loaded = xjw::core::project::buildStoredFusionFrame(stored.frames[static_cast<std::size_t>(index)],
-                                                                         camera,
+                                                                         *camera,
                                                                          fusion_config,
                                                                          static_cast<int>(stored.frames.size()),
                                                                          context->request.fusionMaxImageDim);

@@ -36,8 +36,6 @@ public:
     xjw::gui::project::ProjectResourceCleanupCoordinator& cleanup() const;
     ProjectLifecycleService& lifecycle() const;
 
-    void waitForResourceCleanup();
-
 signals:
     void projectCreated(const QString& projectPath);
     void projectOpened(const QString& projectPath);

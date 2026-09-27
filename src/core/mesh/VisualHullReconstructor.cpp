@@ -157,7 +157,7 @@ namespace xjw::mesh
             visibilityDepths.reserve(views.size());
             for (const VisualHullView& view : views)
             {
-                if (view.colorImage.empty())
+                if (!view.camera || view.colorImage.empty())
                 {
                     visibilityDepths.emplace_back();
                     continue;
@@ -165,15 +165,16 @@ namespace xjw::mesh
                 cv::Mat depth(view.colorImage.size(), CV_32F, cv::Scalar(std::numeric_limits<float>::infinity()));
                 for (const MeshVertex& vertex : mesh->vertices)
                 {
-                    const double world[3] = {vertex.x, vertex.y, vertex.z};
-                    double pixel[2] = {};
-                    double cameraDepth = 0.0;
-                    if (!view.camera.projectWorldPointWithDepth(world, pixel, cameraDepth))
+                    const auto projected = view.camera->groundToImage(
+                        {view.camera->groundFrame(), {vertex.x, vertex.y, vertex.z}});
+                    if (!projected || !projected.value().positiveDepth)
                     {
                         continue;
                     }
-                    const int column = static_cast<int>(std::lround(pixel[0]));
-                    const int row = static_cast<int>(std::lround(pixel[1]));
+                    const auto& pixel = projected.value().image;
+                    const double cameraDepth = *projected.value().positiveDepth;
+                    const int column = static_cast<int>(std::lround(pixel.sample));
+                    const int row = static_cast<int>(std::lround(pixel.line));
                     if (row >= 0 && column >= 0 && row < depth.rows && column < depth.cols)
                     {
                         depth.at<float>(row, column) =
@@ -238,19 +239,20 @@ namespace xjw::mesh
                 for (std::size_t viewIndex = 0; viewIndex < views.size(); ++viewIndex)
                 {
                     const VisualHullView& view = views[viewIndex];
-                    if (view.colorImage.empty())
+                    if (!view.camera || view.colorImage.empty())
                     {
                         continue;
                     }
-                    const double world[3] = {vertex.x, vertex.y, vertex.z};
-                    double pixel[2] = {};
-                    double depth = 0.0;
-                    if (!view.camera.projectWorldPointWithDepth(world, pixel, depth))
+                    const auto projected = view.camera->groundToImage(
+                        {view.camera->groundFrame(), {vertex.x, vertex.y, vertex.z}});
+                    if (!projected || !projected.value().positiveDepth)
                     {
                         continue;
                     }
-                    const int column = static_cast<int>(std::lround(pixel[0]));
-                    const int row = static_cast<int>(std::lround(pixel[1]));
+                    const auto& pixel = projected.value().image;
+                    const double depth = *projected.value().positiveDepth;
+                    const int column = static_cast<int>(std::lround(pixel.sample));
+                    const int row = static_cast<int>(std::lround(pixel.line));
                     if (row < 0 || column < 0 || row >= view.colorImage.rows || column >= view.colorImage.cols)
                     {
                         continue;
@@ -268,7 +270,7 @@ namespace xjw::mesh
                         }
                     }
 
-                    const std::array<double, 3> center = view.camera.cameraCenter();
+                    const std::array<double, 3>& center = view.camera->pose().center;
                     float directionX = static_cast<float>(center[0]) - vertex.x;
                     float directionY = static_cast<float>(center[1]) - vertex.y;
                     float directionZ = static_cast<float>(center[2]) - vertex.z;
@@ -554,7 +556,7 @@ namespace xjw::mesh
                                                                   views.end(),
                                                                   [](const VisualHullView& view)
                                                                   {
-                                                                      return view.camera.isValid() &&
+                                                                      return view.camera &&
                                                                              view.silhouetteMask.type() == CV_8UC1 &&
                                                                              !view.silhouetteMask.empty();
                                                                   }));

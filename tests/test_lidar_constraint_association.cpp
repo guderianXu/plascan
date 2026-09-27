@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "BundleAdjustSolver.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
+
+#include <plabundle/constraints.h>
 
 #include <string>
 #include <vector>
@@ -39,13 +40,13 @@ xjw::lidar::LaserConstraintMap makePlaneMap()
 
 TEST(LaserConstraintAssociationTest, AttachesNearestPlaneConstraintToNearbyTrack)
 {
-    xjw::BATrack nearTrack;
+    plabundle::Track nearTrack;
     nearTrack.initialPoint = {{0.1, 0.0, 10.2}};
 
-    xjw::BATrack farTrack;
+    plabundle::Track farTrack;
     farTrack.initialPoint = {{0.0, 0.0, 12.0}};
 
-    std::vector<xjw::BATrack> tracks{nearTrack, farTrack};
+    std::vector<plabundle::Track> tracks{nearTrack, farTrack};
 
     xjw::lidar::LaserAssociationOptions options;
     options.maxDistanceMeters = 0.6;
@@ -59,7 +60,7 @@ TEST(LaserConstraintAssociationTest, AttachesNearestPlaneConstraintToNearbyTrack
     EXPECT_EQ(summary.rejectedByDistance, 1);
 
     ASSERT_EQ(tracks[0].laserPlaneConstraints.size(), 1u);
-    const xjw::BALaserPlaneConstraint &constraint = tracks[0].laserPlaneConstraints.front();
+    const plabundle::LaserPlaneConstraint &constraint = tracks[0].laserPlaneConstraints.front();
     EXPECT_NEAR(constraint.point[2], 10.0, 1e-12);
     EXPECT_NEAR(constraint.normal[2], 1.0, 1e-12);
     EXPECT_NEAR(constraint.initialSignedDistance, 0.2, 1e-12);
@@ -70,13 +71,13 @@ TEST(LaserConstraintAssociationTest, AttachesNearestPlaneConstraintToNearbyTrack
 
 TEST(LaserConstraintAssociationTest, ClearsStaleConstraintsBeforeAssociating)
 {
-    xjw::BATrack track;
+    plabundle::Track track;
     track.initialPoint = {{0.0, 0.0, 10.1}};
-    xjw::BALaserPlaneConstraint stale;
+    plabundle::LaserPlaneConstraint stale;
     stale.point = {{99.0, 99.0, 99.0}};
     track.laserPlaneConstraints.push_back(stale);
 
-    std::vector<xjw::BATrack> tracks{track};
+    std::vector<plabundle::Track> tracks{track};
 
     xjw::lidar::LaserAssociationOptions options;
     options.maxDistanceMeters = 0.5;
@@ -113,13 +114,13 @@ TEST(LaserConstraintAssociationTest, QualityWeightingWeakensRiskyPlaneConstraint
     std::string error;
     ASSERT_TRUE(map.build(samples, mapOptions, &error)) << error;
 
-    xjw::BATrack goodTrack;
+    plabundle::Track goodTrack;
     goodTrack.initialPoint = {{0.0, 0.0, 10.05}};
 
-    xjw::BATrack riskyTrack;
+    plabundle::Track riskyTrack;
     riskyTrack.initialPoint = {{5.45, 0.0, 10.0}};
 
-    std::vector<xjw::BATrack> tracks{goodTrack, riskyTrack};
+    std::vector<plabundle::Track> tracks{goodTrack, riskyTrack};
 
     xjw::lidar::LaserAssociationOptions options;
     options.maxDistanceMeters = 0.5;

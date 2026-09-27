@@ -1,3 +1,4 @@
+#include <plapoint/geometry_cloud.h>
 #include "ProjectWorkflowOperations.h"
 
 #include "filtering/SparsePointCloudProcessor.h"
@@ -68,8 +69,8 @@ bool hasAnyPointColor(const std::vector<xjw::SparsePointCloudPoint> &points)
     return false;
 }
 
-void copyColorsFromPlyCloud(const plapoint::PointCloud<float, plamatrix::Device::CPU> &cloud,
-                            std::vector<xjw::SparsePointCloudPoint> *points)
+void copyColorsFromPlyCloud(const plapoint::GeometryCloud<float>& cloud,
+                            std::vector<xjw::SparsePointCloudPoint>* points)
 {
     if (!points || !cloud.hasColors() || cloud.size() != points->size())
     {
@@ -92,9 +93,9 @@ void copyColorsFromPlyCloud(const plapoint::PointCloud<float, plamatrix::Device:
 
         const auto row = static_cast<plamatrix::Index>(i);
         point.hasColor = true;
-        point.red = colors->getValue(row, 0);
-        point.green = colors->getValue(row, 1);
-        point.blue = colors->getValue(row, 2);
+        point.red = colors->coeff(row, 0);
+        point.green = colors->coeff(row, 1);
+        point.blue = colors->coeff(row, 2);
     }
 }
 
@@ -322,9 +323,9 @@ bool loadSparsePointsFromPly(const QString &path,
         {
             const auto row = static_cast<plamatrix::Index>(i);
             xjw::SparsePointCloudPoint point;
-            point.x = matrix.getValue(row, 0);
-            point.y = matrix.getValue(row, 1);
-            point.z = matrix.getValue(row, 2);
+            point.x = matrix.coeff(row, 0);
+            point.y = matrix.coeff(row, 1);
+            point.z = matrix.coeff(row, 2);
             point.rmsReprojPx = 0.0;
             point.minTriAngleDeg = 0.0;
             point.reconstructionUncertainty = std::numeric_limits<double>::quiet_NaN();
@@ -335,9 +336,9 @@ bool loadSparsePointsFromPly(const QString &path,
             {
                 const auto *colors = cloud->colors();
                 point.hasColor = true;
-                point.red = colors->getValue(row, 0);
-                point.green = colors->getValue(row, 1);
-                point.blue = colors->getValue(row, 2);
+                point.red = colors->coeff(row, 0);
+                point.green = colors->coeff(row, 1);
+                point.blue = colors->coeff(row, 2);
             }
             points->push_back(point);
         }
@@ -506,10 +507,10 @@ bool writeSparsePointCloudPly(const QString &path,
 {
     try
     {
-        using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(points.size(), 3);
+        using PlaCloud = plapoint::GeometryCloud<float>;
+        plamatrix::MatrixXf matrix(points.size(), 3);
         const bool writeColors = hasAnyPointColor(points);
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(points.size(), 3);
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(points.size(), 3);
         for (std::size_t i = 0; i < points.size(); ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);

@@ -7,9 +7,9 @@
 #include <memory>
 #include <string>
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
-using StreamingObjCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using StreamingObjCloud = plapoint::GeometryCloud<float>;
 using ObjLoadProgressCallback = std::function<void(int, const QString &)>;
 
 // Reads OBJ data without retaining a second, file-sized byte buffer. The file

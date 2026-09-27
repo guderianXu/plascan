@@ -4,61 +4,40 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 
-TEST(TriangulationQualityTest, ComputesMinimumCameraRayAngle)
+namespace
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState left;
-    left.setIntrinsics(100.0, 100.0, 0.0, 0.0);
-    left.setPose({1.0, 0.0, 0.0,
-                  0.0, 1.0, 0.0,
-                  0.0, 0.0, 1.0},
-                 {-1.0, 0.0, 0.0});
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState right = left;
-    right.setCameraCenter({1.0, 0.0, 0.0});
-
-    xjw::BATrack track;
-    track.observations.push_back({0, 0.0, 0.0});
-    track.observations.push_back({1, 0.0, 0.0});
-
-    const double angle = xjw::minimumTriangulationAngleDeg(
-        {left, right}, track, {0.0, 0.0, 10.0});
-
-    EXPECT_NEAR(angle, 2.0 * std::atan(0.1) * 180.0 / 3.14159265358979323846, 1e-12);
-}
-
-TEST(TriangulationQualityTest, ComputesPairRmsReprojectionError)
-{
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
-
-    EXPECT_DOUBLE_EQ(
-        xjw::pairRmsReprojectionErrorPx(
-            camera, {3.0, 4.0}, camera, {0.0, 0.0}, {0.0, 0.0, 10.0}),
-        std::sqrt(12.5));
-}
+    placamera::FramePinholeModel makeQualityCamera(int index, double focal, double centerX)
+    {
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = focal;
+        intrinsics.focalY = focal;
+        const placamera::FrameId frame("quality-world");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("quality-definition-" + std::to_string(index)),
+            intrinsics,
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("quality-instance-" + std::to_string(index)),
+            placamera::ImageId("quality-image-" + std::to_string(index)),
+            definition,
+            {4000, 4000},
+            placamera::Pose::create(frame, {centerX, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+    }
+} // namespace
 
 TEST(TriangulationQualityTest, ReconstructionUncertaintyRespondsToBaseline)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState left;
-    left.setIntrinsics(800.0, 800.0, 0.0, 0.0);
-    left.setPose({1.0, 0.0, 0.0,
-                  0.0, 1.0, 0.0,
-                  0.0, 0.0, 1.0},
-                 {-1.0, 0.0, 0.0});
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState wideRight = left;
-    wideRight.setCameraCenter({1.0, 0.0, 0.0});
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState narrowRight = left;
-    narrowRight.setCameraCenter({-0.8, 0.0, 0.0});
+    const auto left = makeQualityCamera(0, 800.0, -1.0);
+    const auto wideRight = makeQualityCamera(1, 800.0, 1.0);
+    const auto narrowRight = makeQualityCamera(2, 800.0, -0.8);
 
     const std::array<double, 3> point{0.0, 0.0, 10.0};
-    const double wide = xjw::reconstructionUncertainty(
-        {{&left, 2.0}, {&wideRight, 2.0}}, point);
-    const double narrow = xjw::reconstructionUncertainty(
-        {{&left, 2.0}, {&narrowRight, 2.0}}, point);
+    const double wide = xjw::reconstructionUncertainty({{&left, 2.0}, {&wideRight, 2.0}}, point);
+    const double narrow = xjw::reconstructionUncertainty({{&left, 2.0}, {&narrowRight, 2.0}}, point);
 
     EXPECT_TRUE(std::isfinite(wide));
     EXPECT_TRUE(std::isfinite(narrow));
@@ -68,9 +47,8 @@ TEST(TriangulationQualityTest, ReconstructionUncertaintyRespondsToBaseline)
 
 TEST(TriangulationQualityTest, ProjectionAccuracyAveragesEveryObservationScale)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    const std::vector<xjw::TiePointQualityObservation> observations{
-        {&camera, 1.0}, {&camera, 2.0}, {&camera, 3.0}};
+    const auto camera = makeQualityCamera(0, 800.0, 0.0);
+    const std::vector<xjw::TiePointQualityObservation> observations{{&camera, 1.0}, {&camera, 2.0}, {&camera, 3.0}};
     EXPECT_DOUBLE_EQ(xjw::projectionAccuracy(observations), 2.0);
 
     std::vector<xjw::TiePointQualityObservation> incomplete = observations;
@@ -80,19 +58,21 @@ TEST(TriangulationQualityTest, ProjectionAccuracyAveragesEveryObservationScale)
 
 TEST(TriangulationQualityTest, CleanTiePointQualityMatchesReferenceContract)
 {
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras(3);
+    std::vector<placamera::FramePinholeModel> cameras;
+    cameras.reserve(3);
     const std::array<double, 3> camera_x{-1.0, 0.0, 1.0};
     const std::array<double, 3> scales{1.0, 2.0, 3.0};
     const std::array<double, 3> point{0.0, 0.0, 5.0};
     std::vector<xjw::TiePointQualityObservation> observations;
-    for (std::size_t index = 0; index < cameras.size(); ++index)
+    for (std::size_t index = 0; index < camera_x.size(); ++index)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = cameras[index];
-        camera.setIntrinsics(1000.0, 1000.0, 0.0, 0.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {camera_x[index], 0.0, 0.0});
-        double projected[2]{};
-        ASSERT_TRUE(camera.projectWorldPoint(point.data(), projected));
-        observations.push_back({&camera, scales[index], {projected[0] + (index == 0 ? 2.0 : 0.0), projected[1]}});
+        cameras.push_back(makeQualityCamera(static_cast<int>(index), 1000.0, camera_x[index]));
+        const auto projection = cameras.back().groundToImage({cameras.back().groundFrame(), point});
+        ASSERT_TRUE(projection);
+        observations.push_back(
+            {&cameras.back(),
+             scales[index],
+             {projection.value().image.sample + (index == 0 ? 2.0 : 0.0), projection.value().image.line}});
     }
 
     const xjw::CleanTiePointQuality quality = xjw::evaluateCleanTiePointQuality(observations, point);

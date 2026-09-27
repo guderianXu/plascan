@@ -1,8 +1,41 @@
 # PlaScan Core Qt 依赖与 GUI 职责解耦计划
 
-更新日期：2026-09-12
+更新日期：2026-09-18
 
-状态：待实施
+状态：持续实施；已完成边界门禁、稀疏展示迁移、同步 MVS 与 GUI 调度分离，正在收紧存储/计算边界。
+
+## 已落地边界（2026-09-17）
+
+- 旧 `DepthMapGenerator` 已删除，CLI 直接执行同步 `MvsPipelineService`，GUI 使用 `DepthMapTask`
+  管理信号、future、取消及析构等待。
+- `mvs_contracts`、`mvs_depth_processing`、`mvs_backend` 和 `mvs_pipeline` 已分层；本轮新增
+  `mvs_storage`，独立拥有 manifest/replay、矩阵/预览及点云 IO，不依赖计算后端或流程服务。
+- `DepthMatStorage.h` 和 `DepthArtifactIO.h` 提供最小存储接口，格式、缓存 revision 与发布顺序不变；
+  独立链接测试和反向依赖门禁约束此边界。保存队列与发布事务仍属于同步流程。
+- 模型工作流、TSDF 阶段及共享执行控制的后续落地细节见
+  [Core 渐进重构](../CORE_REFACTORING.md)。下文“当前基线”保留 9 月 12 日的原始审计记录，
+  阶段接口为设计目标；当前可用 target 与 API 以架构文档和实现为准。
+
+## PlaScan 文件系统布局模块（2026-09-18）
+
+- 新增 `plascan_common_plafs`，提供不依赖 Qt 的 `PlaFile`、`PlaDir`、`PlaChunkLayout` 和 `PlaProjectLayout`。
+- `PlaChunkLayout` 集中计算当前 Chunk 的 `assets`、匹配、控制点、蒙版、相机参考、恢复缓存、导入/打包资源和结果路径；
+  `PlaProjectLayout` 集中计算 `.plascan/.files`、共享影像和数字 Chunk 路径；不读取项目
+  XML、不打开归档，也不负责递归删除。
+- 现有 `ProjectPackageLayout` 和 `ProjectIO` 作为 Qt 适配门面委托标准路径计算；`ProjectWorkspaceStore`、
+  `ProjectAssetImporter` 和资源删除逻辑通过 `ProjectPathBridge` 复用 Chunk 布局。运行时根注册、默认
+  Chunk 选择、复制/归档事务和资源删除策略仍留在项目层，保持本轮行为范围可审查。
+
+## 空三标准入口与文件模块（2026-09-18）
+
+- 已新增不依赖 Qt 的 `plascan_common_file` 与 `plascan_common_json_io`；统一标准路径、二进制读取、
+  流式原子写入及 nlohmann JSON 读写，实际接入空三连接点读取、PLY 与 sidecar 发布。
+- 已拆出 `aerial_triangulation_engine`；针孔/RPC 生产 runner 转换工程数据后调用标准相机和观测接口，
+  连接点图使用标准容器，Pipeline 使用标准单调时钟。
+- 工作流 Qt DTO、项目相机/标记适配及质量 JSON 构造仍在工程门面；匹配图诊断和自适应焦距候选排序
+  已改用标准容器，候选规划只保留工程路径适配。camera/common IO 与 SfM/common log 的传递 Qt 依赖尚未移除；
+  下一批需拆共享依赖和报告序列化，
+  再迁移工程门面物理目录。当前不把数值入口无 Qt 类型等同于整个链接链路无 Qt。
 
 ## 目标
 
@@ -340,3 +373,44 @@ MvsRunResult runMvs(const MvsRunRequest &request,
 - 不把纹理、报告和 PDF 等真实导出能力简单塞入 GUI；它们作为可选应用能力保留。
 - 不在完成同步引擎和兼容 adapter 前删除现有 signals 接口。
 - 不为了达到文件数量指标创建没有独立职责的薄包装层。
+
+## 2026-09-17 呈现边界进展
+
+批次 6 的标靶打印和全球地形报告实现已移到 `src/adapters/qt`，GUI/CLI 显式链接
+`marker_print_qt`、`terrain_report_qt`；地形 core 通过事务内预览回调调用呈现能力。
+项目资源自动恢复的会话连接也已移入 `project_recovery_qt`，core 只提供同步恢复操作。
+本轮构建与 43 项相关测试、14 项 GUI 定向测试通过；合成网格的 PNG/GeoTIFF 与迁移前逐字节一致。
+详细接口迁移和验证见 `docs/CORE_REFACTORING.md`。
+
+批次 6 尚未全部完成：标靶检测仍使用 QImage，其他图像/纹理接口的 QtGui 依赖需要继续审查；
+尚未提供可关闭呈现库的 headless 配置，也未完成 Qt 值类型迁移或无 Qt 的 engine preset。
+
+## 2026-09-18 标靶图像接口与 headless 进展
+
+标靶检测输入迁移为二维 CV_8UC1 cv::Mat，角点迁移为 QVector<QPointF>；
+control_points 不再链接 QtGui。marker_detection_qt 保留 GUI/CLI 的 QImage 灰度转换和蒙版语义。
+新增 PLASCAN_BUILD_QT_PRESENTATION 开关和三个平台的 CPU source-headless-release preset，
+可关闭桌面 GUI、PDF 和地形报告库。小天体 CLI 的无预览路径只初始化 QCoreApplication。
+
+批次 6 的呈现开关和 headless 配置已提供，但 headless 仍需要公开 QtGui：
+SfM 着色、空三图像读取、网格纹理以及应用层标靶图像转换尚未脱离 QtGui。
+后续继续按上述模块迁移图像 IO/处理，再处理 QtCore 值类型和无 Qt 的 engine preset。
+本轮只验证 Linux/GCC 的受影响目标和定向测试；其他平台 preset 已登记但尚未实测。
+
+### 2026-09-18 SfM 着色迁移
+
+TriangulationService 已改用公共 ImageIO 的 cv::Mat BGR 图像，sfm_project 移除 QtGui 链接。
+像素方向、qRound、边界夹取、多视平均和无颜色时的中性灰几何输出保留。
+失败影像只尝试读取一次，日志和结果 JSON 包含路径/原因及无颜色点数量。
+新增独立颜色采样测试；公共 TIFF 读取修正组合 COLOR/IGNORE_ORIENTATION 标志的三通道输出。
+本阶段之后，剩余直接 QtGui 职责集中在网格纹理和空三图像读取；应用层标靶转换也仍需 QtGui。
+
+### 2026-09-18 空三图像 I/O 迁移
+
+空三的三处尺寸读取统一为公共 readImageSize()，只读取 GDAL/BMP 图像头；
+两处点云颜色采样改用公共 ImageIO 的 cv::Mat，并显式忽略 EXIF 旋转。
+aerial_triangulation 移除 QtGui 链接，保留 QtCore 值类型与原有几何流程。
+剩余直接 QtGui 职责集中在网格纹理和应用层标靶转换，headless 仍需要 QtGui。
+
+本次 RPC 回归同时修复 imageCoordinate() 对 QMap::value() 临时关键点容器的悬空引用，
+改为从 constFind() 获取原容器；实际 RPC 点云颜色按 sidecar 观测索引逐点校验。

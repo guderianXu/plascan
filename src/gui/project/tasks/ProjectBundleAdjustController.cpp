@@ -27,29 +27,18 @@ namespace xjw::gui::project
 
         constexpr auto kTaskId = "bundle_adjust";
 
-        QMap<QString, QJsonObject>
-        cameraUpdatesForPresentation(const QJsonObject& projectMeta,
-                                     const xjw::camera_project::CameraInstanceUpdates& updates)
+        QMap<QString, QJsonObject> refinedCamerasForPresentation(const QJsonObject& resultJson)
         {
             QMap<QString, QJsonObject> result;
-            const QJsonArray images = xjw::common::project::projectImageEntries(projectMeta);
-            for (const auto& update : updates)
+            for (const QJsonValue& value : resultJson.value(QStringLiteral("refined_cameras")).toArray())
             {
-                const QString image_id = QString::fromStdString(update.imageId.value()).trimmed();
-                for (const QJsonValue& value : images)
+                const QJsonObject record = value.toObject();
+                const QString path =
+                    xjw::common::project::normalizePath(record.value(QStringLiteral("image_path")).toString());
+                const QJsonObject camera = record.value(QStringLiteral("camera")).toObject();
+                if (!path.isEmpty() && !camera.isEmpty())
                 {
-                    const QJsonObject image = value.toObject();
-                    if (image.value(QStringLiteral("image_uuid")).toString().trimmed() != image_id)
-                    {
-                        continue;
-                    }
-                    const QString path =
-                        xjw::common::project::normalizePath(image.value(QStringLiteral("path")).toString());
-                    if (!path.isEmpty())
-                    {
-                        result.insert(path, update.modelMetadata);
-                    }
-                    break;
+                    result.insert(path, camera);
                 }
             }
             return result;
@@ -176,27 +165,26 @@ namespace xjw::gui::project
         _taskContext.taskId = QString::fromLatin1(kTaskId);
         _taskContext.session = _session->context();
         _taskContext.cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        options.baOpt.cancelFlag = _taskContext.cancelFlag;
+        options.baOpt.solver.cancelFlag = _taskContext.cancelFlag;
         _isRunning = true;
         _terminalEmitted = false;
 
         const ProjectTaskContext task_context = _taskContext;
         QPointer<ProjectBundleAdjustController> self(this);
-        options.baOpt.progressCallback =
-            [self, task_context](int currentIteration, int maxIterations, double avgRms, int validPoints)
+        options.baOpt.solver.progressCallback = [self, task_context](const plabundle::IterationSummary& summary)
         {
             if (!self || !task_context.cancelFlag || task_context.cancelFlag->load(std::memory_order_relaxed))
             {
                 return false;
             }
-            const int safe_max_iterations = std::max(1, maxIterations);
-            const int percent =
-                qBound(10, 10 + static_cast<int>(std::lround(80.0 * currentIteration / safe_max_iterations)), 90);
+            const int safe_max_iterations = std::max(1, summary.maxIterations);
+            const int percent = qBound(
+                10, 10 + static_cast<int>(std::lround(80.0 * summary.currentIteration / safe_max_iterations)), 90);
             const QString stage = QStringLiteral("光束法平差优化中... %1/%2 RMS=%3 有效点=%4")
-                                      .arg(currentIteration)
+                                      .arg(summary.currentIteration)
                                       .arg(safe_max_iterations)
-                                      .arg(avgRms, 0, 'f', 4)
-                                      .arg(validPoints);
+                                      .arg(summary.averageRmsPixels, 0, 'f', 4)
+                                      .arg(summary.validPointCount);
             QMetaObject::invokeMethod(
                 self.data(),
                 [self, task_context, stage, percent]()
@@ -278,26 +266,32 @@ namespace xjw::gui::project
         options->outputDir = QDir::cleanPath(outputDir);
         options->dryRun = dryRun;
         options->threads = threads;
-        options->baOpt.maxIterations = qBound(3, extraSettings.value(QStringLiteral("max_iterations")).toInt(20), 200);
-        options->baOpt.refineCameraPose = extraSettings.value(QStringLiteral("refine_camera_pose")).toBool(true);
-        options->baOpt.numThreads = threads;
+        options->baOpt.solver.maxIterations =
+            qBound(3, extraSettings.value(QStringLiteral("max_iterations")).toInt(20), 200);
+        options->baOpt.calibration.refineCameraPose =
+            extraSettings.value(QStringLiteral("refine_camera_pose")).toBool(true);
+        options->baOpt.solver.numThreads = threads;
         const QString backend =
             extraSettings.value(QStringLiteral("ba_backend")).toString(QStringLiteral("auto")).trimmed().toLower();
         if (backend == QLatin1String("auto"))
         {
-            options->baOpt.backend = xjw::BABackend::Auto;
+            options->baOpt.backend.requested = plabundle::Backend::Auto;
         }
         else if (backend == QLatin1String("plamatrix_cpu"))
         {
-            options->baOpt.backend = xjw::BABackend::PlaMatrixCpu;
+            options->baOpt.backend.requested = plabundle::Backend::PlaMatrixCpu;
         }
         else if (backend == QLatin1String("plamatrix_cuda"))
         {
-            options->baOpt.backend = xjw::BABackend::PlaMatrixCuda;
+            options->baOpt.backend.requested = plabundle::Backend::PlaMatrixCuda;
         }
         else if (backend == QLatin1String("plamatrix_opencl"))
         {
-            options->baOpt.backend = xjw::BABackend::PlaMatrixOpenCl;
+            options->baOpt.backend.requested = plabundle::Backend::PlaMatrixOpenCl;
+        }
+        else if (backend == QLatin1String("plamatrix_vulkan"))
+        {
+            options->baOpt.backend.requested = plabundle::Backend::PlaMatrixVulkan;
         }
         else
         {
@@ -308,54 +302,72 @@ namespace xjw::gui::project
             return false;
         }
 
-        options->baOpt.plaMatrixDevice = qMax(0, extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
-        options->baOpt.minPlaMatrixCudaCameras = qMax(
-            1,
-            extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(options->baOpt.minPlaMatrixCudaCameras));
-        options->baOpt.minPlaMatrixCudaObservations =
+        options->baOpt.backend.plaMatrixDevice =
+            qMax(0, extraSettings.value(QStringLiteral("ba_plamatrix_device")).toInt(0));
+        options->baOpt.backend.minPlaMatrixCudaCameras =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_cuda_cameras"))
+                     .toInt(options->baOpt.backend.minPlaMatrixCudaCameras));
+        options->baOpt.backend.minPlaMatrixCudaObservations =
             qMax(1,
                  extraSettings.value(QStringLiteral("ba_min_cuda_observations"))
-                     .toInt(options->baOpt.minPlaMatrixCudaObservations));
-        options->baOpt.minPlaMatrixOpenClCameras = qMax(1,
-                                                        extraSettings.value(QStringLiteral("ba_min_opencl_cameras"))
-                                                            .toInt(options->baOpt.minPlaMatrixOpenClCameras));
-        options->baOpt.minPlaMatrixOpenClObservations =
+                     .toInt(options->baOpt.backend.minPlaMatrixCudaObservations));
+        options->baOpt.backend.minPlaMatrixVulkanCameras =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_vulkan_cameras"))
+                     .toInt(options->baOpt.backend.minPlaMatrixVulkanCameras));
+        options->baOpt.backend.minPlaMatrixVulkanObservations =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_vulkan_observations"))
+                     .toInt(options->baOpt.backend.minPlaMatrixVulkanObservations));
+        options->baOpt.backend.minPlaMatrixOpenClCameras =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_opencl_cameras"))
+                     .toInt(options->baOpt.backend.minPlaMatrixOpenClCameras));
+        options->baOpt.backend.minPlaMatrixOpenClObservations =
             qMax(1,
                  extraSettings.value(QStringLiteral("ba_min_opencl_observations"))
-                     .toInt(options->baOpt.minPlaMatrixOpenClObservations));
-        options->baOpt.minPlaMatrixDenseCameras = qMax(
-            1,
-            extraSettings.value(QStringLiteral("ba_min_dense_cameras")).toInt(options->baOpt.minPlaMatrixDenseCameras));
-        options->baOpt.minPlaMatrixCudaDenseObservations =
+                     .toInt(options->baOpt.backend.minPlaMatrixOpenClObservations));
+        options->baOpt.backend.minPlaMatrixDenseCameras =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_dense_cameras"))
+                     .toInt(options->baOpt.backend.minPlaMatrixDenseCameras));
+        options->baOpt.backend.minPlaMatrixCudaDenseObservations =
             qMax(1,
                  extraSettings.value(QStringLiteral("ba_min_cuda_dense_observations"))
-                     .toInt(options->baOpt.minPlaMatrixCudaDenseObservations));
-        options->baOpt.minPlaMatrixOpenClDenseObservations =
+                     .toInt(options->baOpt.backend.minPlaMatrixCudaDenseObservations));
+        options->baOpt.backend.minPlaMatrixVulkanDenseObservations =
+            qMax(1,
+                 extraSettings.value(QStringLiteral("ba_min_vulkan_dense_observations"))
+                     .toInt(options->baOpt.backend.minPlaMatrixVulkanDenseObservations));
+        options->baOpt.backend.minPlaMatrixOpenClDenseObservations =
             qMax(1,
                  extraSettings.value(QStringLiteral("ba_min_opencl_dense_observations"))
-                     .toInt(options->baOpt.minPlaMatrixOpenClDenseObservations));
-        options->baOpt.maxInitialTrackRms = qMax(0.0,
-                                                 extraSettings.value(QStringLiteral("ba_max_initial_track_rms"))
-                                                     .toDouble(options->baOpt.maxInitialTrackRms));
-        options->baOpt.allowBackendFallback =
+                     .toInt(options->baOpt.backend.minPlaMatrixOpenClDenseObservations));
+        options->baOpt.solver.maxInitialTrackRms = qMax(0.0,
+                                                        extraSettings.value(QStringLiteral("ba_max_initial_track_rms"))
+                                                            .toDouble(options->baOpt.solver.maxInitialTrackRms));
+        options->baOpt.backend.allowFallback =
             extraSettings.value(QStringLiteral("ba_allow_backend_fallback")).toBool(true);
-        options->baOpt.maxAcceptedConstraintRmsGrowth =
+        options->baOpt.quality.maxAcceptedConstraintRmsGrowth =
             qMax(1.0,
                  extraSettings.value(QStringLiteral("ba_max_accepted_constraint_rms_growth"))
-                     .toDouble(options->baOpt.maxAcceptedConstraintRmsGrowth));
-        options->baOpt.enableBackendQualityGate =
+                     .toDouble(options->baOpt.quality.maxAcceptedConstraintRmsGrowth));
+        options->baOpt.quality.enabled =
             extraSettings.value(QStringLiteral("ba_enable_backend_quality_gate")).toBool(true);
-        options->baOpt.maxAcceptedRmsGrowth = qMax(0.0,
-                                                   extraSettings.value(QStringLiteral("ba_max_accepted_rms_growth"))
-                                                       .toDouble(options->baOpt.maxAcceptedRmsGrowth));
-        options->baOpt.minAcceptedValidTrackRatio =
+        options->baOpt.quality.maxAcceptedRmsGrowth =
+            qMax(0.0,
+                 extraSettings.value(QStringLiteral("ba_max_accepted_rms_growth"))
+                     .toDouble(options->baOpt.quality.maxAcceptedRmsGrowth));
+        options->baOpt.quality.minAcceptedValidTrackRatio =
             qMax(0.0,
                  extraSettings.value(QStringLiteral("ba_min_accepted_valid_track_ratio"))
-                     .toDouble(options->baOpt.minAcceptedValidTrackRatio));
-        options->baOpt.enablePointFilter = true;
-        options->baOpt.filterMaxReprojError =
+                     .toDouble(options->baOpt.quality.minAcceptedValidTrackRatio));
+        options->baOpt.solver.enablePointFilter = true;
+        options->baOpt.solver.filterMaxReprojError =
             extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(2.5);
-        options->baOpt.filterSigmaFactor = extraSettings.value(QStringLiteral("filter_sigma_factor")).toDouble(3.0);
+        options->baOpt.solver.filterSigmaFactor =
+            extraSettings.value(QStringLiteral("filter_sigma_factor")).toDouble(3.0);
         options->exportTsai = extraSettings.value(QStringLiteral("export_tsai")).toBool(true);
         options->exportSummaryTxt = extraSettings.value(QStringLiteral("export_summary_txt")).toBool(true);
         options->exportPointsCsv = extraSettings.value(QStringLiteral("export_points_csv")).toBool(true);
@@ -454,10 +466,10 @@ namespace xjw::gui::project
                 assets_dir.isEmpty()
                     ? QString()
                     : QDir(assets_dir)
-                          .filePath(QStringLiteral("aerial_triangulation/ba_refined_%1")
-                                        .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
-            const QMap<QString, QJsonObject> after_camera_meta =
-                cameraUpdatesForPresentation(_session->coreMetadata(), _pendingCameraUpdates);
+                          .filePath(
+                              QStringLiteral("aerial_triangulation/ba_refined_%1")
+                                  .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
+            const QMap<QString, QJsonObject> after_camera_meta = refinedCamerasForPresentation(_pendingResult);
             const BundleAdjustArtifactsResult artifacts =
                 finalizeBundleAdjustArtifacts(assets_dir,
                                               _pendingResult,
@@ -499,8 +511,12 @@ namespace xjw::gui::project
 
         ProjectBundleAdjustMetadataStageToken stage_token;
         QString stage_error;
-        if (!_session->stageBundleAdjustMetadata(
-                preview_context.session, _pendingCameraUpdates, _pendingResult, &stage_token, &stage_error))
+        if (!_session->stageBundleAdjustMetadata(preview_context.session,
+                                                 _pendingCameraInstances,
+                                                 _pendingCameraAnnotationsByImageId,
+                                                 _pendingResult,
+                                                 &stage_token,
+                                                 &stage_error))
         {
             if (errorMessage)
             {
@@ -513,13 +529,12 @@ namespace xjw::gui::project
         if (_pendingTiePointWrite)
         {
             const bool writer_succeeded =
-                _tiePointResultWriter &&
-                _tiePointResultWriter(preview_context,
-                                      _pendingTiePointSparseCloudPath,
-                                      _pendingTiePointCount,
-                                      _pendingTiePointSelectedImages,
-                                      _pendingTiePointOutputDir,
-                                      _pendingTiePointExtraRecord);
+                _tiePointResultWriter && _tiePointResultWriter(preview_context,
+                                                               _pendingTiePointSparseCloudPath,
+                                                               _pendingTiePointCount,
+                                                               _pendingTiePointSelectedImages,
+                                                               _pendingTiePointOutputDir,
+                                                               _pendingTiePointExtraRecord);
             if (!writer_succeeded)
             {
                 const auto rolled_back = _session->resolveBundleAdjustMetadataStage(
@@ -611,7 +626,8 @@ namespace xjw::gui::project
             _previewContext.cancelFlag->store(true, std::memory_order_relaxed);
         }
         rollbackPreviewMetadataStage();
-        _pendingCameraUpdates.clear();
+        _pendingCameraInstances = {};
+        _pendingCameraAnnotationsByImageId.clear();
         _pendingBeforeCameraMeta.clear();
         _pendingResult = {};
         _previewContext = {};
@@ -702,7 +718,7 @@ namespace xjw::gui::project
 
     bool ProjectBundleAdjustController::isCurrentPreview(const ProjectTaskContext& context) const
     {
-        return !_destroying && _hasPendingPreview && !_pendingCameraUpdates.empty() && _session &&
+        return !_destroying && _hasPendingPreview && !_pendingCameraInstances.empty() && _session &&
                _session->isCurrent(_previewContext.session) && _previewContext.session.matches(context.session) &&
                _previewContext.taskId == context.taskId && _previewContext.cancelFlag == context.cancelFlag &&
                context.cancelFlag && !context.cancelFlag->load(std::memory_order_relaxed);
@@ -754,11 +770,12 @@ namespace xjw::gui::project
         {
             return;
         }
-        const bool has_preview = result.success && !dryRun && !result.cameraInstanceUpdates.empty();
+        const bool has_preview = result.success && !dryRun && !result.cameraInstances.empty();
         if (has_preview)
         {
             _pendingBeforeCameraMeta = executionResult.beforeCamMeta;
-            _pendingCameraUpdates = result.cameraInstanceUpdates;
+            _pendingCameraInstances = result.cameraInstances;
+            _pendingCameraAnnotationsByImageId = result.cameraAnnotationsByImageId;
             _pendingResult = result.resultJson;
             _previewContext = context;
             _hasPendingPreview = true;
@@ -838,7 +855,7 @@ namespace xjw::gui::project
         while (_messages && isCurrentPreview(context))
         {
             const BundleAdjustPreviewPresentation presentation =
-                buildBundleAdjustPreviewPresentation(_pendingResult, static_cast<int>(_pendingCameraUpdates.size()));
+                buildBundleAdjustPreviewPresentation(_pendingResult, static_cast<int>(_pendingCameraInstances.size()));
             UiReviewDialogRequest request;
             request.objectName = QStringLiteral("bundleAdjustPreviewMessageBox");
             request.title = QStringLiteral("参考地形约束重新平差");

@@ -267,16 +267,17 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
 
     for (const CameraView &view : views)
     {
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-            view.camera.normalizedForPositiveDepth();
-        if (!camera.isValid())
+        if (!view.camera)
         {
             continue;
         }
-        const std::array<double, 3> camera_center = camera.cameraCenter();
-        const std::array<double, 9> rotation = camera.worldToCameraRotation();
+        const auto camera = view.camera->normalizedForPositiveDepth(
+            placamera::CameraDefinitionId(view.camera->definitionId().value() + "-scene-normalized"),
+            view.camera->instanceId());
+        const auto& camera_center = camera.pose().center;
+        const auto& rotation = camera.pose().cameraToWorldRotation;
         const Vec3 center(camera_center[0], camera_center[1], camera_center[2]);
-        const Vec3 raw_optical_axis(rotation[6], rotation[7], rotation[8]);
+        const Vec3 raw_optical_axis(rotation[2], rotation[5], rotation[8]);
         if (!finiteVector(center) || !finiteVector(raw_optical_axis) ||
             cv::norm(raw_optical_axis) <= 1e-12)
         {

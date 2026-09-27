@@ -6,43 +6,49 @@
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState cameraAt(double x)
+    placamera::FramePinholeModel
+    cameraAt(double x, int width = 64, int height = 64, const char* frame_id = "hole-repair-world")
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {x, 0.0, 0.0});
-        return camera;
-}
-
-std::vector<xjw::mvs::ProjectedDepthEvidence> evidenceFor(
-    const std::vector<cv::Mat> &depths,
-    const std::vector<int> &sectors = {0, 1, 2})
-{
-    std::vector<xjw::mvs::ProjectedDepthEvidence> result;
-    result.reserve(depths.size());
-    for (int index = 0; index < static_cast<int>(depths.size()); ++index)
-    {
-        xjw::mvs::ProjectedDepthEvidence evidence;
-        evidence.depth = depths[static_cast<std::size_t>(index)];
-        evidence.confidence = cv::Mat(
-            evidence.depth.size(), CV_32FC1, cv::Scalar(0.9f));
-        evidence.reprojectionErrorPixels = cv::Mat(
-            evidence.depth.size(), CV_32FC1, cv::Scalar(0.1f));
-        evidence.baselineSector = sectors[static_cast<std::size_t>(
-            index % static_cast<int>(sectors.size()))];
-        result.push_back(std::move(evidence));
+        const placamera::FrameId frame(frame_id);
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("hole-repair-definition"),
+                                                      placamera::FrameIntrinsics{80.0, 80.0, 32.0, 32.0},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("hole-repair-instance"),
+            placamera::ImageId("hole-repair-image"),
+            definition,
+            {width, height},
+            placamera::Pose::create(frame, {x, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
     }
-    return result;
+
+    std::vector<xjw::mvs::ProjectedDepthEvidence> evidenceFor(const std::vector<cv::Mat>& depths,
+                                                              const std::vector<int>& sectors = {0, 1, 2})
+    {
+        std::vector<xjw::mvs::ProjectedDepthEvidence> result;
+        result.reserve(depths.size());
+        for (int index = 0; index < static_cast<int>(depths.size()); ++index)
+        {
+            xjw::mvs::ProjectedDepthEvidence evidence;
+            evidence.depth = depths[static_cast<std::size_t>(index)];
+            evidence.confidence = cv::Mat(evidence.depth.size(), CV_32FC1, cv::Scalar(0.9f));
+            evidence.reprojectionErrorPixels = cv::Mat(evidence.depth.size(), CV_32FC1, cv::Scalar(0.1f));
+            evidence.baselineSector = sectors[static_cast<std::size_t>(index % static_cast<int>(sectors.size()))];
+            result.push_back(std::move(evidence));
+        }
+        return result;
 }
 
 TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = cameraAt(0.08);
+    const auto reference_camera = cameraAt(0.0, 128, 96);
+    const auto source_camera = cameraAt(0.08, 128, 96);
     cv::Mat source_depth(96, 128, CV_32FC1);
     for (int row = 0; row < source_depth.rows; ++row)
     {
-        float *values = source_depth.ptr<float>(row);
+        float* values = source_depth.ptr<float>(row);
         for (int column = 0; column < source_depth.cols; ++column)
         {
             values[column] = 2.0f + 0.0005f * static_cast<float>(row + column);
@@ -75,30 +81,53 @@ TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
 
 TEST(DepthCrossViewHoleRepairTest, ParallelProjectionHonorsPreexistingCancellation)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
+    const auto reference_camera = cameraAt(0.0, 128, 96);
     cv::Mat source_depth(96, 128, CV_32FC1, cv::Scalar(2.0f));
     std::atomic<bool> cancelled{true};
     std::uint64_t candidate_count = 99;
 
-    const cv::Mat projected = xjw::mvs::projectSourceDepthToReference(
-        source_depth,
-        cameraAt(0.08),
-        reference_camera,
-        source_depth.size(),
-        1.0f,
-        &candidate_count,
-        6,
-        &cancelled);
+    const cv::Mat projected = xjw::mvs::projectSourceDepthToReference(source_depth,
+                                                                      cameraAt(0.08, 128, 96),
+                                                                      reference_camera,
+                                                                      source_depth.size(),
+                                                                      1.0f,
+                                                                      &candidate_count,
+                                                                      6,
+                                                                      &cancelled);
 
     EXPECT_EQ(candidate_count, 0U);
     EXPECT_EQ(cv::countNonZero(projected > 0.0f), 0);
 }
 
-TEST(DepthCrossViewHoleRepairTest,
-     ProjectedEvidenceIsDeterministicAcrossWorkerCounts)
+TEST(DepthCrossViewHoleRepairTest, RejectsMismatchedCameraFrameAndRasterSize)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera = cameraAt(0.08);
+    const cv::Mat source_depth(64, 64, CV_32FC1, cv::Scalar(2.0f));
+    const auto source_camera = cameraAt(0.08);
+    const auto other_frame = cameraAt(0.0, 64, 64, "other-world");
+    const auto wrong_size = cameraAt(0.0, 32, 32);
+    std::uint64_t candidate_count = 99;
+
+    EXPECT_TRUE(xjw::mvs::projectSourceDepthToReference(
+                    source_depth, source_camera, other_frame, source_depth.size(), 1.0f, &candidate_count)
+                    .empty());
+    EXPECT_EQ(candidate_count, 0U);
+    EXPECT_TRUE(
+        xjw::mvs::projectSourceDepthToReference(source_depth, source_camera, wrong_size, source_depth.size(), 1.0f)
+            .empty());
+
+    const cv::Mat confidence(64, 64, CV_32FC1, cv::Scalar(0.8f));
+    EXPECT_TRUE(xjw::mvs::projectSourceDepthEvidenceToReference(
+                    source_depth, confidence, source_camera, other_frame, source_depth.size(), 1.0f, 0)
+                    .depth.empty());
+    EXPECT_TRUE(xjw::mvs::projectSourceDepthEvidenceToReference(
+                    source_depth, confidence, source_camera, wrong_size, source_depth.size(), 1.0f, 0)
+                    .depth.empty());
+}
+
+TEST(DepthCrossViewHoleRepairTest, ProjectedEvidenceIsDeterministicAcrossWorkerCounts)
+{
+    const auto reference_camera = cameraAt(0.0, 96, 64);
+    const auto source_camera = cameraAt(0.08, 96, 64);
     cv::Mat source_depth(64, 96, CV_32FC1, cv::Scalar(2.0f));
     cv::Mat source_confidence(64, 96, CV_32FC1);
     for (int row = 0; row < source_confidence.rows; ++row)
@@ -248,7 +277,7 @@ TEST(DepthCrossViewHoleRepairTest, ParallelHoleCandidateScanMatchesSerialResult)
 
 TEST(DepthCrossViewHoleRepairTest, RepairsHoleConfirmedByTwoDistinctSources)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera = cameraAt(0.0);
+    const auto reference_camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(29, 29, 7, 7)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));
@@ -341,7 +370,7 @@ TEST(DepthCrossViewHoleRepairTest, DoesNotRepairOutsideSupportMask)
 
 TEST(DepthCrossViewHoleRepairTest, GrowsStableTwoSourceComponentFromStrongCore)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = cameraAt(0.0);
+    const auto camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(30, 30, 5, 5)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));
@@ -388,7 +417,7 @@ TEST(DepthCrossViewHoleRepairTest, GrowsStableTwoSourceComponentFromStrongCore)
 
 TEST(DepthCrossViewHoleRepairTest, RejectsOversizedTwoSourceComponent)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = cameraAt(0.0);
+    const auto camera = cameraAt(0.0);
     cv::Mat reference(64, 64, CV_32FC1, cv::Scalar(2.0f));
     reference(cv::Rect(28, 28, 7, 7)).setTo(0.0f);
     const cv::Mat support(64, 64, CV_8UC1, cv::Scalar(255));

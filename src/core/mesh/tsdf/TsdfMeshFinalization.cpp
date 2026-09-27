@@ -53,7 +53,12 @@ namespace xjw::mesh::tsdf_detail
             {
                 const DepthTsdfFrame& frame = frames[frame_index];
                 MeshColorView view;
-                view.camera = frame.camera;
+                if (!frame.camera)
+                {
+                    result.errorMessage = QStringLiteral("顶点取色相机无效: refIndex=%1").arg(frame.refIndex);
+                    return false;
+                }
+                view.camera = placamera::FramePinholeNumericState::fromModel(*frame.camera);
                 view.colorBgr = frame.colorBgr;
                 view.depth = frame.depth;
                 view.confidence = frame.confidence;

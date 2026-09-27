@@ -1,40 +1,51 @@
 #include <gtest/gtest.h>
 
 #include "TriangulationService.h"
-#include "ProjectCameraIO.h"
-#include "coordinate_system/context/CoordinateContext.h"
-#include "coordinate_system/gdal/GdalCoordinateTransform.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+#include <placamera/frame_camera.h>
+#include <placamera/rpc_camera.h>
+#include <placoordinate/context/CoordinateContext.h>
+#include <placoordinate/gdal/GdalCoordinateTransform.h>
 #include "project/BaInputBuilder.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera/frame_numeric_state.h"
 #include "project/ProjectMetadata.h"
 #include "model/MarkerSet.h"
 #include "io/MarkerSetJson.h"
 
 #include <QJsonArray>
-#include <QMap>
 #include <QJsonObject>
 #include <QStringList>
 
 #include <cmath>
 #include <initializer_list>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double cx)
+    placamera::FramePinholeNumericState makeCamera(double cx)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{cx, 0.0, 0.0}});
-        return camera;
+        const placamera::FrameId frame("project-world");
+        const auto suffix = std::to_string(cx);
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("ba-test-definition-" + suffix),
+                                                      {1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return placamera::FramePinholeNumericState::fromModel(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("ba-test-instance-" + suffix),
+            placamera::ImageId("ba-test-image-" + suffix),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, {cx, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
     }
 
-    xjw::coordinate_system::CoordinateContext makeEarthContext()
+    placoordinate::CoordinateContext makeEarthContext()
     {
-        using namespace xjw::coordinate_system;
+        using namespace placoordinate;
         const auto normalize =
             [](const char* id, const char* frameId, const char* definition, VerticalReference verticalReference)
         {
@@ -63,35 +74,49 @@ namespace
                 CoordinateFrameId("frame-wgs84-ecef"), SolverScaleStatus::Metric, "ba-ecef-v1"));
     }
 
-    QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    std::shared_ptr<const placamera::FramePinholeModel>
+    nativeFrame(const placamera::FramePinholeNumericState& camera, const QString& image_id, const QString& frame_id)
     {
-        return xjw::common::project::serializeFramePinholeNumericState(camera);
+        const placamera::FrameId frame(frame_id.toStdString());
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("ba-definition-" + image_id.toStdString()),
+            camera.intrinsics(),
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("ba-instance-" + image_id.toStdString()),
+            placamera::ImageId(image_id.toStdString()),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, camera.pose().center, camera.pose().cameraToWorldRotation)));
     }
 
-    QJsonObject makeProjectMeta(
-        std::initializer_list<std::pair<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState>>
-            cameraEntries)
+    QJsonObject
+    makeProjectMeta(std::initializer_list<std::pair<QString, placamera::FramePinholeNumericState>> cameraEntries,
+                    const QStringList& frames = {})
     {
         QJsonObject meta;
         QJsonArray images;
-        QMap<QString, QJsonObject> metadataByPath;
+        placamera::CameraInstanceSet cameras;
         int imageIndex = 0;
         for (const auto& [path, camera] : cameraEntries)
         {
-            const QString imageId = QStringLiteral("uuid-%1").arg(imageIndex++);
+            const QString imageId = QStringLiteral("uuid-%1").arg(imageIndex);
+            const QString frame_id =
+                imageIndex < frames.size() ? frames.at(imageIndex) : QStringLiteral("project-world");
+            ++imageIndex;
             images.append(QJsonObject{{QStringLiteral("image_uuid"), imageId},
                                       {QStringLiteral("path"), path},
                                       {QStringLiteral("samples"), 1024},
                                       {QStringLiteral("lines"), 768}});
-            QJsonObject metadata = cameraToJson(camera);
-            metadata.insert(QStringLiteral("image_width"), 1024);
-            metadata.insert(QStringLiteral("image_height"), 768);
-            metadataByPath.insert(path, metadata);
+            const auto added = cameras.add(nativeFrame(camera, imageId, frame_id));
+            EXPECT_TRUE(added.ok()) << added.message();
         }
         meta.insert(QStringLiteral("images"), images);
         meta.insert(QStringLiteral("camera_definitions"), QJsonArray{});
         meta.insert(QStringLiteral("camera_instances"), QJsonArray{});
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, metadataByPath);
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&meta, cameras);
         EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
         return meta;
     }
@@ -101,21 +126,7 @@ namespace
                                           const QString& frame0,
                                           const QString& frame1)
     {
-        QJsonObject meta = makeProjectMeta({{image0, makeCamera(0.0)}, {image1, makeCamera(1.0)}});
-        QMap<QString, QJsonObject> metadataByPath;
-        QJsonObject camera0 = cameraToJson(makeCamera(0.0));
-        camera0.insert(QStringLiteral("world_frame"), frame0);
-        camera0.insert(QStringLiteral("image_width"), 1024);
-        camera0.insert(QStringLiteral("image_height"), 768);
-        metadataByPath.insert(image0, camera0);
-        QJsonObject camera1 = cameraToJson(makeCamera(1.0));
-        camera1.insert(QStringLiteral("world_frame"), frame1);
-        camera1.insert(QStringLiteral("image_width"), 1024);
-        camera1.insert(QStringLiteral("image_height"), 768);
-        metadataByPath.insert(image1, camera1);
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, metadataByPath);
-        EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
-        return meta;
+        return makeProjectMeta({{image0, makeCamera(0.0)}, {image1, makeCamera(1.0)}}, {frame0, frame1});
     }
 
     QJsonObject makeProjectMetaWithUnselectedFrame(const QString& image0,
@@ -125,65 +136,38 @@ namespace
                                                    const QString& frame1,
                                                    const QString& frame2)
     {
-        QJsonObject meta =
-            makeProjectMeta({{image0, makeCamera(0.0)}, {image1, makeCamera(1.0)}, {image2, makeCamera(2.0)}});
-        QMap<QString, QJsonObject> metadataByPath;
-        const auto addMetadata = [&metadataByPath](const QString& path, double centerX, const QString& frame)
-        {
-            QJsonObject camera = cameraToJson(makeCamera(centerX));
-            camera.insert(QStringLiteral("world_frame"), frame);
-            camera.insert(QStringLiteral("image_width"), 1024);
-            camera.insert(QStringLiteral("image_height"), 768);
-            metadataByPath.insert(path, camera);
-        };
-        addMetadata(image0, 0.0, frame0);
-        addMetadata(image1, 1.0, frame1);
-        addMetadata(image2, 2.0, frame2);
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, metadataByPath);
-        EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
-        return meta;
+        return makeProjectMeta({{image0, makeCamera(0.0)}, {image1, makeCamera(1.0)}, {image2, makeCamera(2.0)}},
+                               {frame0, frame1, frame2});
     }
 
-    QJsonObject rpcMetadata()
+    std::shared_ptr<const placamera::RpcModel> nativeRpc(const QString& image_id)
     {
-        QJsonArray numerator;
-        QJsonArray denominator;
-        for (int index = 0; index < 20; ++index)
-        {
-            numerator.append(index == 0 ? 1.0 : 0.0);
-            denominator.append(index == 0 ? 1.0 : 0.0);
-        }
-        return QJsonObject{{QStringLiteral("model"), QStringLiteral("rpc00b")},
-                           {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
-                           {QStringLiteral("ground_crs"), QStringLiteral("EPSG:4979")},
-                           {QStringLiteral("world_frame"), QStringLiteral("EPSG:4978")},
-                           {QStringLiteral("height_datum"), QStringLiteral("WGS84_ellipsoidal")},
-                           {QStringLiteral("pixel_convention"), QStringLiteral("opencv_zero_based_center")},
-                           {QStringLiteral("line_off"), 0.0},
-                           {QStringLiteral("samp_off"), 0.0},
-                           {QStringLiteral("lat_off"), 0.0},
-                           {QStringLiteral("long_off"), 0.0},
-                           {QStringLiteral("height_off"), 0.0},
-                           {QStringLiteral("line_scale"), 1.0},
-                           {QStringLiteral("samp_scale"), 1.0},
-                           {QStringLiteral("lat_scale"), 1.0},
-                           {QStringLiteral("long_scale"), 1.0},
-                           {QStringLiteral("height_scale"), 1.0},
-                           {QStringLiteral("image_samples"), 1024},
-                           {QStringLiteral("image_lines"), 768},
-                           {QStringLiteral("line_num_coeff"), numerator},
-                           {QStringLiteral("line_den_coeff"), denominator},
-                           {QStringLiteral("samp_num_coeff"), numerator},
-                           {QStringLiteral("samp_den_coeff"), denominator}};
+        placamera::RpcParameters parameters;
+        parameters.lineScale = 1.0;
+        parameters.sampleScale = 1.0;
+        parameters.latitudeScale = 1.0;
+        parameters.longitudeScale = 1.0;
+        parameters.heightScale = 1.0;
+        parameters.lineNumerator[0] = 1.0;
+        parameters.lineDenominator[0] = 1.0;
+        parameters.sampleNumerator[0] = 1.0;
+        parameters.sampleDenominator[0] = 1.0;
+        const auto definition = placamera::RpcDefinition::create(
+            placamera::CameraDefinitionId("ba-rpc-definition-" + image_id.toStdString()),
+            placamera::FrameId("EPSG:4978"),
+            parameters);
+        return std::make_shared<const placamera::RpcModel>(
+            placamera::RpcModel::create(placamera::CameraInstanceId("ba-rpc-instance-" + image_id.toStdString()),
+                                        placamera::ImageId(image_id.toStdString()),
+                                        definition,
+                                        {1024, 768}));
     }
 
-    QPointF project(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                    const std::array<double, 3>& point)
+    QPointF project(const placamera::FramePinholeNumericState& camera, const std::array<double, 3>& point)
     {
-        const double xyz[3] = {point[0], point[1], point[2]};
-        double uv[2] = {0.0, 0.0};
-        EXPECT_TRUE(camera.projectWorldPoint(xyz, uv));
-        return QPointF(uv[0], uv[1]);
+        const auto projection = camera.groundToImage({camera.groundFrame(), point});
+        EXPECT_TRUE(projection);
+        return QPointF(projection.value().image.sample, projection.value().image.line);
     }
 
     std::array<double, 3> controlReference(const std::array<double, 3>& local)
@@ -307,7 +291,7 @@ TEST(BaInputBuilderMarkerSet, AppliesAbsoluteOrientationAndExcludesChecksFromCon
     const QString image0 = QStringLiteral("E:/images/img_001.jpg");
     const QString image1 = QStringLiteral("E:/images/img_002.jpg");
     const QString image2 = QStringLiteral("E:/images/img_003.jpg");
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
+    const std::vector<placamera::FramePinholeNumericState> cameras = {
         makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     const QStringList image_paths{image0, image1, image2};
     const QStringList image_ids{QStringLiteral("uuid-0"), QStringLiteral("uuid-1"), QStringLiteral("uuid-2")};
@@ -388,11 +372,20 @@ TEST(BaInputBuilderMarkerSet, AppliesAbsoluteOrientationAndExcludesChecksFromCon
     }
     ASSERT_EQ(result.tracks.size(), 5u);
     EXPECT_TRUE(result.tracks.back().controlPointConstraints.empty());
-    const auto center = result.cameras.front().cameraCenter();
+    ASSERT_FALSE(result.cameraInstances.empty());
+    ASSERT_NE(result.cameraInstances.front(), nullptr);
+    const auto& center = result.cameraInstances.front()->pose().center;
     const auto expected_center = controlReference({{-2.0, 0.0, 0.0}});
+    ASSERT_EQ(result.cameraInstances.size(), result.imageIdByIndex.size());
     for (int axis = 0; axis < 3; ++axis)
     {
         EXPECT_NEAR(center[axis], expected_center[axis], 1.0e-5);
+    }
+    for (std::size_t index = 0; index < result.cameraInstances.size(); ++index)
+    {
+        ASSERT_NE(result.cameraInstances[index], nullptr);
+        EXPECT_EQ(result.cameraInstances[index]->imageId(), result.imageIdByIndex[index]);
+        EXPECT_EQ(result.cameraInstances[index]->groundFrame(), placamera::FrameId("project-world"));
     }
 }
 
@@ -400,8 +393,7 @@ TEST(BaInputBuilderMarkerSet, RejectsGeographicReferenceBeforeBundleAdjustment)
 {
     const QString image0 = QStringLiteral("E:/images/geographic-gcp-0.jpg");
     const QString image1 = QStringLiteral("E:/images/geographic-gcp-1.jpg");
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(-1.0),
-                                                                                              makeCamera(1.0)};
+    const std::vector<placamera::FramePinholeNumericState> cameras = {makeCamera(-1.0), makeCamera(1.0)};
 
     xjw::control_points::MarkerSet markerSet;
     const xjw::control_points::MarkerId markerId =
@@ -446,8 +438,7 @@ TEST(BaInputBuilderMarkerSet, ResolvesGeographicReferenceWithExplicitCoordinateC
 {
     const QString image0 = QStringLiteral("E:/images/context-gcp-0.jpg");
     const QString image1 = QStringLiteral("E:/images/context-gcp-1.jpg");
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(-1.0),
-                                                                                              makeCamera(1.0)};
+    const std::vector<placamera::FramePinholeNumericState> cameras = {makeCamera(-1.0), makeCamera(1.0)};
 
     xjw::control_points::MarkerSet markerSet;
     const xjw::control_points::MarkerId markerId =
@@ -476,7 +467,7 @@ TEST(BaInputBuilderMarkerSet, ResolvesGeographicReferenceWithExplicitCoordinateC
     }
 
     const QJsonObject meta = makeProjectMeta({{image0, cameras[0]}, {image1, cameras[1]}});
-    const xjw::coordinate_system::CoordinateContext context = makeEarthContext();
+    const placoordinate::CoordinateContext context = makeEarthContext();
     xjw::core::project::MarkerBaInput markerInput;
     markerInput.markerSet = &markerSet;
     markerInput.coordinateContext = &context;
@@ -503,19 +494,19 @@ TEST(ProjectMatchInputReaderTest, RejectsSelectedRpcCameraAtStaticPinholeBoundar
                               {QStringLiteral("samples"), 1024},
                               {QStringLiteral("lines"), 768}});
     meta.insert(QStringLiteral("images"), images);
-    QMap<QString, QJsonObject> rpcByPath;
-    rpcByPath.insert(rpcPath, rpcMetadata());
-    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, rpcByPath);
+    placamera::CameraInstanceSet rpc_cameras;
+    ASSERT_TRUE(rpc_cameras.add(nativeRpc(QStringLiteral("rpc-image"))).ok());
+    const auto update = xjw::placamera_runtime::upsertProjectCameras(&meta, rpc_cameras);
     ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
 
     xjw::core::project::ProjectMatchInput pinhole_only_input;
     EXPECT_TRUE(xjw::core::project::readProjectMatchInput(meta, QStringList{pinholePath}, 1, &pinhole_only_input));
-    ASSERT_EQ(pinhole_only_input.cameras.size(), 1U);
+    ASSERT_EQ(pinhole_only_input.cameraInstances.size(), 1U);
     EXPECT_TRUE(pinhole_only_input.diagnostics.firstCameraError.isEmpty());
 
     xjw::core::project::ProjectMatchInput input;
     EXPECT_FALSE(xjw::core::project::readProjectMatchInput(meta, QStringList{pinholePath, rpcPath}, 1, &input));
-    EXPECT_TRUE(input.cameras.empty());
+    EXPECT_TRUE(input.cameraInstances.empty());
     EXPECT_TRUE(input.imagePathByIndex.empty());
     EXPECT_EQ(input.diagnostics.unsupportedCameraCount, 1);
     EXPECT_TRUE(input.diagnostics.firstCameraError.contains(QStringLiteral("rpc-image")));
@@ -539,9 +530,9 @@ TEST(TriangulationServiceTest, PreservesSelectedCameraCapabilityDiagnostic)
                               {QStringLiteral("samples"), 1024},
                               {QStringLiteral("lines"), 768}});
     meta.insert(QStringLiteral("images"), images);
-    QMap<QString, QJsonObject> rpcByPath;
-    rpcByPath.insert(rpcPath, rpcMetadata());
-    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&meta, rpcByPath);
+    placamera::CameraInstanceSet rpc_cameras;
+    ASSERT_TRUE(rpc_cameras.add(nativeRpc(QStringLiteral("triangulation-rpc-image"))).ok());
+    const auto update = xjw::placamera_runtime::upsertProjectCameras(&meta, rpc_cameras);
     ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
 
     xjw::core::project::TriangulationServiceOptions options;
@@ -579,7 +570,14 @@ TEST(ProjectMatchInputReaderTest, IgnoresUnselectedPinholeFrameConflicts)
 
     xjw::core::project::ProjectMatchInput input;
     EXPECT_TRUE(xjw::core::project::readProjectMatchInput(meta, QStringList{image0, image1}, 1, &input));
-    EXPECT_EQ(input.cameras.size(), 2U);
+    ASSERT_EQ(input.cameraInstances.size(), 2U);
+    ASSERT_EQ(input.imageIdByIndex.size(), input.cameraInstances.size());
+    for (std::size_t index = 0; index < input.cameraInstances.size(); ++index)
+    {
+        ASSERT_NE(input.cameraInstances[index], nullptr);
+        EXPECT_EQ(input.cameraInstances[index]->imageId(), input.imageIdByIndex[index]);
+        EXPECT_EQ(input.cameraInstances[index]->groundFrame(), placamera::FrameId("world-a"));
+    }
     EXPECT_TRUE(input.diagnostics.firstCameraError.isEmpty());
 }
 

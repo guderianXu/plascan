@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+import runpy
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_DRIVER = runpy.run_path(str(ROOT / "scripts/bench/run_ba_backend_benchmark.py"))
 
 
 def read_text(relative_path: str) -> str:
@@ -23,30 +25,39 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertNotIn("features", manifest)
 
     def test_ba_auto_backend_thresholds_have_one_default_source(self):
-        options = read_text("src/core/bundle_adjust/BundleAdjustOptions.h")
+        options = read_text("3rdparty/plabundle/include/plabundle/options.h")
         cli = read_text("src/cli/reconstruction/cli_bundle_adjust.cpp")
         source = read_text(
             "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
         )
         line_scan = read_text("src/core/lidar/PlanetaryLineScanBundleAdjust.h")
 
-        self.assertIn("kAutoBackendPolicyVersion = 2;", options)
-        self.assertIn("kDefaultMinPlaMatrixCudaCameras = 128;", options)
-        self.assertIn("kDefaultMinPlaMatrixCudaObservations = 30000;", options)
-        self.assertIn("kDefaultMinPlaMatrixOpenClCameras = 160;", options)
-        self.assertIn("kDefaultMinPlaMatrixOpenClObservations = 50000;", options)
-        self.assertIn("kDefaultMinPlaMatrixDenseCameras = 120;", options)
-        self.assertIn("kDefaultMinPlaMatrixCudaDenseObservations = 150000;", options)
-        self.assertIn("kDefaultMinPlaMatrixOpenClDenseObservations = 200000;", options)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixCudaCameras", cli)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixOpenClCameras", cli)
-        self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
-        self.assertIn("options->baOptions.backend = BABackend::PlaMatrixCpu;", source)
+        self.assertIn("kAutoPolicyVersion = 3;", options)
+        self.assertIn("kDefaultMinCudaCameras = 128;", options)
+        self.assertIn("kDefaultMinCudaObservations = 30000;", options)
+        self.assertIn("kDefaultMinOpenClCameras = 160;", options)
+        self.assertIn("kDefaultMinOpenClObservations = 50000;", options)
+        self.assertIn("kDefaultMinVulkanCameras = 160;", options)
+        self.assertIn("kDefaultMinVulkanObservations = 50000;", options)
+        self.assertIn("kDefaultMinDenseCameras = 120;", options)
+        self.assertIn("kDefaultMinCudaDenseObservations = 150000;", options)
+        self.assertIn("kDefaultMinOpenClDenseObservations = 200000;", options)
+        self.assertIn("kDefaultMinVulkanDenseObservations = 200000;", options)
+        self.assertIn(
+            "kDefaultMinPlaMatrixCudaCameras = BackendOptions::kDefaultMinCudaCameras;",
+            options,
+        )
+        self.assertIn("plabundle::BackendOptions::kDefaultMinCudaCameras", cli)
+        self.assertIn("plabundle::BackendOptions::kDefaultMinOpenClCameras", cli)
+        self.assertIn("plabundle::BackendOptions::kDefaultMinVulkanCameras", cli)
+        self.assertIn("options->baOptions.backend.requested = plabundle::Backend::Auto;", source)
+        self.assertIn("options->baOptions.backend.requested = plabundle::Backend::PlaMatrixCpu;", source)
         self.assertNotIn("minPlaMatrixCudaObservations = 300000", source)
-        self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
-        self.assertIn("options->baOptions.allowBackendFallback = true;", source)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixCudaCameras", line_scan)
-        self.assertIn("BAOptions::kDefaultMinPlaMatrixOpenClCameras", line_scan)
+        self.assertIn("options->baOptions.quality.enabled = true;", source)
+        self.assertIn("options->baOptions.backend.allowFallback = true;", source)
+        self.assertIn("plabundle::BackendOptions::kDefaultMinCudaCameras", line_scan)
+        self.assertIn("plabundle::BackendOptions::kDefaultMinOpenClCameras", line_scan)
+        self.assertIn("plabundle::BackendOptions::kDefaultMinVulkanCameras", line_scan)
 
     def test_adaptive_camera_model_declares_full_model_then_filters_parameters(self):
         source = read_text(
@@ -54,9 +65,9 @@ class BaCudaContractsTest(unittest.TestCase):
         )
 
         self.assertIn("options->adaptiveCameraModelFitting = true;", source)
-        self.assertIn("options->baOptions.refineSharedFocalAspectRatio = true;", source)
-        self.assertIn("options->baOptions.refineSharedPrincipalPoint = true;", source)
-        self.assertIn("options->baOptions.refineSharedRadialDistortion = true;", source)
+        self.assertIn("options->baOptions.calibration.refineSharedFocalAspectRatio = true;", source)
+        self.assertIn("options->baOptions.calibration.refineSharedPrincipalPoint = true;", source)
+        self.assertIn("options->baOptions.calibration.refineSharedRadialDistortion = true;", source)
 
         coordinator = read_text(
             "src/core/sfm/pipeline/SfmBundleAdjustCoordinator.cpp"
@@ -81,37 +92,54 @@ class BaCudaContractsTest(unittest.TestCase):
         )
 
         self.assertIn('toString(QStringLiteral("auto"))', controller)
-        self.assertIn('options->baOpt.backend = xjw::BABackend::Auto;', controller)
-        self.assertIn('options->baOpt.minPlaMatrixCudaObservations', controller)
-        self.assertIn('options->baOpt.minPlaMatrixOpenClObservations', controller)
+        self.assertIn('options->baOpt.backend.requested = plabundle::Backend::Auto;', controller)
+        self.assertIn('options->baOpt.backend.minPlaMatrixCudaObservations', controller)
+        self.assertIn('options->baOpt.backend.minPlaMatrixOpenClObservations', controller)
+        self.assertIn('options->baOpt.backend.minPlaMatrixVulkanObservations', controller)
         self.assertNotIn('kLegacyMinPlaMatrixGpuCameras', controller)
         self.assertNotIn('kLegacyMinPlaMatrixGpuObservations', controller)
         self.assertNotIn('legacy_cpu', controller)
         self.assertIn('ProjectConfigManager::validateBundleAdjustSettings', controller)
-        self.assertIn('options->baOpt.maxInitialTrackRms', controller)
-        self.assertIn('options->baOpt.enableBackendQualityGate', controller)
+        self.assertIn('options->baOpt.solver.maxInitialTrackRms', controller)
+        self.assertIn('options->baOpt.quality.enabled', controller)
 
     def test_plamatrix_backend_is_exposed_with_comparison_metrics(self):
-        header = self.read_text("src/core/bundle_adjust/BundleAdjustTypes.h")
+        header = self.read_text("3rdparty/plabundle/include/plabundle/backend.h")
         benchmark = self.read_text(
-            "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp"
+            "3rdparty/plabundle/benchmark/plabundle_benchmark.cpp"
         )
         service = self.read_text("src/gui/project/services/BundleAdjustService.cpp")
 
         self.assertIn("PlaMatrixCpu", header)
         self.assertIn("PlaMatrixCuda", header)
         self.assertIn("PlaMatrixOpenCl", header)
+        self.assertIn("PlaMatrixVulkan", header)
         self.assertIn("plamatrix_cpu", benchmark)
         self.assertIn("plamatrix_cuda", benchmark)
         self.assertIn("plamatrix_opencl", benchmark)
-        self.assertIn("plamatrix_initial_cost", benchmark)
-        self.assertIn("plamatrix_final_cost", benchmark)
-        self.assertIn("plamatrix_linear_solver", benchmark)
-        self.assertIn("plamatrix_device", benchmark)
+        self.assertIn("plamatrix_vulkan", benchmark)
+        self.assertIn('",initial_cost="', benchmark)
+        self.assertIn('",final_cost="', benchmark)
+        self.assertIn('",linear_solver="', benchmark)
+        self.assertIn('",device="', benchmark)
         self.assertIn("ba_plamatrix_initial_cost", service)
         self.assertIn("ba_plamatrix_final_cost", service)
         self.assertIn("ba_plamatrix_linear_solver", service)
         self.assertIn("ba_plamatrix_device_name", service)
+
+    def test_backend_benchmark_driver_parses_plabundle_run_records(self):
+        parse_metric_line = BENCHMARK_DRIVER["parse_metric_line"]
+        row = parse_metric_line(
+            "run,backend=plamatrix_cpu,repetition=2,phase=warm,status=success,"
+            "linear_solver=block_sparse_cholesky,total_seconds=0.25,wall_seconds=0.27"
+        )
+
+        self.assertIsNotNone(row)
+        self.assertEqual("plamatrix_cpu", row["backend"])
+        self.assertEqual("2", row["repetition"])
+        self.assertEqual("warm", row["phase"])
+        self.assertEqual("0.27", row["wall_seconds"])
+        self.assertIsNone(parse_metric_line("dataset,cameras=80,tracks=3000"))
 
 
 if __name__ == "__main__":

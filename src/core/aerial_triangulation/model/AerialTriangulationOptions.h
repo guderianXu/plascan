@@ -1,6 +1,6 @@
 #pragma once
 
-#include "coordinate_system/context/CoordinateContext.h"
+#include <placoordinate/context/CoordinateContext.h>
 
 /**
  * @file AerialTriangulationOptions.h
@@ -11,9 +11,8 @@
  * PreparedAerialTriangulationInput。SfM 管线不得重新解释特征/匹配参数。
  */
 
-#include "camera/core/types/CameraIds.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
+#include "placamera/reference/CameraReferencePosePrior.h"
 #include "common/SfmTypes.h"
 
 #include <QJsonObject>
@@ -39,9 +38,9 @@ namespace xjw::aerial_triangulation
      */
     struct SolverCameraBinding
     {
-        camera_core::CameraInstanceId instanceId;
-        camera_core::ImageId imageId;
-        xjw::coordinate_system::CoordinateFrameId worldFrame;
+        placamera::CameraInstanceId instanceId;
+        placamera::ImageId imageId;
+        placoordinate::CoordinateFrameId worldFrame;
     };
 
     namespace engine
@@ -56,12 +55,12 @@ namespace xjw::aerial_triangulation
     {
         // 当前处理集合和工程上下文。
         QStringList images; ///< 参与本次空三的影像绝对路径，顺序定义 ImageId。
-        std::vector<camera_core::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
+        std::vector<placamera::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
         /// 可选的显式相机身份/frame 绑定；提供时必须与 images 一一对应。
         std::vector<SolverCameraBinding> cameraBindings;
         QStringList cameraPaths; ///< 可选外部相机文件；完整时必须与 images 一一对应。
         /// 已解析的外部姿态软先验；只允许通过 resolver/factory 产生。
-        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
+        std::vector<placamera::reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
         QString projectPath;     ///< .plascan 工程路径，用于标记 sidecar 和项目根目录。
         QString outputDir;       ///< 空三资产根目录，管线会在其下创建 sfm_sparse。
         QJsonObject projectMeta; ///< 调用时工程元数据快照。
@@ -122,8 +121,8 @@ namespace xjw::aerial_triangulation
         QString matchDir;                 ///< 可覆盖逐影像 `.pimatch` 分片目录。
         QMap<QString, QString> maskPaths; ///< 影像规范路径到蒙版路径。
         /// 参考相机和位置均按 ImageId 键控；images/cameraBindings 只负责输入顺序。
-        camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
-        camera_reference::ReferenceCameraPositionMap referencePositions;
+        placamera::reference::ReferenceCameraGeometryMap referenceCameraGeometries;
+        placamera::reference::ReferenceCameraPositionMap referencePositions;
         float featureGrayscaleMin = 5.0f / 255.0f; ///< 特征前端灰度有效下限。
         float featureGrayscaleMax = 1.0f;          ///< 特征前端灰度有效上限。
 
@@ -141,16 +140,16 @@ namespace xjw::aerial_triangulation
     struct PreparedAerialTriangulationInput
     {
         QStringList images;                         ///< 稳定 ImageId 顺序。
-        std::vector<camera_core::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
+        std::vector<placamera::ImageId> imageIds; ///< 与 images 对齐的稳定影像身份。
         /// 与 images 对齐的显式 camera instance/image/frame 绑定。
         std::vector<SolverCameraBinding> cameraBindings;
         QStringList cameraPaths; ///< 可选一一对应外部相机文件。
-        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
-        camera_reference::ReferenceCameraGeometryMap referenceCameraGeometries;
-        camera_reference::ReferenceCameraPositionMap referencePositions;
+        std::vector<placamera::reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
+        placamera::reference::ReferenceCameraGeometryMap referenceCameraGeometries;
+        placamera::reference::ReferenceCameraPositionMap referencePositions;
         QString projectPath;   ///< 工程路径，仅供标记/结果回写上下文。
         QString markerSetPath; ///< 完整标记系统 sidecar。
-        std::shared_ptr<const xjw::coordinate_system::CoordinateContext> coordinateContext; ///< 权威坐标快照。
+        std::shared_ptr<const placoordinate::CoordinateContext> coordinateContext; ///< 权威坐标快照。
         QString tiePointPath; ///< matchphototask 生成的多视连接点 JSON。
         /// 同一次焦距搜索中由所有候选共享的只读连接点图。
         std::shared_ptr<const PreparedTiePointGraph> preparedTiePointGraph;

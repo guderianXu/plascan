@@ -69,9 +69,8 @@ double percentileSorted(const std::vector<float> &values, double percentile)
 bool finitePoint(const DensePointCloud &cloud, std::size_t index)
 {
     const plamatrix::Index row = static_cast<plamatrix::Index>(index);
-    return std::isfinite(cloud.points().getValue(row, 0)) &&
-           std::isfinite(cloud.points().getValue(row, 1)) &&
-           std::isfinite(cloud.points().getValue(row, 2));
+    return std::isfinite(cloud.points().coeff(row, 0)) && std::isfinite(cloud.points().coeff(row, 1)) &&
+           std::isfinite(cloud.points().coeff(row, 2));
 }
 
 Bounds2D computeBounds(const DensePointCloud &cloud)
@@ -85,8 +84,8 @@ Bounds2D computeBounds(const DensePointCloud &cloud)
         }
 
         const plamatrix::Index row = static_cast<plamatrix::Index>(i);
-        const float x = cloud.points().getValue(row, 0);
-        const float y = cloud.points().getValue(row, 1);
+        const float x = cloud.points().coeff(row, 0);
+        const float y = cloud.points().coeff(row, 1);
         bounds.minX = std::min(bounds.minX, x);
         bounds.minY = std::min(bounds.minY, y);
         bounds.maxX = std::max(bounds.maxX, x);
@@ -104,8 +103,8 @@ int cellIndexForPoint(const DensePointCloud &cloud,
     const float spanX = std::max(bounds.maxX - bounds.minX, 1.0e-6f);
     const float spanY = std::max(bounds.maxY - bounds.minY, 1.0e-6f);
     const plamatrix::Index row = static_cast<plamatrix::Index>(index);
-    const float x = cloud.points().getValue(row, 0);
-    const float y = cloud.points().getValue(row, 1);
+    const float x = cloud.points().coeff(row, 0);
+    const float y = cloud.points().coeff(row, 1);
     const int ix = std::clamp(static_cast<int>(std::floor((x - bounds.minX) / spanX * gridResolution)),
                               0,
                               gridResolution - 1);
@@ -131,57 +130,55 @@ std::vector<int> finiteIndices(const DensePointCloud &cloud)
 
 DensePointCloud gatherPointCloudByIndices(const DensePointCloud &cloud, const std::vector<int> &indices)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(
-        static_cast<plamatrix::Index>(indices.size()), 3);
+    plamatrix::MatrixXf points(static_cast<plamatrix::Index>(indices.size()), 3);
     for (std::size_t i = 0; i < indices.size(); ++i)
     {
         const plamatrix::Index src = static_cast<plamatrix::Index>(indices[i]);
         const plamatrix::Index dst = static_cast<plamatrix::Index>(i);
-        points(dst, 0) = cloud.points().getValue(src, 0);
-        points(dst, 1) = cloud.points().getValue(src, 1);
-        points(dst, 2) = cloud.points().getValue(src, 2);
+        points(dst, 0) = cloud.points().coeff(src, 0);
+        points(dst, 1) = cloud.points().coeff(src, 1);
+        points(dst, 2) = cloud.points().coeff(src, 2);
     }
 
     DensePointCloud output(std::move(points));
 
     if (cloud.hasColors())
     {
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(
             static_cast<plamatrix::Index>(indices.size()), 3);
         for (std::size_t i = 0; i < indices.size(); ++i)
         {
             const plamatrix::Index src = static_cast<plamatrix::Index>(indices[i]);
             const plamatrix::Index dst = static_cast<plamatrix::Index>(i);
-            colors(dst, 0) = cloud.colors()->getValue(src, 0);
-            colors(dst, 1) = cloud.colors()->getValue(src, 1);
-            colors(dst, 2) = cloud.colors()->getValue(src, 2);
+            colors(dst, 0) = cloud.colors()->coeff(src, 0);
+            colors(dst, 1) = cloud.colors()->coeff(src, 1);
+            colors(dst, 2) = cloud.colors()->coeff(src, 2);
         }
         output.setColors(std::move(colors));
     }
 
     if (cloud.hasNormals())
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
-            static_cast<plamatrix::Index>(indices.size()), 3);
+        plamatrix::MatrixXf normals(static_cast<plamatrix::Index>(indices.size()), 3);
         for (std::size_t i = 0; i < indices.size(); ++i)
         {
             const plamatrix::Index src = static_cast<plamatrix::Index>(indices[i]);
             const plamatrix::Index dst = static_cast<plamatrix::Index>(i);
-            normals(dst, 0) = cloud.normals()->getValue(src, 0);
-            normals(dst, 1) = cloud.normals()->getValue(src, 1);
-            normals(dst, 2) = cloud.normals()->getValue(src, 2);
+            normals(dst, 0) = cloud.normals()->coeff(src, 0);
+            normals(dst, 1) = cloud.normals()->coeff(src, 1);
+            normals(dst, 2) = cloud.normals()->coeff(src, 2);
         }
         output.setNormals(std::move(normals));
     }
 
     if (cloud.hasIntensities())
     {
-        plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> intensities(
+        plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic> intensities(
             static_cast<plamatrix::Index>(indices.size()), 1);
         for (std::size_t i = 0; i < indices.size(); ++i)
         {
             const plamatrix::Index src = static_cast<plamatrix::Index>(indices[i]);
-            intensities(static_cast<plamatrix::Index>(i), 0) = cloud.intensities()->getValue(src, 0);
+            intensities(static_cast<plamatrix::Index>(i), 0) = cloud.intensities()->coeff(src, 0);
         }
         output.setIntensities(std::move(intensities));
     }
@@ -189,15 +186,14 @@ DensePointCloud gatherPointCloudByIndices(const DensePointCloud &cloud, const st
     if (cloud.hasScalarFields())
     {
         const int cols = cloud.scalarFields()->cols();
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> fields(
-            static_cast<plamatrix::Index>(indices.size()), cols);
+        plamatrix::MatrixXf fields(static_cast<plamatrix::Index>(indices.size()), cols);
         for (std::size_t i = 0; i < indices.size(); ++i)
         {
             const plamatrix::Index src = static_cast<plamatrix::Index>(indices[i]);
             const plamatrix::Index dst = static_cast<plamatrix::Index>(i);
             for (int col = 0; col < cols; ++col)
             {
-                fields(dst, col) = cloud.scalarFields()->getValue(src, col);
+                fields(dst, col) = cloud.scalarFields()->coeff(src, col);
             }
         }
         output.setScalarFields(cloud.scalarFieldNames(), std::move(fields));
@@ -219,7 +215,7 @@ void summarizeCellZRanges(const DensePointCloud &cloud,
     {
         const int cell = cellIndexForPoint(cloud, static_cast<std::size_t>(idx), bounds, gridResolution);
         cells[static_cast<std::size_t>(cell)].zValues.push_back(
-            cloud.points().getValue(static_cast<plamatrix::Index>(idx), 2));
+            cloud.points().coeff(static_cast<plamatrix::Index>(idx), 2));
     }
 
     std::vector<float> ranges;
@@ -293,9 +289,9 @@ bool solvePlaneFromIndices(const DensePointCloud &cloud,
     for (int idx : indices)
     {
         const plamatrix::Index row = static_cast<plamatrix::Index>(idx);
-        const double x = cloud.points().getValue(row, 0);
-        const double y = cloud.points().getValue(row, 1);
-        const double z = cloud.points().getValue(row, 2);
+        const double x = cloud.points().coeff(row, 0);
+        const double y = cloud.points().coeff(row, 1);
+        const double z = cloud.points().coeff(row, 2);
         sx += x;
         sy += y;
         sz += z;
@@ -335,9 +331,9 @@ bool solvePlaneFromIndices(const DensePointCloud &cloud,
 float planeResidual(const DensePointCloud &cloud, int index, const PlaneFit &plane)
 {
     const plamatrix::Index row = static_cast<plamatrix::Index>(index);
-    const float x = cloud.points().getValue(row, 0);
-    const float y = cloud.points().getValue(row, 1);
-    const float z = cloud.points().getValue(row, 2);
+    const float x = cloud.points().coeff(row, 0);
+    const float y = cloud.points().coeff(row, 1);
+    const float z = cloud.points().coeff(row, 2);
     return std::abs(z - (plane.a * x + plane.b * y + plane.c));
 }
 
@@ -491,7 +487,7 @@ DensePointCloud filterTerrainHeightSpikes(const DensePointCloud &cloud,
     {
         const int cell = cellIndexForPoint(cloud, static_cast<std::size_t>(idx), bounds, gridResolution);
         cells[static_cast<std::size_t>(cell)].zValues.push_back(
-            cloud.points().getValue(static_cast<plamatrix::Index>(idx), 2));
+            cloud.points().coeff(static_cast<plamatrix::Index>(idx), 2));
     }
     fillCellRobustStats(&cells);
 
@@ -507,7 +503,7 @@ DensePointCloud filterTerrainHeightSpikes(const DensePointCloud &cloud,
             continue;
         }
 
-        const float z = cloud.points().getValue(static_cast<plamatrix::Index>(idx), 2);
+        const float z = cloud.points().coeff(static_cast<plamatrix::Index>(idx), 2);
         const float threshold = std::max(options.minHeightThreshold, options.madMultiplier * cell.robustSigma);
         if (std::abs(z - cell.median) <= threshold)
         {

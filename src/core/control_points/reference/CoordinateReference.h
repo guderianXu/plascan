@@ -1,16 +1,12 @@
 #pragma once
 
+#include <placoordinate/context/CoordinateContext.h>
 #include "model/MarkerTypes.h"
 
 #include <QString>
 
 #include <array>
 #include <string>
-
-namespace xjw::coordinate_system
-{
-    class CoordinateContext;
-}
 
 namespace xjw::control_points
 {
@@ -112,7 +108,7 @@ namespace xjw::control_points
      */
     MetricReferenceCoordinateResult
     resolveMetricReferenceCoordinate(const ReferenceCoordinate& coordinate,
-                                     const xjw::coordinate_system::CoordinateContext* context = nullptr);
+                                     const placoordinate::CoordinateContext* context = nullptr);
 
     struct ReferenceCoordinateAssessment
     {

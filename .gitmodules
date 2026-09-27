@@ -25,3 +25,7 @@
 [submodule "3rdparty/Imath"]
 	path = 3rdparty/Imath
 	url = https://github.com/AcademySoftwareFoundation/Imath.git
+[submodule "3rdparty/plabundle"]
+	path = 3rdparty/plabundle
+	url = https://github.com/guderianXu/plabundle.git
+	branch = main

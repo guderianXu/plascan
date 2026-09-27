@@ -14,20 +14,19 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
-#include <QImageReader>
 #include <QPointer>
 #include <QSet>
-#include <QSize>
 
 #include <algorithm>
 #include <atomic>
 #include <utility>
 
-using xjw::gui::project::existingCameraImages;
+using xjw::gui::project::CameraInitializationMode;
+using xjw::gui::project::CameraInitializationRequest;
+using xjw::gui::project::CameraInitializationResult;
 using xjw::gui::project::finalizeInitializedCameraPoses;
-using xjw::gui::project::focalPixelsFromExif;
 using xjw::gui::project::InitPoseFinalizeResult;
-using xjw::gui::project::makeInitializedCameraMeta;
+using xjw::gui::project::prepareCameraInitializations;
 using xjw::gui::project::resolveInitTargets;
 using xjw::gui::project::withPreparedCameras;
 
@@ -35,6 +34,28 @@ namespace
 {
 
     constexpr QDir::Filters kDialogFilters = QDir::AllEntries | QDir::Hidden | QDir::AllDirs | QDir::NoDotAndDotDot;
+
+    struct SfmSetupRunResult
+    {
+        CameraInitializationResult initialization;
+        xjw::aerial_triangulation::AerialTriangulationResult workflow;
+        QString outputDir;
+        QString error;
+        bool cancelled = false;
+    };
+
+    struct SingleCameraImportRunResult
+    {
+        xjw::gui::project::PreparedFrameCameraImport import;
+        xjw::gui::project::SingleCameraImportStatus status = xjw::gui::project::SingleCameraImportStatus::Cancelled;
+    };
+
+    struct CameraProjectImportRunResult
+    {
+        xjw::gui::project::CameraProjectImportResult import;
+        xjw::gui::project::CameraProjectImportStatus status =
+            xjw::gui::project::CameraProjectImportStatus::Cancelled;
+    };
 
     QSet<QString> normalizedPathSet(const QStringList& paths)
     {
@@ -59,9 +80,9 @@ ProjectCameraSetupManager::ProjectCameraSetupManager(xjw::gui::project::ProjectS
 
 ProjectCameraSetupManager::~ProjectCameraSetupManager()
 {
-    if (_sfmContext.cancelFlag)
+    if (_taskContext.cancelFlag)
     {
-        _sfmContext.cancelFlag->store(true, std::memory_order_relaxed);
+        _taskContext.cancelFlag->store(true, std::memory_order_relaxed);
     }
     waitForActiveTask();
 }
@@ -83,8 +104,8 @@ bool ProjectCameraSetupManager::contextMatches(const xjw::gui::project::ProjectT
                                                bool requireCurrent,
                                                bool allowCancelled) const
 {
-    if (!taskContext.cancelFlag || _sfmContext.taskId != taskContext.taskId ||
-        _sfmContext.cancelFlag != taskContext.cancelFlag)
+    if (!taskContext.cancelFlag || _taskContext.taskId != taskContext.taskId ||
+        _taskContext.cancelFlag != taskContext.cancelFlag)
     {
         return false;
     }
@@ -103,7 +124,7 @@ void ProjectCameraSetupManager::completeTask(const xjw::gui::project::ProjectTas
     }
     const bool terminal_success = success && _session && _session->isCurrent(taskContext.session) &&
                                   !taskContext.cancelFlag->load(std::memory_order_relaxed);
-    _sfmContext = {};
+    _taskContext = {};
     emit atProgressFinished(terminal_success);
 }
 
@@ -139,6 +160,11 @@ void ProjectCameraSetupManager::writeLastDir(const QString& key, const QString& 
 void ProjectCameraSetupManager::setSfmRunnerForTesting(SfmRunner runner)
 {
     _sfmRunner = std::move(runner);
+}
+
+void ProjectCameraSetupManager::setHeavyWorkEnteredObserverForTesting(HeavyWorkEnteredObserver observer)
+{
+    _heavyWorkEnteredObserver = std::move(observer);
 }
 
 void ProjectCameraSetupManager::pruneFinishedFutures()
@@ -178,12 +204,13 @@ void ProjectCameraSetupManager::waitForActiveTask()
 
 bool ProjectCameraSetupManager::isRunning() const noexcept
 {
-    return _sfmContext.cancelFlag != nullptr;
+    return _taskContext.cancelFlag != nullptr;
 }
 
 bool ProjectCameraSetupManager::hasPendingWork() const noexcept
 {
-    return std::any_of(_futures.cbegin(),
+    return _taskContext.cancelFlag != nullptr ||
+           std::any_of(_futures.cbegin(),
                        _futures.cend(),
                        [](const QFuture<void>& future) { return future.isValid() && !future.isFinished(); });
 }
@@ -196,575 +223,30 @@ void ProjectCameraSetupManager::cancelActiveTask(const xjw::gui::project::Projec
     }
 }
 
-bool ProjectCameraSetupManager::importCameraForImage(const QString& imagePath)
+std::function<void(int, int)>
+ProjectCameraSetupManager::makeProgressReporter(const xjw::gui::project::ProjectTaskContext& taskContext,
+                                                const QString& stage,
+                                                int firstPercent,
+                                                int lastPercent) const
 {
-    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages)
+    const QPointer<ProjectCameraSetupManager> self(const_cast<ProjectCameraSetupManager*>(this));
+    const std::shared_ptr<std::atomic<bool>> cancel_flag = taskContext.cancelFlag;
+    const auto last_reported = std::make_shared<std::atomic<int>>(firstPercent - 1);
+    return [self, cancel_flag, last_reported, taskContext, stage, firstPercent, lastPercent](int completed, int total)
     {
-        return false;
-    }
-
-    const xjw::gui::project::ProjectSessionContext session_context = _session->context();
-    const UiDialogResult selected = _messages->selectOpenFile(nullptr,
-                                                              QStringLiteral("选择相机文件 (.tsai)"),
-                                                              readLastDir(QStringLiteral("camera_tsai")),
-                                                              QStringLiteral("Tsai相机文件 (*.tsai *.TSAI)"),
-                                                              kDialogFilters);
-    if (!selected.accepted || selected.text.isEmpty() || !_session->isCurrent(session_context))
-    {
-        return false;
-    }
-
-    writeLastDir(QStringLiteral("camera_tsai"), QFileInfo(selected.text).absolutePath());
-
-    xjw::gui::project::SingleCameraImportResult import_result;
-    const xjw::gui::project::SingleCameraImportStatus import_status =
-        xjw::gui::project::buildSingleCameraImport(imagePath, selected.text, &import_result);
-    if (import_status != xjw::gui::project::SingleCameraImportStatus::Ok)
-    {
-        _messages->critical(nullptr, QStringLiteral("错误"), import_result.error);
-        return false;
-    }
-
-    int updated_count = 0;
-    QString error;
-    if (!_session->setCameraInstances(
-            session_context, {{import_result.imageAbsPath, import_result.cameraMeta}}, &updated_count, &error))
-    {
-        if (_session->isCurrent(session_context))
+        if (!cancel_flag || cancel_flag->load(std::memory_order_relaxed))
         {
-            _messages->critical(nullptr, QStringLiteral("错误"), QStringLiteral("导入相机失败: %1").arg(error));
+            return;
         }
-        return false;
-    }
-
-    if (!_session->isCurrent(session_context))
-    {
-        return false;
-    }
-    _messages->information(
-        nullptr,
-        QStringLiteral("导入成功"),
-        QStringLiteral("已为影像 %1 导入相机文件。").arg(QFileInfo(import_result.imageAbsPath).fileName()));
-    return true;
-}
-
-bool ProjectCameraSetupManager::importCamerasByFilenameBatch()
-{
-    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages)
-    {
-        return false;
-    }
-
-    const xjw::gui::project::ProjectSessionContext session_context = _session->context();
-    const UiDialogResult selected = _messages->selectDirectory(
-        nullptr, QStringLiteral("选择包含 .tsai 的文件夹"), readLastDir(QStringLiteral("camera_tsai")), kDialogFilters);
-    if (!selected.accepted || selected.text.isEmpty() || !_session->isCurrent(session_context))
-    {
-        return false;
-    }
-
-    writeLastDir(QStringLiteral("camera_tsai"), selected.text);
-    const QStringList images = _session->allImages();
-    xjw::gui::project::BatchCameraImportResult import_result;
-    const xjw::gui::project::BatchCameraImportStatus import_status =
-        xjw::gui::project::buildBatchCameraImport(selected.text, images, &import_result);
-
-    if (import_status == xjw::gui::project::BatchCameraImportStatus::NoTsaiFiles)
-    {
-        _messages->warning(nullptr, QStringLiteral("提示"), QStringLiteral("所选文件夹中没有 .tsai 文件"));
-        return false;
-    }
-    if (import_status == xjw::gui::project::BatchCameraImportStatus::NoProjectImages)
-    {
-        _messages->warning(nullptr, QStringLiteral("提示"), QStringLiteral("项目中没有可匹配的影像"));
-        return false;
-    }
-    for (const QString& parse_error : import_result.parseErrors)
-    {
-        LOG_WARN(parse_error);
-    }
-    if (import_status == xjw::gui::project::BatchCameraImportStatus::NoImportable)
-    {
-        _messages->warning(nullptr,
-                           QStringLiteral("提示"),
-                           QStringLiteral("没有可导入的相机文件。未匹配: %1，重名冲突: %2，解析失败: %3")
-                               .arg(import_result.unmatchedCount)
-                               .arg(import_result.ambiguousCount)
-                               .arg(import_result.parseFailedCount));
-        return false;
-    }
-
-    int updated_count = 0;
-    QString error;
-    if (!_session->setCameraInstances(session_context, import_result.cameraMetaByImage, &updated_count, &error))
-    {
-        if (_session->isCurrent(session_context))
+        const int bounded_total = std::max(1, total);
+        const int bounded_completed = std::clamp(completed, 0, bounded_total);
+        const int percent = firstPercent + (lastPercent - firstPercent) * bounded_completed / bounded_total;
+        int previous = last_reported->load(std::memory_order_relaxed);
+        while (percent > previous &&
+               !last_reported->compare_exchange_weak(previous, percent, std::memory_order_relaxed))
         {
-            _messages->critical(nullptr, QStringLiteral("错误"), QStringLiteral("批量导入失败: %1").arg(error));
         }
-        return false;
-    }
-    if (!_session->isCurrent(session_context))
-    {
-        return false;
-    }
-
-    _messages->information(nullptr,
-                           QStringLiteral("批量导入完成"),
-                           QStringLiteral("已写入 %1 条相机记录（未匹配: %2，重名冲突: %3，解析失败: %4）。")
-                               .arg(updated_count)
-                               .arg(import_result.unmatchedCount)
-                               .arg(import_result.ambiguousCount)
-                               .arg(import_result.parseFailedCount));
-    return true;
-}
-
-bool ProjectCameraSetupManager::initializeCamerasFromExifOrDefault(const QJsonObject& settings)
-{
-    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages)
-    {
-        return false;
-    }
-
-    const xjw::gui::project::ProjectSessionContext session_context = _session->context();
-    const QStringList all_images = _session->allImages();
-    QString target_error;
-    const QStringList target_images = resolveInitTargets(all_images, settings, &target_error);
-    if (target_images.isEmpty())
-    {
-        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), target_error);
-        return false;
-    }
-
-    const bool overwrite_existing = settings.value(QStringLiteral("overwriteExisting")).toBool(false);
-    const bool exif_auto = settings.value(QStringLiteral("exifAuto")).toBool(true);
-    const double default_focal_mm = settings.value(QStringLiteral("defaultFocal")).toDouble(50.0);
-    const double sensor_width_mm = settings.value(QStringLiteral("sensorWidth")).toDouble(23.5);
-    const QSet<QString> existing = existingCameraImages(_session->coreMetadata());
-
-    QMap<QString, QJsonObject> cameras;
-    int skipped_existing = 0;
-    int exif_count = 0;
-    int fallback_count = 0;
-    int invalid_size_count = 0;
-    for (const QString& raw_path : target_images)
-    {
-        const QString image_path = QDir::cleanPath(QFileInfo(raw_path).absoluteFilePath());
-        if (!overwrite_existing && existing.contains(image_path))
-        {
-            ++skipped_existing;
-            continue;
-        }
-
-        QImageReader reader(image_path);
-        const QSize size = reader.size();
-        if (!size.isValid() || size.width() <= 0 || size.height() <= 0)
-        {
-            ++invalid_size_count;
-            continue;
-        }
-
-        QString focal_source = QStringLiteral("default_mm");
-        double focal_px = default_focal_mm / std::max(1e-9, sensor_width_mm) * size.width();
-        if (exif_auto)
-        {
-            if (const auto exif_px = focalPixelsFromExif(image_path, size, sensor_width_mm, &focal_source);
-                exif_px.has_value())
-            {
-                focal_px = *exif_px;
-                ++exif_count;
-            }
-            else
-            {
-                ++fallback_count;
-            }
-        }
-        else
-        {
-            ++fallback_count;
-        }
-
-        QJsonObject camera = makeInitializedCameraMeta(focal_px,
-                                                       focal_px,
-                                                       size.width() * 0.5,
-                                                       size.height() * 0.5,
-                                                       0.0,
-                                                       0.0,
-                                                       0.0,
-                                                       0.0,
-                                                       QStringLiteral("init_from_exif_or_default"),
-                                                       QStringLiteral("none"),
-                                                       size);
-        camera[QStringLiteral("focal_source")] = focal_source;
-        camera[QStringLiteral("focal_px")] = focal_px;
-        camera[QStringLiteral("default_focal_mm")] = default_focal_mm;
-        camera[QStringLiteral("sensor_width_mm")] = sensor_width_mm;
-        cameras.insert(image_path, camera);
-    }
-
-    if (cameras.isEmpty())
-    {
-        _messages->warning(nullptr,
-                           QStringLiteral("初始化相机位姿"),
-                           QStringLiteral("没有可写入的影像。已跳过已有相机: %1，尺寸无法读取: %2。")
-                               .arg(skipped_existing)
-                               .arg(invalid_size_count));
-        return false;
-    }
-
-    int updated_count = 0;
-    QString error;
-    if (!_session->setCameraInstances(session_context, cameras, &updated_count, &error))
-    {
-        if (_session->isCurrent(session_context))
-        {
-            _messages->critical(nullptr, QStringLiteral("错误"), QStringLiteral("写入相机初值失败: %1").arg(error));
-        }
-        return false;
-    }
-    if (!_session->isCurrent(session_context))
-    {
-        return false;
-    }
-
-    _messages->information(
-        nullptr,
-        QStringLiteral("初始化完成"),
-        QStringLiteral("已写入 %1 张影像的相机初值。EXIF 成功: %2，默认焦距回退: %3，跳过已有相机: %4，尺寸失败: %5。")
-            .arg(updated_count)
-            .arg(exif_count)
-            .arg(fallback_count)
-            .arg(skipped_existing)
-            .arg(invalid_size_count));
-    return true;
-}
-
-bool ProjectCameraSetupManager::initializeCamerasFromIntrinsics(const QJsonObject& settings)
-{
-    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages)
-    {
-        return false;
-    }
-
-    const xjw::gui::project::ProjectSessionContext session_context = _session->context();
-    QString target_error;
-    const QStringList target_images = resolveInitTargets(_session->allImages(), settings, &target_error);
-    if (target_images.isEmpty())
-    {
-        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), target_error);
-        return false;
-    }
-
-    const bool overwrite_existing = settings.value(QStringLiteral("overwriteExisting")).toBool(false);
-    const double fx = settings.value(QStringLiteral("fx")).toDouble(0.0);
-    const double fy = settings.value(QStringLiteral("fy")).toDouble(0.0);
-    const double cx_input = settings.value(QStringLiteral("cx")).toDouble(-1.0);
-    const double cy_input = settings.value(QStringLiteral("cy")).toDouble(-1.0);
-    const QString distortion_model =
-        settings.value(QStringLiteral("distortionModel")).toString(QStringLiteral("Brown (k1, k2, p1, p2)"));
-    if (fx <= 0.0 || fy <= 0.0)
-    {
-        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("fx/fy 必须大于 0。"));
-        return false;
-    }
-
-    const QSet<QString> existing = existingCameraImages(_session->coreMetadata());
-    double k1 = 0.0;
-    double k2 = 0.0;
-    double p1 = 0.0;
-    double p2 = 0.0;
-    if (distortion_model.contains(QStringLiteral("径向")))
-    {
-        k1 = settings.value(QStringLiteral("k1")).toDouble(0.0);
-        k2 = settings.value(QStringLiteral("k2")).toDouble(0.0);
-    }
-    else if (distortion_model.contains(QStringLiteral("Brown")))
-    {
-        k1 = settings.value(QStringLiteral("k1")).toDouble(0.0);
-        k2 = settings.value(QStringLiteral("k2")).toDouble(0.0);
-        p1 = settings.value(QStringLiteral("p1")).toDouble(0.0);
-        p2 = settings.value(QStringLiteral("p2")).toDouble(0.0);
-    }
-
-    QMap<QString, QJsonObject> cameras;
-    int skipped_existing = 0;
-    int auto_principal_point_count = 0;
-    int invalid_size_count = 0;
-    for (const QString& raw_path : target_images)
-    {
-        const QString image_path = QDir::cleanPath(QFileInfo(raw_path).absoluteFilePath());
-        if (!overwrite_existing && existing.contains(image_path))
-        {
-            ++skipped_existing;
-            continue;
-        }
-
-        QImageReader reader(image_path);
-        const QSize size = reader.size();
-        if (!size.isValid() || size.width() <= 0 || size.height() <= 0)
-        {
-            ++invalid_size_count;
-            continue;
-        }
-
-        const double cx = cx_input <= 0.0 ? size.width() * 0.5 : cx_input;
-        const double cy = cy_input <= 0.0 ? size.height() * 0.5 : cy_input;
-        if (cx_input <= 0.0 || cy_input <= 0.0)
-        {
-            ++auto_principal_point_count;
-        }
-        QJsonObject camera = makeInitializedCameraMeta(
-            fx, fy, cx, cy, k1, k2, p1, p2, QStringLiteral("init_from_intrinsics"), distortion_model, size);
-        camera[QStringLiteral("focal_px")] = fx;
-        camera[QStringLiteral("focal_px_y")] = fy;
-        cameras.insert(image_path, camera);
-    }
-
-    if (cameras.isEmpty())
-    {
-        _messages->warning(nullptr,
-                           QStringLiteral("初始化相机位姿"),
-                           QStringLiteral("没有可写入的影像。已跳过已有相机: %1，尺寸无法读取: %2。")
-                               .arg(skipped_existing)
-                               .arg(invalid_size_count));
-        return false;
-    }
-
-    int updated_count = 0;
-    QString error;
-    if (!_session->setCameraInstances(session_context, cameras, &updated_count, &error))
-    {
-        if (_session->isCurrent(session_context))
-        {
-            _messages->critical(nullptr, QStringLiteral("错误"), QStringLiteral("写入相机初值失败: %1").arg(error));
-        }
-        return false;
-    }
-    if (!_session->isCurrent(session_context))
-    {
-        return false;
-    }
-
-    _messages->information(nullptr,
-                           QStringLiteral("初始化完成"),
-                           QStringLiteral("已写入 %1 张影像的相机初值。跳过已有相机: %2，自动主点: %3，尺寸失败: %4。")
-                               .arg(updated_count)
-                               .arg(skipped_existing)
-                               .arg(auto_principal_point_count)
-                               .arg(invalid_size_count));
-    return true;
-}
-
-bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& settings,
-                                                             const xjw::gui::project::ProjectTaskContext& taskContext)
-{
-    _sfmContext = taskContext;
-    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages || !contextMatches(taskContext))
-    {
-        _sfmContext = {};
-        return false;
-    }
-
-    const int mode = settings.value(QStringLiteral("mode")).toInt();
-    if (mode != 0 && mode != 1)
-    {
-        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("当前模式不适用相对定向初始化。"));
-        _sfmContext = {};
-        return false;
-    }
-
-    const QStringList all_images = _session->allImages();
-    if (all_images.size() < 2)
-    {
-        _messages->warning(
-            nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("至少需要 2 张影像才能进行相对定向初始化。"));
-        _sfmContext = {};
-        return false;
-    }
-
-    QString target_error;
-    const QStringList target_images = resolveInitTargets(all_images, settings, &target_error);
-    if (target_images.isEmpty())
-    {
-        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), target_error);
-        _sfmContext = {};
-        return false;
-    }
-
-    const bool overwrite_existing = settings.value(QStringLiteral("overwriteExisting")).toBool(false);
-    const QJsonObject base_meta = _session->coreMetadata();
-    const QJsonObject full_meta = _session->metadata();
-    const QSet<QString> existing = existingCameraImages(base_meta);
-
-    QMap<QString, QJsonObject> prepared_cameras;
-    int prepared_count = 0;
-    int kept_existing_count = 0;
-    int invalid_size_count = 0;
-    int exif_count = 0;
-    int fallback_count = 0;
-
-    const double default_focal_mm = settings.value(QStringLiteral("defaultFocal")).toDouble(50.0);
-    const double sensor_width_mm = settings.value(QStringLiteral("sensorWidth")).toDouble(23.5);
-    const bool exif_auto = settings.value(QStringLiteral("exifAuto")).toBool(true);
-    const double fx_input = settings.value(QStringLiteral("fx")).toDouble(0.0);
-    const double fy_input = settings.value(QStringLiteral("fy")).toDouble(0.0);
-    const double cx_input = settings.value(QStringLiteral("cx")).toDouble(-1.0);
-    const double cy_input = settings.value(QStringLiteral("cy")).toDouble(-1.0);
-    const QString distortion_model =
-        settings.value(QStringLiteral("distortionModel")).toString(QStringLiteral("Brown (k1, k2, p1, p2)"));
-
-    double k1 = 0.0;
-    double k2 = 0.0;
-    double p1 = 0.0;
-    double p2 = 0.0;
-    if (mode == 1)
-    {
-        if (fx_input <= 0.0 || fy_input <= 0.0)
-        {
-            _messages->warning(
-                nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("仅有内参模式下，fx/fy 必须大于 0。"));
-            _sfmContext = {};
-            return false;
-        }
-        if (distortion_model.contains(QStringLiteral("径向")))
-        {
-            k1 = settings.value(QStringLiteral("k1")).toDouble(0.0);
-            k2 = settings.value(QStringLiteral("k2")).toDouble(0.0);
-        }
-        else if (distortion_model.contains(QStringLiteral("Brown")))
-        {
-            k1 = settings.value(QStringLiteral("k1")).toDouble(0.0);
-            k2 = settings.value(QStringLiteral("k2")).toDouble(0.0);
-            p1 = settings.value(QStringLiteral("p1")).toDouble(0.0);
-            p2 = settings.value(QStringLiteral("p2")).toDouble(0.0);
-        }
-    }
-
-    for (const QString& raw_path : all_images)
-    {
-        const QString image_path = QDir::cleanPath(QFileInfo(raw_path).absoluteFilePath());
-        if (!overwrite_existing && existing.contains(image_path))
-        {
-            ++kept_existing_count;
-            continue;
-        }
-
-        QImageReader reader(image_path);
-        const QSize size = reader.size();
-        if (!size.isValid() || size.width() <= 0 || size.height() <= 0)
-        {
-            ++invalid_size_count;
-            continue;
-        }
-
-        QJsonObject camera;
-        if (mode == 0)
-        {
-            QString focal_source = QStringLiteral("default_mm");
-            double focal_px = default_focal_mm / std::max(1e-9, sensor_width_mm) * size.width();
-            if (exif_auto)
-            {
-                if (const auto exif_px = focalPixelsFromExif(image_path, size, sensor_width_mm, &focal_source);
-                    exif_px.has_value())
-                {
-                    focal_px = *exif_px;
-                    ++exif_count;
-                }
-                else
-                {
-                    ++fallback_count;
-                }
-            }
-            else
-            {
-                ++fallback_count;
-            }
-            camera = makeInitializedCameraMeta(focal_px,
-                                               focal_px,
-                                               size.width() * 0.5,
-                                               size.height() * 0.5,
-                                               0.0,
-                                               0.0,
-                                               0.0,
-                                               0.0,
-                                               QStringLiteral("init_pose_intrinsics_from_exif_or_default"),
-                                               QStringLiteral("none"),
-                                               size);
-            camera[QStringLiteral("focal_source")] = focal_source;
-            camera[QStringLiteral("default_focal_mm")] = default_focal_mm;
-            camera[QStringLiteral("sensor_width_mm")] = sensor_width_mm;
-        }
-        else
-        {
-            const double cx = cx_input <= 0.0 ? size.width() * 0.5 : cx_input;
-            const double cy = cy_input <= 0.0 ? size.height() * 0.5 : cy_input;
-            camera = makeInitializedCameraMeta(fx_input,
-                                               fy_input,
-                                               cx,
-                                               cy,
-                                               k1,
-                                               k2,
-                                               p1,
-                                               p2,
-                                               QStringLiteral("init_pose_intrinsics_manual"),
-                                               distortion_model,
-                                               size);
-        }
-        prepared_cameras.insert(image_path, camera);
-        ++prepared_count;
-    }
-
-    if (prepared_cameras.isEmpty() && existing.isEmpty())
-    {
-        _messages->warning(nullptr,
-                           QStringLiteral("初始化相机位姿"),
-                           QStringLiteral("没有可用于求解的内参初值。尺寸失败: %1。").arg(invalid_size_count));
-        _sfmContext = {};
-        return false;
-    }
-
-    const QString project_path = taskContext.session.projectPath;
-    const QString assets_dir = xjw::common::project::ProjectIO::projectAssetsDir(project_path);
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
-    const QString output_dir =
-        QDir(assets_dir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
-    QDir().mkpath(output_dir);
-
-    xjw::aerial_triangulation::AerialTriangulationOptions workflow_options;
-    workflow_options.images = all_images;
-    workflow_options.projectPath = project_path;
-    workflow_options.projectMeta = withPreparedCameras(full_meta, prepared_cameras, overwrite_existing);
-    workflow_options.outputDir = output_dir;
-    const int quality_level = settings.value(QStringLiteral("quality")).toInt(1);
-    if (quality_level <= 0)
-    {
-        workflow_options.quality = QStringLiteral("low");
-    }
-    else if (quality_level == 1)
-    {
-        workflow_options.quality = QStringLiteral("medium");
-    }
-    else if (quality_level == 2)
-    {
-        workflow_options.quality = QStringLiteral("high");
-    }
-    else
-    {
-        workflow_options.quality = QStringLiteral("highest");
-    }
-    workflow_options.threads = 0;
-    workflow_options.matchingAlgorithmId =
-        settings.value(QStringLiteral("algorithm_id")).toString(QStringLiteral("plamatch_hct")).trimmed().toLower();
-    workflow_options.resetAlignment = false;
-    workflow_options.autoGenerateMissingMatches = false;
-    workflow_options.cancelFlag = taskContext.cancelFlag;
-
-    LOG_INFO(QStringLiteral("初始化相机位姿: 使用影像匹配算法 %1").arg(workflow_options.matchingAlgorithmId));
-
-    QPointer<ProjectCameraSetupManager> self(this);
-    workflow_options.progressFn = [self, taskContext](const QString& stage, int percent)
-    {
-        if (!self || !self->contextMatches(taskContext))
+        if (percent <= previous)
         {
             return;
         }
@@ -777,10 +259,523 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& 
                                          }
                                      });
     };
-    workflow_options.pairMatchedFn =
-        [self, taskContext](const QString& img0, const QString& img1, const QString& match_path, int num_matches)
+}
+
+bool ProjectCameraSetupManager::importCameraForImage(const QString& imagePath,
+                                                     const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    _taskContext = taskContext;
+    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages || !contextMatches(taskContext))
     {
-        if (!self || !self->contextMatches(taskContext))
+        _taskContext = {};
+        return false;
+    }
+
+    const UiDialogResult selected = _messages->selectOpenFile(nullptr,
+                                                              QStringLiteral("选择相机文件 (.tsai)"),
+                                                              readLastDir(QStringLiteral("camera_tsai")),
+                                                              QStringLiteral("Tsai相机文件 (*.tsai *.TSAI)"),
+                                                              kDialogFilters);
+    if (!selected.accepted || selected.text.isEmpty() || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+    writeLastDir(QStringLiteral("camera_tsai"), QFileInfo(selected.text).absolutePath());
+
+    const std::shared_ptr<std::atomic<bool>> cancel_flag = taskContext.cancelFlag;
+    const HeavyWorkEnteredObserver observer = _heavyWorkEnteredObserver;
+    const auto progress = makeProgressReporter(taskContext, QStringLiteral("正在解析相机文件..."), 5, 90);
+    emit atProgressChanged(QStringLiteral("正在准备导入相机文件..."), 0);
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [imagePath, tsai_path = selected.text, cancel_flag, observer, progress]()
+        {
+            SingleCameraImportRunResult run;
+            if (cancel_flag->load(std::memory_order_relaxed))
+            {
+                return run;
+            }
+            if (observer)
+            {
+                observer(QStringLiteral("camera-import-single"));
+            }
+            run.status = xjw::gui::project::buildSingleCameraImport(
+                imagePath, tsai_path, &run.import, cancel_flag.get(), progress);
+            return run;
+        },
+        [taskContext](ProjectCameraSetupManager* manager,
+                      xjw::gui::tasks::TaskOutcome<SingleCameraImportRunResult> outcome)
+        {
+            if (!manager->contextMatches(taskContext, false, true))
+            {
+                return;
+            }
+            if (!outcome.succeeded())
+            {
+                const bool report_error = manager->contextMatches(taskContext);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(nullptr, QStringLiteral("错误"), outcome.errorMessage);
+                }
+                return;
+            }
+            SingleCameraImportRunResult run = std::move(*outcome.value);
+            if (run.status == xjw::gui::project::SingleCameraImportStatus::Cancelled ||
+                !manager->contextMatches(taskContext))
+            {
+                manager->completeTask(taskContext, false);
+                return;
+            }
+            if (run.status != xjw::gui::project::SingleCameraImportStatus::Ok)
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->critical(nullptr, QStringLiteral("错误"), run.import.error);
+                return;
+            }
+
+            placamera::CameraInstanceSet cameras;
+            QMap<QString, QJsonObject> annotations;
+            QString error;
+            const bool bound = xjw::gui::project::bindImportedFrameCameras(manager->_session->coreMetadata(),
+                                                                           manager->_session->projectPath(),
+                                                                           {run.import},
+                                                                           &cameras,
+                                                                           &annotations,
+                                                                           &error);
+            int updated_count = 0;
+            if (!bound || !manager->_session->upsertNativeCameraInstances(
+                              taskContext.session, cameras, annotations, &updated_count, &error))
+            {
+                const bool report_error = manager->_session->isCurrent(taskContext.session);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(
+                        nullptr, QStringLiteral("错误"), QStringLiteral("导入相机失败: %1").arg(error));
+                }
+                return;
+            }
+            emit manager->atProgressChanged(QStringLiteral("相机文件导入完成"), 100);
+            manager->completeTask(taskContext, true);
+            manager->_messages->information(
+                nullptr,
+                QStringLiteral("导入成功"),
+                QStringLiteral("已为影像 %1 导入相机文件。").arg(QFileInfo(run.import.imageAbsPath).fileName()));
+        }));
+    return true;
+}
+
+bool ProjectCameraSetupManager::importCameraProject(const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    _taskContext = taskContext;
+    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+
+    const QString file_input = QStringLiteral("工程文件");
+    const QString directory_input = QStringLiteral("工程目录");
+    const UiDialogResult input_type = _messages->getItem(
+        nullptr, QStringLiteral("导入相机工程"), QStringLiteral("输入类型"), {file_input, directory_input}, 0);
+    if (!input_type.accepted || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+
+    const QString last_dir = readLastDir(QStringLiteral("camera_project"));
+    const UiDialogResult selected =
+        input_type.text == directory_input
+            ? _messages->selectDirectory(nullptr, QStringLiteral("选择相机工程目录"), last_dir, kDialogFilters)
+            : _messages->selectOpenFile(nullptr,
+                                        QStringLiteral("选择相机工程文件"),
+                                        last_dir,
+                                        QStringLiteral("相机工程文件 (*.txt *.camera *.xml *.psx);;所有文件 (*)"),
+                                        kDialogFilters);
+    if (!selected.accepted || selected.text.isEmpty() || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+    writeLastDir(QStringLiteral("camera_project"),
+                 QFileInfo(selected.text).isDir() ? selected.text : QFileInfo(selected.text).absolutePath());
+
+    const QStringList images = _session->allImages();
+    const std::shared_ptr<std::atomic<bool>> cancel_flag = taskContext.cancelFlag;
+    const HeavyWorkEnteredObserver observer = _heavyWorkEnteredObserver;
+    const auto progress = makeProgressReporter(taskContext, QStringLiteral("正在解析并匹配相机工程..."), 5, 90);
+    emit atProgressChanged(QStringLiteral("正在准备导入相机工程..."), 0);
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [input_path = selected.text, images, cancel_flag, observer, progress]()
+        {
+            CameraProjectImportRunResult run;
+            if (cancel_flag->load(std::memory_order_relaxed))
+            {
+                return run;
+            }
+            if (observer)
+            {
+                observer(QStringLiteral("camera-import-project"));
+            }
+            run.status = xjw::gui::project::buildCameraProjectImport(
+                input_path, images, &run.import, cancel_flag.get(), progress);
+            return run;
+        },
+        [taskContext](ProjectCameraSetupManager* manager,
+                      xjw::gui::tasks::TaskOutcome<CameraProjectImportRunResult> outcome)
+        {
+            if (!manager->contextMatches(taskContext, false, true))
+            {
+                return;
+            }
+            if (!outcome.succeeded())
+            {
+                const bool report_error = manager->contextMatches(taskContext);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(nullptr, QStringLiteral("错误"), outcome.errorMessage);
+                }
+                return;
+            }
+            CameraProjectImportRunResult run = std::move(*outcome.value);
+            if (run.status == xjw::gui::project::CameraProjectImportStatus::Cancelled ||
+                !manager->contextMatches(taskContext))
+            {
+                manager->completeTask(taskContext, false);
+                return;
+            }
+            for (const QString& warning : run.import.warnings)
+            {
+                LOG_WARN(warning);
+            }
+            for (const QString& import_error : run.import.importErrors)
+            {
+                LOG_WARN(import_error);
+            }
+            if (run.status == xjw::gui::project::CameraProjectImportStatus::ParseFailed)
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->critical(
+                    nullptr, QStringLiteral("错误"), QStringLiteral("相机工程解析失败: %1").arg(run.import.error));
+                return;
+            }
+            if (run.status == xjw::gui::project::CameraProjectImportStatus::NoProjectImages)
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->warning(nullptr, QStringLiteral("提示"), QStringLiteral("项目中没有可匹配的影像"));
+                return;
+            }
+            if (run.status == xjw::gui::project::CameraProjectImportStatus::NoImportable)
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->warning(
+                    nullptr,
+                    QStringLiteral("提示"),
+                    QStringLiteral("没有可导入的相机记录。未匹配: %1，重名冲突: %2，不支持: %3%4")
+                        .arg(run.import.unmatchedCount)
+                        .arg(run.import.ambiguousCount)
+                        .arg(run.import.unsupportedCount)
+                        .arg(run.import.error.isEmpty() ? QString() : QStringLiteral("，%1").arg(run.import.error)));
+                return;
+            }
+
+            placamera::CameraInstanceSet cameras;
+            QMap<QString, QJsonObject> annotations;
+            QString error;
+            const bool bound = xjw::gui::project::bindImportedFrameCameras(manager->_session->coreMetadata(),
+                                                                           manager->_session->projectPath(),
+                                                                           run.import.cameras,
+                                                                           &cameras,
+                                                                           &annotations,
+                                                                           &error);
+            int updated_count = 0;
+            if (!bound || !manager->_session->upsertNativeCameraInstances(
+                              taskContext.session, cameras, annotations, &updated_count, &error))
+            {
+                const bool report_error = manager->_session->isCurrent(taskContext.session);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(
+                        nullptr, QStringLiteral("错误"), QStringLiteral("相机工程导入失败: %1").arg(error));
+                }
+                return;
+            }
+            emit manager->atProgressChanged(QStringLiteral("相机工程导入完成"), 100);
+            manager->completeTask(taskContext, true);
+            manager->_messages->information(
+                nullptr,
+                QStringLiteral("导入完成"),
+                QStringLiteral("已从 %1 写入 %2 条相机记录（未匹配: %3，重名冲突: %4，不支持: %5）。")
+                    .arg(run.import.sourceFormat)
+                    .arg(updated_count)
+                    .arg(run.import.unmatchedCount)
+                    .arg(run.import.ambiguousCount)
+                    .arg(run.import.unsupportedCount));
+        }));
+    return true;
+}
+
+bool ProjectCameraSetupManager::initializeCamerasFromExifOrDefault(
+    const QJsonObject& settings, const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    return startCameraInitialization(settings, taskContext, true);
+}
+
+bool ProjectCameraSetupManager::initializeCamerasFromIntrinsics(
+    const QJsonObject& settings, const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    return startCameraInitialization(settings, taskContext, false);
+}
+
+bool ProjectCameraSetupManager::startCameraInitialization(const QJsonObject& settings,
+                                                          const xjw::gui::project::ProjectTaskContext& taskContext,
+                                                          bool useExif)
+{
+    _taskContext = taskContext;
+    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+
+    const QStringList all_images = _session->allImages();
+    QString target_error;
+    const QStringList target_images = resolveInitTargets(all_images, settings, &target_error);
+    if (target_images.isEmpty())
+    {
+        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), target_error);
+        _taskContext = {};
+        return false;
+    }
+    if (!useExif && (settings.value(QStringLiteral("fx")).toDouble(0.0) <= 0.0 ||
+                     settings.value(QStringLiteral("fy")).toDouble(0.0) <= 0.0))
+    {
+        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("fx/fy 必须大于 0。"));
+        _taskContext = {};
+        return false;
+    }
+
+    CameraInitializationRequest request;
+    request.images = target_images;
+    request.projectMetadata = _session->coreMetadata();
+    request.settings = settings;
+    request.mode = useExif ? CameraInitializationMode::ExifOrDefault : CameraInitializationMode::Intrinsics;
+    request.source = useExif ? QStringLiteral("init_from_exif_or_default") : QStringLiteral("init_from_intrinsics");
+
+    const std::shared_ptr<std::atomic<bool>> cancel_flag = taskContext.cancelFlag;
+    const HeavyWorkEnteredObserver observer = _heavyWorkEnteredObserver;
+    const auto progress = makeProgressReporter(taskContext,
+                                               useExif ? QStringLiteral("正在读取影像尺寸与 EXIF...")
+                                                       : QStringLiteral("正在读取影像尺寸..."),
+                                               5,
+                                               90);
+    emit atProgressChanged(QStringLiteral("正在准备相机初值..."), 0);
+    trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [request = std::move(request), cancel_flag, observer, progress, useExif]()
+        {
+            if (cancel_flag->load(std::memory_order_relaxed))
+            {
+                CameraInitializationResult cancelled;
+                cancelled.cancelled = true;
+                return cancelled;
+            }
+            if (observer)
+            {
+                observer(useExif ? QStringLiteral("camera-init-exif") : QStringLiteral("camera-init-intrinsics"));
+            }
+            return prepareCameraInitializations(request, cancel_flag.get(), progress);
+        },
+        [taskContext, useExif](ProjectCameraSetupManager* manager,
+                               xjw::gui::tasks::TaskOutcome<CameraInitializationResult> outcome)
+        {
+            if (!manager->contextMatches(taskContext, false, true))
+            {
+                return;
+            }
+            if (!outcome.succeeded())
+            {
+                const bool report_error = manager->contextMatches(taskContext);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(nullptr, QStringLiteral("错误"), outcome.errorMessage);
+                }
+                return;
+            }
+            CameraInitializationResult result = std::move(*outcome.value);
+            if (result.cancelled || !manager->contextMatches(taskContext))
+            {
+                manager->completeTask(taskContext, false);
+                return;
+            }
+            if (!result.error.isEmpty())
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->warning(nullptr, QStringLiteral("初始化相机位姿"), result.error);
+                return;
+            }
+            if (result.cameras.empty())
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->warning(nullptr,
+                                            QStringLiteral("初始化相机位姿"),
+                                            QStringLiteral("没有可写入的影像。已跳过已有相机: %1，尺寸无法读取: %2。")
+                                                .arg(result.skippedExisting)
+                                                .arg(result.invalidSizeCount));
+                return;
+            }
+
+            int updated_count = 0;
+            QString error;
+            if (!manager->_session->upsertNativeCameraInstances(
+                    taskContext.session, result.cameras, result.annotationsByImageId, &updated_count, &error))
+            {
+                const bool report_error = manager->_session->isCurrent(taskContext.session);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->critical(
+                        nullptr, QStringLiteral("错误"), QStringLiteral("写入相机初值失败: %1").arg(error));
+                }
+                return;
+            }
+            emit manager->atProgressChanged(QStringLiteral("相机初值初始化完成"), 100);
+            manager->completeTask(taskContext, true);
+            if (useExif)
+            {
+                manager->_messages->information(
+                    nullptr,
+                    QStringLiteral("初始化完成"),
+                    QStringLiteral("已写入 %1 张影像的相机初值。EXIF 成功: %2，默认焦距回退: %3，"
+                                   "跳过已有相机: %4，尺寸失败: %5。")
+                        .arg(updated_count)
+                        .arg(result.exifCount)
+                        .arg(result.fallbackCount)
+                        .arg(result.skippedExisting)
+                        .arg(result.invalidSizeCount));
+            }
+            else
+            {
+                manager->_messages->information(
+                    nullptr,
+                    QStringLiteral("初始化完成"),
+                    QStringLiteral("已写入 %1 张影像的相机初值。跳过已有相机: %2，自动主点: %3，"
+                                   "尺寸失败: %4。")
+                        .arg(updated_count)
+                        .arg(result.skippedExisting)
+                        .arg(result.autoPrincipalPointCount)
+                        .arg(result.invalidSizeCount));
+            }
+        }));
+    return true;
+}
+
+bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& settings,
+                                                             const xjw::gui::project::ProjectTaskContext& taskContext)
+{
+    _taskContext = taskContext;
+    if (!requireProject(QStringLiteral("请先打开或创建项目")) || !_messages || !contextMatches(taskContext))
+    {
+        _taskContext = {};
+        return false;
+    }
+
+    const int mode = settings.value(QStringLiteral("mode")).toInt();
+    if (mode != 0 && mode != 1)
+    {
+        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("当前模式不适用相对定向初始化。"));
+        _taskContext = {};
+        return false;
+    }
+
+    const QStringList all_images = _session->allImages();
+    if (all_images.size() < 2)
+    {
+        _messages->warning(
+            nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("至少需要 2 张影像才能进行相对定向初始化。"));
+        _taskContext = {};
+        return false;
+    }
+
+    QString target_error;
+    const QStringList target_images = resolveInitTargets(all_images, settings, &target_error);
+    if (target_images.isEmpty())
+    {
+        _messages->warning(nullptr, QStringLiteral("初始化相机位姿"), target_error);
+        _taskContext = {};
+        return false;
+    }
+
+    const bool overwrite_existing = settings.value(QStringLiteral("overwriteExisting")).toBool(false);
+    const QJsonObject base_meta = _session->coreMetadata();
+    const QJsonObject full_meta = _session->metadata();
+    if (mode == 1 && (settings.value(QStringLiteral("fx")).toDouble(0.0) <= 0.0 ||
+                      settings.value(QStringLiteral("fy")).toDouble(0.0) <= 0.0))
+    {
+        _messages->warning(
+            nullptr, QStringLiteral("初始化相机位姿"), QStringLiteral("仅有内参模式下，fx/fy 必须大于 0。"));
+        _taskContext = {};
+        return false;
+    }
+
+    const QString project_path = taskContext.session.projectPath;
+    const QString assets_dir = xjw::common::project::ProjectIO::projectAssetsDir(project_path);
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString output_dir =
+        QDir(assets_dir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
+
+    CameraInitializationRequest initialization_request;
+    initialization_request.images = all_images;
+    initialization_request.projectMetadata = base_meta;
+    initialization_request.settings = settings;
+    initialization_request.mode =
+        mode == 0 ? CameraInitializationMode::ExifOrDefault : CameraInitializationMode::Intrinsics;
+    initialization_request.source = mode == 0 ? QStringLiteral("init_pose_intrinsics_from_exif_or_default")
+                                              : QStringLiteral("init_pose_intrinsics_manual");
+
+    const std::shared_ptr<std::atomic<bool>> cancel_flag = taskContext.cancelFlag;
+    const HeavyWorkEnteredObserver observer = _heavyWorkEnteredObserver;
+    const auto preparation_progress =
+        makeProgressReporter(taskContext, QStringLiteral("正在读取影像尺寸与 EXIF..."), 1, 15);
+    const QPointer<ProjectCameraSetupManager> self(this);
+    const auto workflow_last_reported = std::make_shared<std::atomic<int>>(14);
+    const auto workflow_progress =
+        [self, cancel_flag, workflow_last_reported, taskContext](const QString& stage, int percent)
+    {
+        if (cancel_flag->load(std::memory_order_relaxed))
+        {
+            return;
+        }
+        const int mapped_percent = 15 + std::clamp(percent, 0, 100) * 80 / 100;
+        int previous = workflow_last_reported->load(std::memory_order_relaxed);
+        while (mapped_percent > previous &&
+               !workflow_last_reported->compare_exchange_weak(previous, mapped_percent, std::memory_order_relaxed))
+        {
+        }
+        if (mapped_percent <= previous)
+        {
+            return;
+        }
+        xjw::gui::tasks::postGuarded(self,
+                                     [taskContext, stage, mapped_percent](ProjectCameraSetupManager* manager)
+                                     {
+                                         if (manager->contextMatches(taskContext))
+                                         {
+                                             emit manager->atProgressChanged(stage, mapped_percent);
+                                         }
+                                     });
+    };
+    const auto pair_matched = [self, cancel_flag, taskContext](
+                                  const QString& img0, const QString& img1, const QString& match_path, int num_matches)
+    {
+        if (cancel_flag->load(std::memory_order_relaxed))
         {
             return;
         }
@@ -794,47 +789,132 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& 
                 }
             });
     };
-
     const QSet<QString> target_set = normalizedPathSet(target_images);
     const SfmRunner runner = _sfmRunner;
     emit atProgressChanged(QStringLiteral("启动初始化相机位姿..."), 0);
     trackFuture(xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [runner, workflow_options = std::move(workflow_options)]() mutable
-        { return runner(std::move(workflow_options)); },
-        [taskContext,
-         output_dir,
+        [runner,
+         initialization_request = std::move(initialization_request),
+         settings,
          all_images,
-         target_set,
-         existing,
-         overwrite_existing,
+         project_path,
          full_meta,
-         prepared_count,
-         kept_existing_count,
-         invalid_size_count,
-         exif_count,
-         fallback_count](
-            ProjectCameraSetupManager* manager,
-            xjw::gui::tasks::TaskOutcome<xjw::aerial_triangulation::AerialTriangulationResult> outcome) mutable
+         output_dir,
+         overwrite_existing,
+         cancel_flag,
+         observer,
+         preparation_progress,
+         workflow_progress,
+         pair_matched]() mutable
+        {
+            SfmSetupRunResult run;
+            run.outputDir = output_dir;
+            if (cancel_flag->load(std::memory_order_relaxed))
+            {
+                run.cancelled = true;
+                return run;
+            }
+            if (observer)
+            {
+                observer(QStringLiteral("camera-sfm"));
+            }
+            run.initialization =
+                prepareCameraInitializations(initialization_request, cancel_flag.get(), preparation_progress);
+            if (run.initialization.cancelled || cancel_flag->load(std::memory_order_relaxed))
+            {
+                run.cancelled = true;
+                return run;
+            }
+            if (!run.initialization.error.isEmpty())
+            {
+                run.error = run.initialization.error;
+                return run;
+            }
+            if (run.initialization.cameras.empty() && run.initialization.existingImages.isEmpty())
+            {
+                run.error =
+                    QStringLiteral("没有可用于求解的内参初值。尺寸失败: %1。").arg(run.initialization.invalidSizeCount);
+                return run;
+            }
+            if (!QDir().mkpath(output_dir) && !QDir(output_dir).exists())
+            {
+                run.error = QStringLiteral("无法创建相机初始化输出目录: %1").arg(output_dir);
+                return run;
+            }
+
+            xjw::aerial_triangulation::AerialTriangulationOptions workflow_options;
+            workflow_options.images = all_images;
+            workflow_options.projectPath = project_path;
+            if (!withPreparedCameras(
+                    full_meta, run.initialization, overwrite_existing, &workflow_options.projectMeta, &run.error))
+            {
+                return run;
+            }
+            workflow_options.outputDir = output_dir;
+            const int quality_level = settings.value(QStringLiteral("quality")).toInt(1);
+            if (quality_level <= 0)
+            {
+                workflow_options.quality = QStringLiteral("low");
+            }
+            else if (quality_level == 1)
+            {
+                workflow_options.quality = QStringLiteral("medium");
+            }
+            else if (quality_level == 2)
+            {
+                workflow_options.quality = QStringLiteral("high");
+            }
+            else
+            {
+                workflow_options.quality = QStringLiteral("highest");
+            }
+            workflow_options.threads = 0;
+            workflow_options.matchingAlgorithmId = settings.value(QStringLiteral("algorithm_id"))
+                                                       .toString(QStringLiteral("plamatch_hct"))
+                                                       .trimmed()
+                                                       .toLower();
+            workflow_options.resetAlignment = false;
+            workflow_options.autoGenerateMissingMatches = false;
+            workflow_options.cancelFlag = cancel_flag;
+            workflow_options.progressFn = workflow_progress;
+            workflow_options.pairMatchedFn = pair_matched;
+            LOG_INFO(QStringLiteral("初始化相机位姿: 使用影像匹配算法 %1").arg(workflow_options.matchingAlgorithmId));
+            run.workflow = runner(std::move(workflow_options));
+            run.cancelled = cancel_flag->load(std::memory_order_relaxed);
+            return run;
+        },
+        [taskContext, all_images, target_set, overwrite_existing, full_meta](
+            ProjectCameraSetupManager* manager, xjw::gui::tasks::TaskOutcome<SfmSetupRunResult> outcome) mutable
         {
             if (!manager->contextMatches(taskContext, false, true))
             {
                 return;
             }
-            if (!manager->_session || !manager->_session->isCurrent(taskContext.session) ||
-                taskContext.cancelFlag->load(std::memory_order_relaxed))
+            if (!outcome.succeeded())
+            {
+                const bool report_error = manager->contextMatches(taskContext);
+                manager->completeTask(taskContext, false);
+                if (report_error)
+                {
+                    manager->_messages->warning(nullptr, QStringLiteral("初始化相机位姿"), outcome.errorMessage);
+                }
+                return;
+            }
+            SfmSetupRunResult run = std::move(*outcome.value);
+            if (run.cancelled || !manager->contextMatches(taskContext))
             {
                 manager->completeTask(taskContext, false);
                 return;
             }
-            if (!outcome.succeeded())
+            if (!run.error.isEmpty())
             {
                 manager->completeTask(taskContext, false);
-                manager->_messages->warning(nullptr, QStringLiteral("初始化相机位姿"), outcome.errorMessage);
+                manager->_messages->warning(nullptr, QStringLiteral("初始化相机位姿"), run.error);
                 return;
             }
 
-            xjw::aerial_triangulation::AerialTriangulationResult workflow_result = std::move(*outcome.value);
+            xjw::aerial_triangulation::AerialTriangulationResult workflow_result = std::move(run.workflow);
             const xjw::aerial_triangulation::AerialTriangulationReconstructionResult& result =
                 workflow_result.reconstructionResult;
             if (!result.success)
@@ -872,12 +952,29 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& 
                 emit manager->imageMatchResultAppended(record.image);
             }
 
-            const InitPoseFinalizeResult finalize_result = finalizeInitializedCameraPoses(
-                result, target_set, existing, overwrite_existing, full_meta, all_images, output_dir);
+            const InitPoseFinalizeResult finalize_result =
+                finalizeInitializedCameraPoses(result,
+                                               target_set,
+                                               run.initialization.existingImages,
+                                               overwrite_existing,
+                                               full_meta,
+                                               all_images,
+                                               run.outputDir);
+            if (!finalize_result.errorMessage.isEmpty())
+            {
+                manager->completeTask(taskContext, false);
+                manager->_messages->critical(nullptr,
+                                             QStringLiteral("初始化相机位姿"),
+                                             finalize_result.errorMessage);
+                return;
+            }
             int updated_count = 0;
-            if (!finalize_result.cameraUpdates.empty() &&
-                !manager->_session->setCameraInstancesById(
-                    taskContext.session, finalize_result.cameraUpdates, &updated_count, &error))
+            if (!finalize_result.cameraInstances.empty() &&
+                !manager->_session->upsertNativeCameraInstances(taskContext.session,
+                                                                finalize_result.cameraInstances,
+                                                                finalize_result.cameraAnnotationsByImageId,
+                                                                &updated_count,
+                                                                &error))
             {
                 manager->completeTask(taskContext, false);
                 if (manager->_session && manager->_session->isCurrent(taskContext.session))
@@ -926,6 +1023,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& 
                          .arg(result.numRegisteredImages)
                          .arg(result.numPoints3D)
                          .arg(updated_count));
+            emit manager->atProgressChanged(QStringLiteral("相机位姿初始化完成"), 100);
             manager->completeTask(taskContext, true);
             manager->_messages->information(
                 nullptr,
@@ -935,11 +1033,11 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject& 
                     .arg(result.numRegisteredImages)
                     .arg(result.numPoints3D)
                     .arg(updated_count)
-                    .arg(prepared_count)
-                    .arg(kept_existing_count)
-                    .arg(invalid_size_count)
-                    .arg(exif_count)
-                    .arg(fallback_count));
+                    .arg(run.initialization.cameras.size())
+                    .arg(run.initialization.skippedExisting)
+                    .arg(run.initialization.invalidSizeCount)
+                    .arg(run.initialization.exifCount)
+                    .arg(run.initialization.fallbackCount));
         }));
     return true;
 }

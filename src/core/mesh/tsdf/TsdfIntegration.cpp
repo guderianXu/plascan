@@ -172,20 +172,22 @@ namespace xjw::mesh
                             ++auxiliaryBridgeRejectedExtensionSampleCount;
                             continue;
                         }
-                        double pixel[2]{};
-                        double voxelDepth = 0.0;
-                        if (!frame.camera.projectWorldPointWithDepth(world, pixel, voxelDepth))
+                        const auto projected = frame.camera->groundToImage(
+                            {frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+                        if (!projected || !projected.value().positiveDepth)
                         {
                             ++rejectedProjectionCount;
                             continue;
                         }
+                        const auto& pixel = projected.value().image;
+                        const double voxelDepth = *projected.value().positiveDepth;
                         const cv::Mat& depth_valid_mask = !frame.useAdaptiveGeometryEvidence && erosion_pixels > 0
                                                               ? effective_depth_valid_masks[frame_index]
                                                               : frame.depthValidMask;
                         const DepthTsdfObservationSample observation = DepthTsdfSurfaceBuilder::sampleObservation(
                             frame,
                             depth_valid_mask,
-                            cv::Point2d(pixel[0], pixel[1]),
+                            cv::Point2d(pixel.sample, pixel.line),
                             options.minimumConfidence,
                             options.enableDiscontinuityAwareSampling,
                             options.maximumInterpolationRelativeDepthSpread,
@@ -241,8 +243,8 @@ namespace xjw::mesh
                         bool contour_band_evidence = false;
                         if (options.enableContourBandZeroCrossingSupport && !contour_band_masks.empty())
                         {
-                            const int contour_column = static_cast<int>(std::lround(pixel[0]));
-                            const int contour_row = static_cast<int>(std::lround(pixel[1]));
+                            const int contour_column = static_cast<int>(std::lround(pixel.sample));
+                            const int contour_row = static_cast<int>(std::lround(pixel.line));
                             contour_band_evidence =
                                 contour_row >= 0 && contour_row < contour_band_masks[frame_index].rows &&
                                 contour_column >= 0 && contour_column < contour_band_masks[frame_index].cols &&

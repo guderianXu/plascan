@@ -8,12 +8,11 @@
 #include "CliPathUtils.h"
 
 #include "project/BaInputBuilder.h"
-#include "BundleAdjustSolver.h"
 #include "BundleAdjustService.h"
 #include "project/ProjectDocumentModel.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectSession.h"
-#include "ProjectCameraIO.h"
+#include "project/ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 
@@ -47,29 +46,33 @@ namespace
         std::exit(code);
     }
 
-    xjw::BABackend parseBaBackendName(const QString& raw)
+    plabundle::Backend parseBaBackendName(const QString& raw)
     {
         const QString value = raw.trimmed().toLower();
         if (value == QLatin1String("auto"))
         {
-            return xjw::BABackend::Auto;
+            return plabundle::Backend::Auto;
         }
         if (value == QLatin1String("plamatrix_cpu"))
         {
-            return xjw::BABackend::PlaMatrixCpu;
+            return plabundle::Backend::PlaMatrixCpu;
         }
         if (value == QLatin1String("plamatrix_cuda"))
         {
-            return xjw::BABackend::PlaMatrixCuda;
+            return plabundle::Backend::PlaMatrixCuda;
         }
         if (value == QLatin1String("plamatrix_opencl"))
         {
-            return xjw::BABackend::PlaMatrixOpenCl;
+            return plabundle::Backend::PlaMatrixOpenCl;
+        }
+        if (value == QLatin1String("plamatrix_vulkan"))
+        {
+            return plabundle::Backend::PlaMatrixVulkan;
         }
         fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / plamatrix_cpu / "
-                               "plamatrix_cuda / plamatrix_opencl")
+                               "plamatrix_cuda / plamatrix_vulkan / plamatrix_opencl")
                     .arg(raw));
-        return xjw::BABackend::PlaMatrixCpu;
+        return plabundle::Backend::PlaMatrixCpu;
     }
 
     xjw::lidar::PlanetaryLaserSensorModel parsePlanetaryLaserSensorModel(const QString& raw)
@@ -218,7 +221,7 @@ namespace
                                                   const QString& outputDir,
                                                   int threads,
                                                   bool dryRun,
-                                                  const xjw::BAOptions& baOptions,
+                                                  const plabundle::SolveOptions& baOptions,
                                                   bool enableLaser,
                                                   const QString& laserCloud,
                                                   double laserMaxDistance,
@@ -283,7 +286,7 @@ namespace
             QString message = QStringLiteral("没有可用于 BA 的 tracks：相机 %1，匹配记录 %2，存在/可读分片 %3/%4，"
                                              "owner 已解析 %5，几何通过/peer 已解析块 %6/%7，候选对 %8，索引观测 %9，"
                                              "多视轨迹 %10，最小匹配数拒绝 %11。")
-                                  .arg(input.cameras.size())
+                                  .arg(input.cameraInstances.size())
                                   .arg(diagnostics.matchResultRecordCount)
                                   .arg(diagnostics.existingShardCount)
                                   .arg(diagnostics.readableShardCount)
@@ -315,16 +318,19 @@ namespace
         }
     }
 
-    xjw::gui::BaServiceResult runOneBa(
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-        const std::vector<xjw::BATrack>& tracks,
-        const xjw::core::project::BaInputBuildResult& input,
-        xjw::gui::BaServiceOptions options)
+    xjw::gui::BaServiceResult runOneBa(const std::vector<std::shared_ptr<const placamera::FramePinholeModel>>& cameras,
+                                       const std::vector<plabundle::Track>& tracks,
+                                       const xjw::core::project::BaInputBuildResult& input,
+                                       xjw::gui::BaServiceOptions options)
     {
-        std::vector<xjw::BATrack> runTracks = tracks;
+        std::vector<plabundle::Track> runTracks = tracks;
         options.imagePathByIndex = input.imagePathByIndex;
         options.imageIdByIndex = input.imageIdByIndex;
         options.beforeCamMeta = input.beforeCamMeta;
+        options.enableControlPointConstraints =
+            input.surveyControlTrackCount > 0 || input.markerControlPointConstraintCount > 0;
+        options.enableScaleBarConstraints = !input.scaleBarConstraints.empty();
+        options.scaleBarConstraints = input.scaleBarConstraints;
         return xjw::gui::BundleAdjustService::run(cameras, runTracks, options);
     }
 
@@ -523,13 +529,16 @@ int main(int argc, char* argv[])
     int maxIterations = 20;
     int chunkSize = 20000;
     int baPlaMatrixDevice = 0;
-    int baMinCudaCameras = xjw::BAOptions::kDefaultMinPlaMatrixCudaCameras;
-    int baMinCudaObservations = xjw::BAOptions::kDefaultMinPlaMatrixCudaObservations;
-    int baMinOpenClCameras = xjw::BAOptions::kDefaultMinPlaMatrixOpenClCameras;
-    int baMinOpenClObservations = xjw::BAOptions::kDefaultMinPlaMatrixOpenClObservations;
-    int baMinDenseCameras = xjw::BAOptions::kDefaultMinPlaMatrixDenseCameras;
-    int baMinCudaDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixCudaDenseObservations;
-    int baMinOpenClDenseObservations = xjw::BAOptions::kDefaultMinPlaMatrixOpenClDenseObservations;
+    int baMinCudaCameras = plabundle::BackendOptions::kDefaultMinCudaCameras;
+    int baMinCudaObservations = plabundle::BackendOptions::kDefaultMinCudaObservations;
+    int baMinVulkanCameras = plabundle::BackendOptions::kDefaultMinVulkanCameras;
+    int baMinVulkanObservations = plabundle::BackendOptions::kDefaultMinVulkanObservations;
+    int baMinOpenClCameras = plabundle::BackendOptions::kDefaultMinOpenClCameras;
+    int baMinOpenClObservations = plabundle::BackendOptions::kDefaultMinOpenClObservations;
+    int baMinDenseCameras = plabundle::BackendOptions::kDefaultMinDenseCameras;
+    int baMinCudaDenseObservations = plabundle::BackendOptions::kDefaultMinCudaDenseObservations;
+    int baMinVulkanDenseObservations = plabundle::BackendOptions::kDefaultMinVulkanDenseObservations;
+    int baMinOpenClDenseObservations = plabundle::BackendOptions::kDefaultMinOpenClDenseObservations;
     double baMaxInitialTrackRms = 100.0;
     double baMaxAcceptedRmsGrowth = 1.25;
     double baMinAcceptedValidTrackRatio = 0.60;
@@ -571,17 +580,23 @@ int main(int argc, char* argv[])
     app.add_option("--ba-backend",
                    baBackendRaw,
                    "BA 求解后端: auto / plamatrix_cpu / plamatrix_cuda / "
-                   "plamatrix_opencl");
-    app.add_option("--ba-plamatrix-device", baPlaMatrixDevice, "PlaMatrix CUDA/OpenCL Schur PCG 使用的设备索引");
+                   "plamatrix_vulkan / plamatrix_opencl");
+    app.add_option("--ba-plamatrix-device", baPlaMatrixDevice, "PlaMatrix CUDA/Vulkan/OpenCL 使用的设备索引");
     app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "Auto 常规规模选择 PlaMatrix CUDA 的最小相机数");
     app.add_option(
         "--ba-min-cuda-observations", baMinCudaObservations, "Auto 常规规模选择 PlaMatrix CUDA 的最小观测数");
+    app.add_option("--ba-min-vulkan-cameras", baMinVulkanCameras, "Auto 常规规模选择 PlaMatrix Vulkan 的最小相机数");
+    app.add_option(
+        "--ba-min-vulkan-observations", baMinVulkanObservations, "Auto 常规规模选择 PlaMatrix Vulkan 的最小观测数");
     app.add_option("--ba-min-opencl-cameras", baMinOpenClCameras, "Auto 常规规模选择 PlaMatrix OpenCL 的最小相机数");
     app.add_option(
         "--ba-min-opencl-observations", baMinOpenClObservations, "Auto 常规规模选择 PlaMatrix OpenCL 的最小观测数");
     app.add_option("--ba-min-dense-cameras", baMinDenseCameras, "Auto 高密度覆盖规则的最小相机数");
     app.add_option(
         "--ba-min-cuda-dense-observations", baMinCudaDenseObservations, "Auto 高密度覆盖规则选择 CUDA 的最小观测数");
+    app.add_option("--ba-min-vulkan-dense-observations",
+                   baMinVulkanDenseObservations,
+                   "Auto 高密度覆盖规则选择 Vulkan 的最小观测数");
     app.add_option("--ba-min-opencl-dense-observations",
                    baMinOpenClDenseObservations,
                    "Auto 高密度覆盖规则选择 OpenCL 的最小观测数");
@@ -809,8 +824,8 @@ int main(int argc, char* argv[])
     }
     if (!planetaryLaserImageAliasRaw.empty())
     {
-        planetaryLaserOptions.imageAliasesByCameraIndex =
-            parsePlanetaryLaserImageAliases(planetaryLaserImageAliasRaw, static_cast<int>(baInput.cameras.size()));
+        planetaryLaserOptions.imageAliasesByCameraIndex = parsePlanetaryLaserImageAliases(
+            planetaryLaserImageAliasRaw, static_cast<int>(baInput.cameraInstances.size()));
     }
     if (enablePlanetaryLaser)
     {
@@ -822,41 +837,35 @@ int main(int argc, char* argv[])
         }
     }
 
-    xjw::BAOptions baOptions;
-    baOptions.maxIterations = maxIterations;
+    plabundle::SolveOptions baOptions;
+    baOptions.solver.maxIterations = maxIterations;
     Q_UNUSED(chunkSize);
-    baOptions.refineCameraPose = refinePose;
-    baOptions.numThreads = threads;
-    baOptions.backend = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
-    baOptions.plaMatrixDevice = std::max(0, baPlaMatrixDevice);
-    baOptions.minPlaMatrixCudaCameras = std::max(1, baMinCudaCameras);
-    baOptions.minPlaMatrixCudaObservations = std::max(1, baMinCudaObservations);
-    baOptions.minPlaMatrixOpenClCameras = std::max(1, baMinOpenClCameras);
-    baOptions.minPlaMatrixOpenClObservations = std::max(1, baMinOpenClObservations);
-    baOptions.minPlaMatrixDenseCameras = std::max(1, baMinDenseCameras);
-    baOptions.minPlaMatrixCudaDenseObservations = std::max(1, baMinCudaDenseObservations);
-    baOptions.minPlaMatrixOpenClDenseObservations = std::max(1, baMinOpenClDenseObservations);
-    baOptions.maxInitialTrackRms = std::max(0.0, baMaxInitialTrackRms);
-    baOptions.allowBackendFallback = baBackendFallback;
-    baOptions.enableBackendQualityGate = baEnableQualityGate;
-    baOptions.maxAcceptedRmsGrowth = std::max(0.0, baMaxAcceptedRmsGrowth);
-    baOptions.minAcceptedValidTrackRatio = std::max(0.0, baMinAcceptedValidTrackRatio);
-    baOptions.maxAcceptedConstraintRmsGrowth = std::max(1.0, baMaxConstraintRmsGrowth);
-    if (baInput.surveyControlTrackCount > 0)
-    {
-        baOptions.enableControlPointConstraints = true;
-    }
-    if (!baInput.scaleBarConstraints.empty())
-    {
-        baOptions.enableScaleBarConstraints = true;
-        baOptions.scaleBarConstraints = baInput.scaleBarConstraints;
-    }
+    baOptions.calibration.refineCameraPose = refinePose;
+    baOptions.solver.numThreads = threads;
+    baOptions.backend.requested = parseBaBackendName(xjw::cli::fromStdString(baBackendRaw));
+    baOptions.backend.plaMatrixDevice = std::max(0, baPlaMatrixDevice);
+    baOptions.backend.minPlaMatrixCudaCameras = std::max(1, baMinCudaCameras);
+    baOptions.backend.minPlaMatrixCudaObservations = std::max(1, baMinCudaObservations);
+    baOptions.backend.minPlaMatrixVulkanCameras = std::max(1, baMinVulkanCameras);
+    baOptions.backend.minPlaMatrixVulkanObservations = std::max(1, baMinVulkanObservations);
+    baOptions.backend.minPlaMatrixOpenClCameras = std::max(1, baMinOpenClCameras);
+    baOptions.backend.minPlaMatrixOpenClObservations = std::max(1, baMinOpenClObservations);
+    baOptions.backend.minPlaMatrixDenseCameras = std::max(1, baMinDenseCameras);
+    baOptions.backend.minPlaMatrixCudaDenseObservations = std::max(1, baMinCudaDenseObservations);
+    baOptions.backend.minPlaMatrixVulkanDenseObservations = std::max(1, baMinVulkanDenseObservations);
+    baOptions.backend.minPlaMatrixOpenClDenseObservations = std::max(1, baMinOpenClDenseObservations);
+    baOptions.solver.maxInitialTrackRms = std::max(0.0, baMaxInitialTrackRms);
+    baOptions.backend.allowFallback = baBackendFallback;
+    baOptions.quality.enabled = baEnableQualityGate;
+    baOptions.quality.maxAcceptedRmsGrowth = std::max(0.0, baMaxAcceptedRmsGrowth);
+    baOptions.quality.minAcceptedValidTrackRatio = std::max(0.0, baMinAcceptedValidTrackRatio);
+    baOptions.quality.maxAcceptedConstraintRmsGrowth = std::max(1.0, baMaxConstraintRmsGrowth);
 
     const QString ba_input_summary =
         QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 indexed_observations=%4 ") +
         QStringLiteral("multiview_tracks=%5 survey_control_tracks=%6 scale_bars=%7");
     xjw::cli::printUtf8(stdout,
-                        ba_input_summary.arg(static_cast<int>(baInput.cameras.size()))
+                        ba_input_summary.arg(static_cast<int>(baInput.cameraInstances.size()))
                             .arg(static_cast<int>(baInput.tracks.size()))
                             .arg(selectedImages.size())
                             .arg(baInput.indexedObservationCount)
@@ -888,7 +897,8 @@ int main(int argc, char* argv[])
                                                                         laserHuberDelta,
                                                                         PlanetaryLaserCliOptions{},
                                                                         exportEvalPlot);
-        const xjw::gui::BaServiceResult baseline = runOneBa(baInput.cameras, baInput.tracks, baInput, baselineOptions);
+        const xjw::gui::BaServiceResult baseline =
+            runOneBa(baInput.cameraInstances, baInput.tracks, baInput, baselineOptions);
         if (!baseline.success)
         {
             fatalQt(QStringLiteral("baseline BA 失败: %1").arg(baseline.errorMessage), cli::EXIT_ALGO_ERR);
@@ -912,7 +922,8 @@ int main(int argc, char* argv[])
                                                                      laserHuberDelta,
                                                                      PlanetaryLaserCliOptions{},
                                                                      exportEvalPlot);
-        const xjw::gui::BaServiceResult laser = runOneBa(baInput.cameras, baInput.tracks, baInput, laserOptions);
+        const xjw::gui::BaServiceResult laser =
+            runOneBa(baInput.cameraInstances, baInput.tracks, baInput, laserOptions);
         if (!laser.success)
         {
             fatalQt(QStringLiteral("LiDAR BA 失败: %1").arg(laser.errorMessage), cli::EXIT_ALGO_ERR);
@@ -948,9 +959,8 @@ int main(int argc, char* argv[])
         }
 
         int updatedCameraCount = 0;
-        if (!dryRun &&
-            !projectSession.updateCameraInstancesById(
-                laser.cameraInstanceUpdates, &updatedCameraCount, &projectError))
+        if (!dryRun && !projectSession.upsertNativeCameraInstances(
+                           laser.cameraInstances, laser.cameraAnnotationsByImageId, &updatedCameraCount, &projectError))
         {
             fatalQt(QStringLiteral("A/B BA 已完成，但相机写回失败: %1").arg(projectError), cli::EXIT_IO_ERR);
         }
@@ -982,7 +992,7 @@ int main(int argc, char* argv[])
                                                             laserHuberDelta,
                                                             planetaryLaserOptions,
                                                             exportEvalPlot);
-    const xjw::gui::BaServiceResult result = runOneBa(baInput.cameras, baInput.tracks, baInput, options);
+    const xjw::gui::BaServiceResult result = runOneBa(baInput.cameraInstances, baInput.tracks, baInput, options);
     if (!result.success)
     {
         fatalQt(QStringLiteral("BA 失败: %1").arg(result.errorMessage), cli::EXIT_ALGO_ERR);
@@ -995,8 +1005,8 @@ int main(int argc, char* argv[])
                                                    outputDir,
                                                    result));
     int updatedCameraCount = 0;
-    if (!dryRun &&
-        !projectSession.updateCameraInstancesById(result.cameraInstanceUpdates, &updatedCameraCount, &projectError))
+    if (!dryRun && !projectSession.upsertNativeCameraInstances(
+                       result.cameraInstances, result.cameraAnnotationsByImageId, &updatedCameraCount, &projectError))
     {
         fatalQt(QStringLiteral("BA 已完成，但相机写回失败: %1").arg(projectError), cli::EXIT_IO_ERR);
     }

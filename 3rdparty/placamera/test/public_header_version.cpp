@@ -1,0 +1,1 @@
+#include <placamera/version.h>

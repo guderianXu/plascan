@@ -16,11 +16,11 @@
 #include <limits>
 #include <vector>
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 #include "TiePointVisualization.h"
 
-using SceneRenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using SceneRenderCloud = plapoint::GeometryCloud<float>;
 using PointVertexIndex = std::uint32_t;
 
 inline constexpr qint64 kDefaultMaximumVisiblePointCount = 5'000'000;

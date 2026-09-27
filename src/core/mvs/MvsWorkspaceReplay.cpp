@@ -145,13 +145,12 @@ namespace xjw::mvs
 
     } // namespace
 
-    bool cameraFromMvsWorkspaceJson(const QJsonObject& object,
-                                    xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera,
-                                    bool requireBoundIdentity)
+    std::shared_ptr<const placamera::FramePinholeModel>
+    cameraFromMvsWorkspaceJson(const QJsonObject& object, placamera::ImageSize imageSize)
     {
-        if (!camera || object.isEmpty())
+        if (object.isEmpty() || !imageSize.isValid())
         {
-            return false;
+            return {};
         }
 
         std::array<double, 9> worldToCamera{};
@@ -159,7 +158,7 @@ namespace xjw::mvs
         if (!readFiniteDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")), worldToCamera.data(), 9) ||
             !readFiniteDoubleArray(object.value(QStringLiteral("camera_center")), center.data(), 3))
         {
-            return false;
+            return {};
         }
 
         double focalX = 0.0;
@@ -181,7 +180,7 @@ namespace xjw::mvs
             !readOptionalFiniteDouble(object, QStringLiteral("p1"), 0.0, &tangentialP1) ||
             !readOptionalFiniteDouble(object, QStringLiteral("p2"), 0.0, &tangentialP2))
         {
-            return false;
+            return {};
         }
 
         if (object.contains(QStringLiteral("translation_world_to_camera")))
@@ -191,7 +190,7 @@ namespace xjw::mvs
                                        translation.data(),
                                        static_cast<int>(translation.size())))
             {
-                return false;
+                return {};
             }
         }
 
@@ -205,47 +204,44 @@ namespace xjw::mvs
                                                    worldToCamera[5],
                                                    worldToCamera[8]}};
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-        parsed.setIntrinsics(focalX, focalY, principalX, principalY);
-        parsed.setPose(cameraToWorld, center);
-        parsed.setDistortion(radialK1, radialK2, radialK3, tangentialP1, tangentialP2);
-        std::string validationError;
-        if (!parsed.isValid() || !parsed.validateNumericalState(&validationError))
-        {
-            return false;
-        }
-
         const QString instanceId = object.value(QStringLiteral("instance_id")).toString().trimmed();
         const QString imageId = object.value(QStringLiteral("image_id")).toString().trimmed();
         const QString worldFrame = object.value(QStringLiteral("world_frame")).toString().trimmed();
-        const bool hasAnyIdentity = object.contains(QStringLiteral("instance_id")) ||
-                                    object.contains(QStringLiteral("image_id")) ||
-                                    object.contains(QStringLiteral("world_frame"));
         const bool hasCompleteIdentity = object.value(QStringLiteral("instance_id")).isString() &&
                                          object.value(QStringLiteral("image_id")).isString() &&
                                          object.value(QStringLiteral("world_frame")).isString() &&
                                          !instanceId.isEmpty() && !imageId.isEmpty() && !worldFrame.isEmpty();
-        if (hasAnyIdentity && !hasCompleteIdentity)
+        if (!hasCompleteIdentity)
         {
-            return false;
+            return {};
         }
-        if (requireBoundIdentity && !hasCompleteIdentity)
+        try
         {
-            return false;
+            const placamera::FrameId frame(worldFrame.toStdString());
+            placamera::FrameIntrinsics intrinsics;
+            intrinsics.focalX = focalX;
+            intrinsics.focalY = focalY;
+            intrinsics.principalX = principalX;
+            intrinsics.principalY = principalY;
+            const placamera::BrownConradyDistortion distortion{
+                radialK1, radialK2, radialK3, tangentialP1, tangentialP2};
+            const auto definition = placamera::FramePinholeDefinition::create(
+                placamera::CameraDefinitionId(instanceId.toStdString() + "-mvs-replay-definition"),
+                intrinsics,
+                distortion,
+                placamera::PixelConvention::PixelCenter,
+                frame);
+            return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId(instanceId.toStdString()),
+                placamera::ImageId(imageId.toStdString()),
+                definition,
+                imageSize,
+                placamera::Pose::create(frame, center, cameraToWorld)));
         }
-        if (hasCompleteIdentity)
+        catch (const std::exception&)
         {
-            std::string bindError;
-            if (!parsed.bindIdentity(camera_core::CameraInstanceId(instanceId.toStdString()),
-                                     camera_core::ImageId(imageId.toStdString()),
-                                     xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
-                                     &bindError))
-            {
-                return false;
-            }
+            return {};
         }
-        *camera = parsed;
-        return true;
     }
 
     bool loadMvsReplayViews(const QString& manifestPath,
@@ -306,7 +302,7 @@ namespace xjw::mvs
         QSet<QString> replayRasterIdentities;
         QSet<QString> replayCameraImageIdentities;
         QSet<QString> replayCameraInstanceIdentities;
-        std::optional<xjw::coordinate_system::CoordinateFrameId> commonWorldFrame;
+        std::optional<placoordinate::CoordinateFrameId> commonWorldFrame;
         int expectedIndex = 0;
         for (const auto& [index, record] : recordsByIndex)
         {
@@ -383,46 +379,6 @@ namespace xjw::mvs
                 view.preparedImagePath = xjw::common::io::toUtf8Path(raster_path);
             }
             const QJsonObject replay_camera = has_prepared_camera ? record.preparedCameraModel : record.cameraModel;
-            if (!cameraFromMvsWorkspaceJson(replay_camera, &view.camera, true))
-            {
-                if (errorMessage)
-                {
-                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机模型无效或缺少显式 identity/frame")
-                                        .arg(index);
-                }
-                views->clear();
-                return false;
-            }
-            const QString cameraImageIdentity = QString::fromStdString(view.camera.imageId().value());
-            const QString cameraInstanceIdentity = QString::fromStdString(view.camera.instanceId().value());
-            if (replayCameraImageIdentities.contains(cameraImageIdentity) ||
-                replayCameraInstanceIdentities.contains(cameraInstanceIdentity))
-            {
-                if (errorMessage)
-                {
-                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机 identity 与已有帧重复").arg(index);
-                }
-                views->clear();
-                return false;
-            }
-            replayCameraImageIdentities.insert(cameraImageIdentity);
-            replayCameraInstanceIdentities.insert(cameraInstanceIdentity);
-            if (!commonWorldFrame)
-            {
-                commonWorldFrame = view.camera.worldFrame();
-            }
-            else if (*commonWorldFrame != view.camera.worldFrame())
-            {
-                if (errorMessage)
-                {
-                    *errorMessage = QStringLiteral("MVS manifest 相机混用 world frame：%1 与 %2")
-                                        .arg(QString::fromStdString(commonWorldFrame->value()),
-                                             QString::fromStdString(view.camera.worldFrame().value()));
-                }
-                views->clear();
-                return false;
-            }
-
             const cv::Mat image = xjw::common::io::readImage(
                 has_prepared_image ? view.preparedImagePath : view.imagePath, cv::IMREAD_GRAYSCALE);
             if (image.empty())
@@ -437,7 +393,46 @@ namespace xjw::mvs
             }
             view.imageWidth = image.cols;
             view.imageHeight = image.rows;
-            view.camera.setImageSize(camera_core::ImageSize{image.cols, image.rows});
+            view.camera = cameraFromMvsWorkspaceJson(replay_camera, {image.cols, image.rows});
+            if (!view.camera)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机模型无效或缺少显式 identity/frame")
+                                        .arg(index);
+                }
+                views->clear();
+                return false;
+            }
+            const QString cameraImageIdentity = QString::fromStdString(view.camera->imageId().value());
+            const QString cameraInstanceIdentity = QString::fromStdString(view.camera->instanceId().value());
+            if (replayCameraImageIdentities.contains(cameraImageIdentity) ||
+                replayCameraInstanceIdentities.contains(cameraInstanceIdentity))
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS manifest 第 %1 帧相机 identity 与已有帧重复").arg(index);
+                }
+                views->clear();
+                return false;
+            }
+            replayCameraImageIdentities.insert(cameraImageIdentity);
+            replayCameraInstanceIdentities.insert(cameraInstanceIdentity);
+            if (!commonWorldFrame)
+            {
+                commonWorldFrame = view.camera->groundFrame();
+            }
+            else if (*commonWorldFrame != view.camera->groundFrame())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QStringLiteral("MVS manifest 相机混用 world frame：%1 与 %2")
+                                        .arg(QString::fromStdString(commonWorldFrame->value()),
+                                             QString::fromStdString(view.camera->groundFrame().value()));
+                }
+                views->clear();
+                return false;
+            }
 
             const QString prepared_mask_path = resolveManifestPath(manifestPath, record.preparedValidMaskPath);
             if (!prepared_mask_path.isEmpty())

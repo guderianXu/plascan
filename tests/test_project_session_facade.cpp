@@ -26,7 +26,7 @@ namespace
         int updatedCount = 7;
         QString errorMessage;
 
-        EXPECT_FALSE(session.setCameraInstances({}, &updatedCount, &errorMessage));
+        EXPECT_FALSE(session.upsertNativeCameraInstances(session.context(), {}, {}, &updatedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
     }
@@ -38,7 +38,8 @@ namespace
         int clearedCount = 9;
         QString errorMessage;
 
-        EXPECT_FALSE(session.replaceCameraInstances({}, {}, &updatedCount, &clearedCount, &errorMessage));
+        EXPECT_FALSE(session.replaceNativeCameraInstances(
+            session.context(), {}, {}, {}, &updatedCount, &clearedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(clearedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));

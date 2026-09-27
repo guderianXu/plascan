@@ -9,9 +9,7 @@
 #include "project/ProjectResourceStore.h"
 #include "project/ProjectSharedImageStore.h"
 #include "project/ProjectWorkspaceStore.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/project/CameraProjectRuntime.h"
-#include "camera/models/CameraModelFactories.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "Logger.h"
 
 #include <QDateTime>
@@ -20,7 +18,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QSet>
 #include <QUuid>
 
 namespace xjw::common::project
@@ -420,116 +417,68 @@ namespace xjw::common::project
         return true;
     }
 
-    bool ProjectSession::updateCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
-                                               int* updatedCount,
-                                               QString* errorMessage)
+    bool ProjectSession::upsertNativeCameraInstances(const placamera::CameraInstanceSet& instances,
+                                                     const QMap<QString, QJsonObject>& annotationsByImageId,
+                                                     int* writtenCount,
+                                                     QString* errorMessage)
     {
-        if (updatedCount)
+        if (writtenCount)
         {
-            *updatedCount = 0;
+            *writtenCount = 0;
         }
         if (!isOpen())
         {
             setError(errorMessage, QStringLiteral("项目会话未打开"));
             return false;
         }
-
-        QMap<QString, QJsonObject> normalizedUpdates;
-        QMap<QString, QJsonObject> uniqueUpdatesByFileName;
-        QSet<QString> ambiguousFileNames;
-        for (auto it = modelMetadataByImage.constBegin(); it != modelMetadataByImage.constEnd(); ++it)
-        {
-            const QString normalizedPath = normalizedImagePath(it.key());
-            normalizedUpdates.insert(normalizedPath, it.value());
-
-            // CLI 会把源影像导入共享资源目录，而空三结果仍以源路径为键。
-            // 精确路径无法命中时，只允许通过唯一文件名建立别名；同名影像保持
-            // 未匹配状态，避免把一个相机解误写到另一个影像记录。
-            const QString fileName = QFileInfo(normalizedPath).fileName().toCaseFolded();
-            if (fileName.isEmpty() || ambiguousFileNames.contains(fileName))
-            {
-                continue;
-            }
-            if (uniqueUpdatesByFileName.contains(fileName))
-            {
-                uniqueUpdatesByFileName.remove(fileName);
-                ambiguousFileNames.insert(fileName);
-                continue;
-            }
-            uniqueUpdatesByFileName.insert(fileName, it.value());
-        }
-
-        QMap<QString, QJsonObject> resolvedUpdates;
-        const QJsonArray images = _projectFiles.value(QStringLiteral("images")).toArray();
-        for (const QJsonValue& value : images)
-        {
-            const QJsonObject image = value.toObject();
-            const QString imagePath = normalizedImagePath(image.value(QStringLiteral("path")).toString());
-            const auto exactUpdate = normalizedUpdates.constFind(imagePath);
-            QJsonObject modelUpdate;
-            if (exactUpdate != normalizedUpdates.constEnd())
-            {
-                modelUpdate = exactUpdate.value();
-            }
-            else
-            {
-                const QString fileName = QFileInfo(imagePath).fileName().toCaseFolded();
-                const auto uniqueUpdate = uniqueUpdatesByFileName.constFind(fileName);
-                if (uniqueUpdate != uniqueUpdatesByFileName.constEnd())
-                {
-                    modelUpdate = uniqueUpdate.value();
-                }
-            }
-            if (!modelUpdate.isEmpty())
-            {
-                resolvedUpdates.insert(imagePath, modelUpdate);
-            }
-        }
         const auto result =
-            xjw::camera_project::CameraProjectRecords::upsertByImagePath(&_projectFiles, resolvedUpdates);
+            xjw::placamera_runtime::upsertProjectCameras(&_projectFiles, instances, annotationsByImageId);
         if (!result.ok())
         {
             setError(errorMessage, result.errors.join(QStringLiteral("; ")));
             return false;
         }
-        const int count = result.updatedCount;
-        if (updatedCount)
+        if (writtenCount)
         {
-            *updatedCount = count;
+            *writtenCount = result.insertedCount + result.updatedCount;
         }
         return true;
     }
 
-    bool ProjectSession::updateCameraInstancesById(
-        const xjw::camera_project::CameraInstanceUpdates& updates,
-        int* updatedCount,
-        QString* errorMessage)
+    bool ProjectSession::replaceNativeCameraInstances(const std::vector<placamera::ImageId>& targetImageIds,
+                                                      const placamera::CameraInstanceSet& instances,
+                                                      const QMap<QString, QJsonObject>& annotationsByImageId,
+                                                      int* writtenCount,
+                                                      int* clearedCount,
+                                                      QString* errorMessage)
     {
-        if (updatedCount)
+        if (writtenCount)
         {
-            *updatedCount = 0;
+            *writtenCount = 0;
+        }
+        if (clearedCount)
+        {
+            *clearedCount = 0;
         }
         if (!isOpen())
         {
             setError(errorMessage, QStringLiteral("项目会话未打开"));
             return false;
         }
-        if (updates.empty())
-        {
-            setError(errorMessage, QStringLiteral("没有可写入的相机实例更新"));
-            return false;
-        }
-
-        const auto result = xjw::camera_project::CameraProjectRecords::upsertByImageId(
-            &_projectFiles, updates);
+        const auto result = xjw::placamera_runtime::replaceProjectCameras(
+            &_projectFiles, targetImageIds, instances, annotationsByImageId);
         if (!result.ok())
         {
             setError(errorMessage, result.errors.join(QStringLiteral("; ")));
             return false;
         }
-        if (updatedCount)
+        if (writtenCount)
         {
-            *updatedCount = result.updatedCount;
+            *writtenCount = result.insertedCount + result.updatedCount;
+        }
+        if (clearedCount)
+        {
+            *clearedCount = result.clearedCount;
         }
         return true;
     }
@@ -577,21 +526,12 @@ namespace xjw::common::project
         {
             return false;
         }
-        xjw::camera_project::CameraProjectData cameraData;
-        QStringList cameraErrors;
-        if (!xjw::camera_project::CameraProjectStore::load(_projectFiles, &cameraData, &cameraErrors))
-        {
-            setError(errorMessage,
-                     QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; "))));
-            return false;
-        }
-        const auto runtimeCameras = xjw::camera_project::CameraProjectRuntime::load(
-            _projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        const auto runtimeCameras = xjw::placamera_runtime::loadProjectCameras(_projectFiles);
         if (!runtimeCameras.ok())
         {
-            setError(errorMessage,
-                     QStringLiteral("project_files 相机模型无效: %1")
-                         .arg(runtimeCameras.errors.join(QStringLiteral("; "))));
+            setError(
+                errorMessage,
+                QStringLiteral("project_files 相机模型无效: %1").arg(runtimeCameras.errors.join(QStringLiteral("; "))));
             return false;
         }
         if (_projectConfig.value(QStringLiteral("project_id")).toString() != _projectId ||
@@ -667,21 +607,12 @@ namespace xjw::common::project
         {
             return false;
         }
-        xjw::camera_project::CameraProjectData cameraData;
-        QStringList cameraErrors;
-        if (!xjw::camera_project::CameraProjectStore::load(_projectFiles, &cameraData, &cameraErrors))
-        {
-            setError(errorMessage,
-                     QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; "))));
-            return false;
-        }
-        const auto runtimeCameras = xjw::camera_project::CameraProjectRuntime::load(
-            _projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        const auto runtimeCameras = xjw::placamera_runtime::loadProjectCameras(_projectFiles);
         if (!runtimeCameras.ok())
         {
-            setError(errorMessage,
-                     QStringLiteral("project_files 相机模型无效: %1")
-                         .arg(runtimeCameras.errors.join(QStringLiteral("; "))));
+            setError(
+                errorMessage,
+                QStringLiteral("project_files 相机模型无效: %1").arg(runtimeCameras.errors.join(QStringLiteral("; "))));
             return false;
         }
         ProjectWorkspaceStore workspace(_projectPath, _activeChunk.directory);

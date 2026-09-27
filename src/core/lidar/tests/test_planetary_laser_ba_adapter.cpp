@@ -73,7 +73,7 @@ TEST(PlanetaryLaserBaAdapterTest, BuildsConstrainedShotAndIgnoresProjectedMeasur
 {
     const auto dataset = makeDataset();
     const auto options = makeOptions();
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     xjw::lidar::PlanetaryLaserBaAdapterSummary summary;
     std::string error;
 
@@ -82,7 +82,7 @@ TEST(PlanetaryLaserBaAdapterTest, BuildsConstrainedShotAndIgnoresProjectedMeasur
     ASSERT_EQ(constraints.size(), 1u);
     const auto &constraint = constraints.front();
     EXPECT_EQ(constraint.cameraIndex, 0);
-    EXPECT_EQ(constraint.pointMode, xjw::BALaserPointMode::Constrained);
+    EXPECT_EQ(constraint.pointMode, plabundle::LaserPointMode::Constrained);
     EXPECT_EQ(constraint.shotId, "shot-1");
     EXPECT_EQ(constraint.sourceIndex, 0);
     ASSERT_EQ(constraint.measuredImageObservations.size(), 1u);
@@ -100,7 +100,7 @@ TEST(PlanetaryLaserBaAdapterTest, RejectsLineScanInsteadOfUsingStaticPose)
 {
     auto dataset = makeDataset();
     dataset.sensorModel = xjw::lidar::PlanetaryLaserSensorModel::LineScan;
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     EXPECT_FALSE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
@@ -112,7 +112,7 @@ TEST(PlanetaryLaserBaAdapterTest, RejectsCoordinateFrameMismatch)
 {
     auto options = makeOptions();
     options.cameraCoordinateFrame = "LOCAL_SFM";
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     EXPECT_FALSE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
@@ -126,7 +126,7 @@ TEST(PlanetaryLaserBaAdapterTest, FreePointNeedsTwoRealMeasuredImages)
     auto &shot = dataset.shots.front();
     shot.pointMode = xjw::lidar::PlanetaryLaserPointMode::Free;
     shot.pointCovarianceBodyFixedMetersSquared.reset();
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     EXPECT_FALSE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
@@ -143,7 +143,7 @@ TEST(PlanetaryLaserBaAdapterTest, FreePointNeedsTwoRealMeasuredImages)
     ASSERT_TRUE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
         dataset, makeOptions(), &constraints, nullptr, &error)) << error;
     ASSERT_EQ(constraints.size(), 1u);
-    EXPECT_EQ(constraints.front().pointMode, xjw::BALaserPointMode::Free);
+    EXPECT_EQ(constraints.front().pointMode, plabundle::LaserPointMode::Free);
     EXPECT_EQ(constraints.front().measuredImageObservations.size(), 2u);
 }
 
@@ -153,13 +153,13 @@ TEST(PlanetaryLaserBaAdapterTest, FixedPointDoesNotRequireCovariance)
     auto &shot = dataset.shots.front();
     shot.pointMode = xjw::lidar::PlanetaryLaserPointMode::Fixed;
     shot.pointCovarianceBodyFixedMetersSquared.reset();
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     ASSERT_TRUE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
         dataset, makeOptions(), &constraints, nullptr, &error)) << error;
     ASSERT_EQ(constraints.size(), 1u);
-    EXPECT_EQ(constraints.front().pointMode, xjw::BALaserPointMode::Fixed);
+    EXPECT_EQ(constraints.front().pointMode, plabundle::LaserPointMode::Fixed);
 }
 
 TEST(PlanetaryLaserBaAdapterTest, CanSkipShotsOutsideSelectedCameraSetExplicitly)
@@ -171,7 +171,7 @@ TEST(PlanetaryLaserBaAdapterTest, CanSkipShotsOutsideSelectedCameraSetExplicitly
     dataset.shots.push_back(second);
     auto options = makeOptions();
     options.allowUnmappedShots = true;
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     xjw::lidar::PlanetaryLaserBaAdapterSummary summary;
     std::string error;
 
@@ -190,7 +190,7 @@ TEST(PlanetaryLaserBaAdapterTest, ExactSerialNumberWinsBeforeAmbiguousTailFallba
         {"LRO/1/NACL"},
         {"LRO/2/NACL", "right.cub"},
     };
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     ASSERT_TRUE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
@@ -210,7 +210,7 @@ TEST(PlanetaryLaserBaAdapterTest, DoesNotSilentlyDropUnmappedMeasuredImage)
     dataset.shots.front().imageMeasures.front().kind =
         xjw::lidar::PlanetaryLaserImageMeasureKind::Measured;
     dataset.shots.front().imageMeasures.front().imageId = "outside.cub";
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     EXPECT_FALSE(xjw::lidar::buildPlanetaryLaserRangeConstraints(
@@ -228,7 +228,7 @@ TEST(PlanetaryLaserBaAdapterTest, RejectsAnisotropicImageCovarianceInsteadOfAver
     auto dataset = makeDataset();
     dataset.shots.front().imageMeasures.back().covariancePixelsSquared =
         std::array<double, 4>{{1.0, 0.2, 0.2, 4.0}};
-    std::vector<xjw::BALaserRangeConstraint> constraints;
+    std::vector<plabundle::LaserRangeConstraint> constraints;
     std::string error;
 
     EXPECT_FALSE(xjw::lidar::buildPlanetaryLaserRangeConstraints(

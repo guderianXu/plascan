@@ -167,9 +167,10 @@ namespace xjw::mesh
                     artifact, QStringLiteral("scene_profile is missing or unknown: %1").arg(artifact.sceneProfile));
                 return result;
             }
-            if (!artifact.hasCameraModel || !artifact.cameraModel.isValid())
+            if (!artifact.cameraModel)
             {
-                result.errorMessage = frameArtifactError(artifact, QStringLiteral("camera is invalid"));
+                result.errorMessage = frameArtifactError(
+                    artifact, QStringLiteral("camera is missing or invalid; regenerate the depth-frame manifest"));
                 return result;
             }
             if (artifact.depthPath.isEmpty())
@@ -275,6 +276,17 @@ namespace xjw::mesh
             if (!loadFloatMatrix(artifact.depthPath, &frame.depth, &reason))
             {
                 result.errorMessage = frameArtifactError(artifact, QStringLiteral("depth: %1").arg(reason));
+                return result;
+            }
+            const placamera::ImageSize camera_size = frame.camera->imageSize();
+            if (camera_size.samples != frame.depth.cols || camera_size.lines != frame.depth.rows)
+            {
+                result.errorMessage = frameArtifactError(
+                    artifact, QStringLiteral("camera image size %1x%2 does not match depth grid %3x%4")
+                                  .arg(camera_size.samples)
+                                  .arg(camera_size.lines)
+                                  .arg(frame.depth.cols)
+                                  .arg(frame.depth.rows));
                 return result;
             }
 

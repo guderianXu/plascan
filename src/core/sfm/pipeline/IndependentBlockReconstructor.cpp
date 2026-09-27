@@ -127,20 +127,21 @@ namespace xjw
             {
                 if (source.isRegistered(imageId) && target.isRegistered(imageId))
                 {
-                    sourceCenters.push_back(source.camera(imageId).cameraCenter());
-                    targetCenters.push_back(target.camera(imageId).cameraCenter());
+                    sourceCenters.push_back(source.camera(imageId).pose().center);
+                    targetCenters.push_back(target.camera(imageId).pose().center);
                 }
             }
             return incremental_sfm_detail::estimateRobustCameraCenterSimilarity(sourceCenters, targetCenters);
         }
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState
-        transformCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                        const SimilarityTransform3d& transform)
+        placamera::FramePinholeNumericState transformCamera(const placamera::FramePinholeNumericState& camera,
+                                                            const SimilarityTransform3d& transform)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState result = camera;
-            result.setPose(incremental_sfm_detail::multiplyRotation(transform.rotation, camera.cameraToWorldRotation()),
-                           incremental_sfm_detail::transformPoint(transform, camera.cameraCenter()));
+            placamera::FramePinholeNumericState result = camera;
+            result.setPose(placamera::Pose::create(
+                camera.groundFrame(),
+                incremental_sfm_detail::transformPoint(transform, camera.pose().center),
+                incremental_sfm_detail::multiplyRotation(transform.rotation, camera.pose().cameraToWorldRotation)));
             return result;
         }
 
@@ -222,8 +223,7 @@ namespace xjw
                 std::array<std::vector<double>, 9> parameters;
                 for (ImageId imageId : image_ids)
                 {
-                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
-                        reconstruction.camera(imageId);
+                    const placamera::FramePinholeNumericState& camera = reconstruction.camera(imageId);
                     const auto intrinsics = camera.intrinsics();
                     const auto distortion = camera.distortion();
                     parameters[0].push_back(intrinsics.focalX);
@@ -238,15 +238,20 @@ namespace xjw
                 }
                 for (ImageId imageId : image_ids)
                 {
-                    xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
-                        reconstruction.camera(imageId);
-                    camera.setIntrinsics(
-                        median(parameters[0]), median(parameters[1]), median(parameters[2]), median(parameters[3]));
-                    camera.setDistortion(median(parameters[4]),
-                                         median(parameters[5]),
-                                         median(parameters[6]),
-                                         median(parameters[7]),
-                                         median(parameters[8]));
+                    placamera::FramePinholeNumericState& camera = reconstruction.camera(imageId);
+                    auto intrinsics = camera.intrinsics();
+                    intrinsics.focalX = median(parameters[0]);
+                    intrinsics.focalY = median(parameters[1]);
+                    intrinsics.principalX = median(parameters[2]);
+                    intrinsics.principalY = median(parameters[3]);
+                    camera.setIntrinsics(intrinsics);
+                    auto distortion = camera.distortion();
+                    distortion.radialK1 = median(parameters[4]);
+                    distortion.radialK2 = median(parameters[5]);
+                    distortion.radialK3 = median(parameters[6]);
+                    distortion.tangentialP1 = median(parameters[7]);
+                    distortion.tangentialP2 = median(parameters[8]);
+                    camera.setDistortion(distortion);
                 }
             }
         }
@@ -296,15 +301,15 @@ namespace xjw
             const std::unordered_set<ImageId> allowed(subsetIds.begin(), subsetIds.end());
             for (ImageId imageId : subsetIds)
             {
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-                if (!_owner.getCamera(imageId, camera))
+                const auto* camera = _owner.getCamera(imageId);
+                if (!camera)
                 {
                     IncrementalSfmResult failed;
                     failed.summary = label + ": cannot load camera " + std::to_string(imageId);
                     return failed;
                 }
                 const ImageData& image = inputReconstruction.image(imageId);
-                child.addImageWithCamera(imageId, image.imagePath, camera, image.keypoints, image.sensorKey);
+                child.addImageWithCamera(imageId, image.imagePath, *camera, image.keypoints, image.sensorKey);
             }
             for (const ImagePair& pair : _owner._correspondenceGraph.imagePairs())
             {
@@ -341,15 +346,15 @@ namespace xjw
             IncrementalSfm child(childOptions);
             for (ImageId imageId : allImageIds)
             {
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-                if (!_owner.getCamera(imageId, camera))
+                const auto* camera = _owner.getCamera(imageId);
+                if (!camera)
                 {
                     IncrementalSfmResult failed;
                     failed.summary = label + ": cannot load camera " + std::to_string(imageId);
                     return failed;
                 }
                 const ImageData& image = inputReconstruction.image(imageId);
-                child.addImageWithCamera(imageId, image.imagePath, camera, image.keypoints, image.sensorKey);
+                child.addImageWithCamera(imageId, image.imagePath, *camera, image.keypoints, image.sensorKey);
             }
             for (const ImagePair& pair : _owner._correspondenceGraph.imagePairs())
             {
@@ -380,13 +385,12 @@ namespace xjw
             // 参考 producer 只负责建立各核心块之间可比较的坐标系：继承核心块标定，
             // 最多执行两轮“冻结模型 PnP -> 全量重三角化”。这里禁止 BA，
             // 否则每个 producer 会独立漂移，随后还需要额外的 core->producer Sim3。
-            std::map<std::string, xjw::camera_models::frame_pinhole::FramePinholeNumericState> calibrationBySensor;
-            std::optional<xjw::camera_models::frame_pinhole::FramePinholeNumericState> defaultCalibration;
+            std::map<std::string, placamera::FramePinholeNumericState> calibrationBySensor;
+            std::optional<placamera::FramePinholeNumericState> defaultCalibration;
             for (ImageId imageId : child._reconstruction->registeredImageIds())
             {
                 const ImageData& image = child._reconstruction->image(imageId);
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
-                    child._reconstruction->camera(imageId);
+                const placamera::FramePinholeNumericState& camera = child._reconstruction->camera(imageId);
                 calibrationBySensor.try_emplace(image.sensorKey, camera);
                 if (!defaultCalibration)
                 {
@@ -404,23 +408,18 @@ namespace xjw
                 {
                     continue;
                 }
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = preloaded->second;
+                placamera::FramePinholeNumericState camera = preloaded->second;
                 const std::string& sensorKey = child._reconstruction->image(imageId).sensorKey;
                 const auto calibration = calibrationBySensor.find(sensorKey);
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState* source =
+                const placamera::FramePinholeNumericState* source =
                     calibration != calibrationBySensor.end() ? &calibration->second
                                                              : (defaultCalibration ? &*defaultCalibration : nullptr);
                 if (source)
                 {
                     const auto intrinsics = source->intrinsics();
                     const auto distortion = source->distortion();
-                    camera.setIntrinsics(
-                        intrinsics.focalX, intrinsics.focalY, intrinsics.principalX, intrinsics.principalY);
-                    camera.setDistortion(distortion.radialK1,
-                                         distortion.radialK2,
-                                         distortion.radialK3,
-                                         distortion.tangentialP1,
-                                         distortion.tangentialP2);
+                    camera.setIntrinsics(intrinsics);
+                    camera.setDistortion(distortion);
                     preloaded->second = camera;
                 }
             }
@@ -437,7 +436,7 @@ namespace xjw
                 }
 
                 Triangulator triangulator(
-                    *child._reconstruction, child._correspondenceGraph, child._sfmOptions.baOptions.numThreads);
+                    *child._reconstruction, child._correspondenceGraph, child._sfmOptions.baOptions.solver.numThreads);
                 TriangulatorOptions triangulatorOptions = child._sfmOptions.triangulatorOptions;
                 triangulatorOptions.bindCompleteInputTrack = true;
                 triangulatorOptions.deferPureTwoViewTracks = false;
@@ -538,7 +537,7 @@ namespace xjw
                               std::move(producerPoints)});
         }
 
-        std::map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> mergedCameras;
+        std::map<ImageId, placamera::FramePinholeNumericState> mergedCameras;
         std::map<ImageId, std::string> mergedSensorKeys;
         std::map<std::size_t, std::array<double, 3>> mergedPoints = blocks.front().points;
         for (ImageId imageId : blocks.front().core)
@@ -658,7 +657,7 @@ namespace xjw
             merged->registerImage(imageId, camera);
         }
         collapseSensorCalibrations(*merged);
-        Triangulator triangulator(*merged, _owner._correspondenceGraph, _owner._sfmOptions.baOptions.numThreads);
+        Triangulator triangulator(*merged, _owner._correspondenceGraph, _owner._sfmOptions.baOptions.solver.numThreads);
         TriangulatorOptions triangulatorOptions = _owner._sfmOptions.triangulatorOptions;
         triangulatorOptions.bindCompleteInputTrack = true;
         triangulatorOptions.deferPureTwoViewTracks = false;
@@ -671,7 +670,7 @@ namespace xjw
             return std::nullopt;
         }
         const ReferenceStructureFilterResult filterResult =
-            filterReferenceStructurePoints(*merged, 0.0, _owner._sfmOptions.baOptions.numThreads);
+            filterReferenceStructurePoints(*merged, 0.0, _owner._sfmOptions.baOptions.solver.numThreads);
         Logger::instance()->infof("[SFM] Merged reference filters far=%d inaccurate=%d weak=%d",
                                   filterResult.farPoints,
                                   filterResult.inaccuratePoints,

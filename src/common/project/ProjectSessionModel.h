@@ -29,10 +29,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "project/ProjectDocumentModel.h"
 #include "project/ProjectConfigManager.h"
-#include "camera/project/CameraInstanceUpdate.h"
+#include <placamera/instance_set.h>
 
 class QThreadPool;
 class ProjectDataPersistenceTestPeer;
@@ -304,30 +305,23 @@ public:
     // 移除资源引用；共享影像仅在全部 Chunk 都解除引用后删除。
     bool removeResource(const QString& resourcePath);
     bool removeResources(const QStringList& resourcePaths);
-    // 新相机工程集合接口：定义与影像实例独立存储在 project_files 中。
-    bool setCameraInstance(const QString& imagePath, const QJsonObject& modelMetadata, QString* errorMsg = nullptr);
-    bool setCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
-                            int* updatedCount = nullptr,
-                            QString* errorMsg = nullptr);
-    bool setCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
-                                int* updatedCount = nullptr,
-                                QString* errorMsg = nullptr);
-    bool replaceCameraInstances(const QStringList& targetImagePaths,
-                                const QMap<QString, QJsonObject>& modelMetadataByImage,
-                                int* updatedCount = nullptr,
-                                int* clearedCount = nullptr,
-                                QString* errorMsg = nullptr);
-    bool replaceCameraInstancesById(const xjw::camera_project::CameraImageIds& targetImageIds,
-                                    const xjw::camera_project::CameraInstanceUpdates& updates,
-                                    int* updatedCount = nullptr,
-                                    int* clearedCount = nullptr,
-                                    QString* errorMsg = nullptr);
-    bool clearCameraInstances(const QStringList& imagePaths, int* clearedCount = nullptr, QString* errorMsg = nullptr);
+    // 相机定义与影像实例独立存储在 project_files 中；写入统一使用 PlaCamera ImageId。
+    bool upsertNativeCameraInstances(const placamera::CameraInstanceSet& instances,
+                                     const QMap<QString, QJsonObject>& annotationsByImageId,
+                                     int* writtenCount = nullptr,
+                                     QString* errorMsg = nullptr);
+    bool replaceNativeCameraInstances(const std::vector<placamera::ImageId>& targetImageIds,
+                                      const placamera::CameraInstanceSet& instances,
+                                      const QMap<QString, QJsonObject>& annotationsByImageId,
+                                      int* writtenCount = nullptr,
+                                      int* clearedCount = nullptr,
+                                      QString* errorMsg = nullptr);
     bool appendIntersectionResult(const QJsonObject& result, QString* errorMsg = nullptr);
     QJsonArray getIntersectionResults() const;
     bool appendBundleAdjustResult(const QJsonObject& result, QString* errorMsg = nullptr);
     QJsonArray getBundleAdjustResults() const;
-    bool stageBundleAdjustMetadata(const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+    bool stageBundleAdjustMetadata(const placamera::CameraInstanceSet& cameraInstances,
+                                   const QMap<QString, QJsonObject>& annotationsByImageId,
                                    const QJsonObject& bundleAdjustResult,
                                    ProjectBundleAdjustMetadataStageToken* token,
                                    QString* errorMsg = nullptr);

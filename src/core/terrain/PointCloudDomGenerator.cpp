@@ -355,10 +355,9 @@ bool PointCloudDomGenerator::generate(const PlaPointCloud &pointCloud,
         if (pointDepth >= storedDepth)
         {
             storedDepth = pointDepth;
-            image.at<cv::Vec3b>(row, col) = cv::Vec3b(
-                cv::saturate_cast<uchar>(pointCloud.colors()->getValue(index, 2)),
-                cv::saturate_cast<uchar>(pointCloud.colors()->getValue(index, 1)),
-                cv::saturate_cast<uchar>(pointCloud.colors()->getValue(index, 0)));
+            image.at<cv::Vec3b>(row, col) = cv::Vec3b(cv::saturate_cast<uchar>(pointCloud.colors()->coeff(index, 2)),
+                                                      cv::saturate_cast<uchar>(pointCloud.colors()->coeff(index, 1)),
+                                                      cv::saturate_cast<uchar>(pointCloud.colors()->coeff(index, 0)));
             mask.at<uchar>(row, col) = 255;
         }
         ++projectedCount;

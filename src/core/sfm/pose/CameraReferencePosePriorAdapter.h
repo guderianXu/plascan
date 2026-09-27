@@ -1,22 +1,30 @@
 #pragma once
 
-#include "BundleAdjustProblem.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include "placamera/reference/CameraReferencePosePrior.h"
 
+#include <plabundle/constraints.h>
+#include <placamera/types.h>
+
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace xjw
 {
 
+    struct CameraReferenceTarget
+    {
+        placamera::ImageId imageId;
+        placamera::FrameId worldFrame;
+    };
+
     struct CameraReferencePosePriorAdapterResult
     {
         bool valid = false;
-        std::vector<BACameraPosePrior> priors;
+        std::vector<std::optional<plabundle::CameraPosePrior>> priors;
         std::size_t matchedReferenceCount = 0;
         std::size_t ignoredReferenceCount = 0;
-        std::vector<camera_core::ImageId> ignoredReferenceImages;
+        std::vector<placamera::ImageId> ignoredReferenceImages;
         std::string commonTransformProvenanceHash;
         std::string error;
 
@@ -32,19 +40,19 @@ namespace xjw
     };
 
     /**
-     * Align image-keyed external pose priors with the ordered numeric camera set.
+     * Align image-keyed external pose priors with an ordered camera identity set.
      *
      * References outside the current solve (for example, a local BA window) are
-     * ignored.  A matched reference must use the same world frame as its numeric
-     * camera; no transform is inferred at this boundary.  The output is always
-     * indexed like `cameras` and leaves unmatched entries disabled.
+     * ignored. A matched reference must use the same world frame as its target
+     * camera; no transform is inferred at this boundary. The output is always
+     * indexed like `targets` and leaves unmatched entries disabled.
      */
     class CameraReferencePosePriorAdapter final
     {
     public:
         static CameraReferencePosePriorAdapterResult
-        toBundleAdjustPriors(const std::vector<camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-                             const std::vector<camera_reference::ResolvedCameraPosePrior>& references,
+        toBundleAdjustPriors(const std::vector<CameraReferenceTarget>& targets,
+                             const std::vector<placamera::reference::ResolvedCameraPosePrior>& references,
                              double defaultPositionSigmaMeters = 1.0,
                              double defaultRotationSigmaDegrees = 2.0);
     };

@@ -1,8 +1,6 @@
 #include "project/tasks/ProjectBundleAdjustController.h"
 
-#include "ProjectCameraIO.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectSessionModel.h"
 #include "project/services/ProjectSession.h"
 #include "project/services/ProjectUiMessageAdapter.h"
@@ -16,9 +14,11 @@
 #include <QtTest/QTest>
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
 
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -40,16 +40,32 @@ namespace
         return *application;
     }
 
-    QJsonObject canonicalFrameCamera()
+    placamera::CameraInstanceSet nativeFrameCameras(const QJsonObject& project_meta)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setPixelPitch(0.01);
-        camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
-        camera.setImageSize(xjw::camera_core::ImageSize{1024, 768});
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {1.0, 2.0, 3.0});
-        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
-        result.insert(QStringLiteral("aligned"), true);
-        return result;
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("ba-controller-definition"),
+                                                      {1200.0, 1200.0, 512.0, 384.0, 0.01, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        for (const QJsonValue& value : project_meta.value(QStringLiteral("images")).toArray())
+        {
+            const std::string image_id = value.toObject().value(QStringLiteral("image_uuid")).toString().toStdString();
+            const auto added =
+                cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("ba-controller-" + image_id),
+                    placamera::ImageId(image_id),
+                    definition,
+                    {1024, 768},
+                    placamera::Pose::create(frame, {1.0, 2.0, 3.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+            if (!added.ok())
+            {
+                throw std::runtime_error("failed to create native BA controller camera fixture");
+            }
+        }
+        return cameras;
     }
 
     struct ControlledExecution
@@ -146,11 +162,10 @@ namespace
             }
             ASSERT_TRUE(_projectData.addImages(_images));
 
-            const QJsonObject camera = canonicalFrameCamera();
+            const auto cameras = nativeFrameCameras(_projectData.coreFilesMeta());
             QString camera_error;
             int updated_count = 0;
-            ASSERT_TRUE(_projectData.setCameraInstances(
-                {{_images.at(0), camera}, {_images.at(1), camera}}, &updated_count, &camera_error))
+            ASSERT_TRUE(_projectData.upsertNativeCameraInstances(cameras, {}, &updated_count, &camera_error))
                 << qPrintable(camera_error);
             ASSERT_EQ(updated_count, 2);
             _successResult = makeSuccessResult();
@@ -166,28 +181,10 @@ namespace
                                                           {QStringLiteral("mean_rms_before"), 1.0},
                                                           {QStringLiteral("mean_rms_after"), 0.5}};
 
-            const QJsonObject core = _projectData.coreFilesMeta();
-            const QJsonArray images = core.value(QStringLiteral("images")).toArray();
-            const QString world_frame = core.value(QStringLiteral("camera_definitions"))
-                                            .toArray()
-                                            .at(0)
-                                            .toObject()
-                                            .value(QStringLiteral("frame"))
-                                            .toString();
-            for (const QJsonValue& image_value : images)
+            const auto loaded = xjw::placamera_runtime::loadProjectCameras(_projectData.coreFilesMeta());
+            if (loaded.ok())
             {
-                const QJsonObject image = image_value.toObject();
-                const QString image_id = image.value(QStringLiteral("image_uuid")).toString();
-                const QJsonObject instance =
-                    xjw::camera_project::CameraProjectRecords::instanceForImage(core, image_id);
-                QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image);
-                update.insert(QStringLiteral("world_frame"), world_frame);
-                update.insert(QStringLiteral("bundle_adjust_test"), true);
-                result.serviceResult.cameraInstanceUpdates.push_back(
-                    {xjw::camera_core::ImageId(image_id.toStdString()),
-                     xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
-                     xjw::coordinate_system::CoordinateFrameId(world_frame.toStdString()),
-                     update});
+                result.serviceResult.cameraInstances = loaded.instances;
             }
             return result;
         }
@@ -444,8 +441,20 @@ namespace
         xjw::gui::project::ProjectSession session(&_projectData);
         xjw::gui::project::ProjectBundleAdjustController controller(&session, nullptr);
         auto invalid_result = _successResult;
-        invalid_result.serviceResult.cameraInstanceUpdates.front().instanceId =
-            xjw::camera_core::CameraInstanceId("stale-instance");
+        const auto current = invalid_result.serviceResult.cameraInstances.values().front();
+        const auto frame = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(current);
+        ASSERT_NE(frame, nullptr);
+        auto stale = std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("stale-instance"),
+            frame->imageId(),
+            std::shared_ptr<const placamera::FramePinholeDefinition>(frame, &frame->pinholeDefinition()),
+            frame->imageSize(),
+            frame->pose(),
+            frame->captureTime()));
+        invalid_result.serviceResult.cameraInstances = {};
+        ASSERT_TRUE(invalid_result.serviceResult.cameraInstances.add(stale).ok());
+        ASSERT_TRUE(invalid_result.serviceResult.cameraInstances.add(
+            _successResult.serviceResult.cameraInstances.values().at(1)).ok());
         controller.setExecutionRunnerForTesting(immediateRunner(invalid_result));
 
         ASSERT_TRUE(controller.startAsync(_images, _tempDir.path(), 1, false, {}));
@@ -481,7 +490,7 @@ namespace
         xjw::gui::project::ProjectSession session(&_projectData);
         xjw::gui::project::ProjectBundleAdjustController controller(&session, nullptr);
         auto dry_result = _successResult;
-        dry_result.serviceResult.cameraInstanceUpdates.clear();
+        dry_result.serviceResult.cameraInstances = {};
         controller.setExecutionRunnerForTesting(immediateRunner(dry_result));
         QSignalSpy preview_spy(&controller, &xjw::gui::project::ProjectBundleAdjustController::previewReady);
         QSignalSpy finished_spy(&controller, &xjw::gui::project::ProjectBundleAdjustController::finished);

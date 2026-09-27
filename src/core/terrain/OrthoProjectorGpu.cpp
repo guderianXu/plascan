@@ -211,16 +211,17 @@ namespace xjw::ortho_internal
                     appendMat<std::uint8_t>(frame.exclusionMask, 1, &packed->maskData);
                 }
 
-                const std::array<double, 9> rotation = frame.input.camera.cameraToWorldRotation();
-                const std::array<double, 3> center = frame.input.camera.cameraCenter();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                    frame.input.camera.distortion();
+                const auto& camera = *frame.input.camera;
+                const auto& rotation = camera.pose().cameraToWorldRotation;
+                const auto& center = camera.pose().center;
+                const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+                const auto& distortion = camera.pinholeDefinition().distortion();
                 packed->cameraValues.insert(packed->cameraValues.end(), rotation.begin(), rotation.end());
                 packed->cameraValues.insert(packed->cameraValues.end(), center.begin(), center.end());
-                packed->cameraValues.push_back(frame.input.camera.focalX());
-                packed->cameraValues.push_back(frame.input.camera.focalY());
-                packed->cameraValues.push_back(frame.input.camera.principalX());
-                packed->cameraValues.push_back(frame.input.camera.principalY());
+                packed->cameraValues.push_back(intrinsics.focalX);
+                packed->cameraValues.push_back(intrinsics.focalY);
+                packed->cameraValues.push_back(intrinsics.principalX);
+                packed->cameraValues.push_back(intrinsics.principalY);
                 packed->cameraValues.push_back(distortion.radialK1);
                 packed->cameraValues.push_back(distortion.radialK2);
                 packed->cameraValues.push_back(distortion.radialK3);
@@ -232,9 +233,9 @@ namespace xjw::ortho_internal
                 packed->cameraMetadata.push_back(frame.imageBgr.rows);
                 packed->cameraMetadata.push_back(image_offset);
                 packed->cameraMetadata.push_back(mask_offset);
-                packed->cameraMetadata.push_back(frame.input.camera.uAxisSign());
-                packed->cameraMetadata.push_back(frame.input.camera.vAxisSign());
-                packed->cameraMetadata.push_back(frame.input.camera.depthAxisFlipped() ? 1 : 0);
+                packed->cameraMetadata.push_back(intrinsics.uAxisSign);
+                packed->cameraMetadata.push_back(intrinsics.vAxisSign);
+                packed->cameraMetadata.push_back(camera.pinholeDefinition().depthAxisFlipped() ? 1 : 0);
             }
             return true;
         }

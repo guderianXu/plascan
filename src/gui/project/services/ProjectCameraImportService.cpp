@@ -1,135 +1,242 @@
 #include "ProjectCameraImportService.h"
 
-#include "ProjectCameraIO.h"
-#include "project/ProjectMatchCatalog.h"
-#include "project/ProjectMetadata.h"
+#include "io/ImageIO.h"
+#include "io/PathIO.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+#include "project/ProjectIO.h"
+
+#include <placamera/tsai.h>
 
 #include <QDir>
 #include <QFileInfo>
-#include <QImageReader>
+#include <QJsonArray>
+#include <QUuid>
+
+#include <exception>
+#include <memory>
+#include <utility>
 
 namespace xjw::gui::project
 {
-
-    using xjw::common::project::parseTsaiCamera;
-
-    SingleCameraImportStatus
-    buildSingleCameraImport(const QString& imagePath, const QString& tsaiPath, SingleCameraImportResult* out)
+    namespace
     {
-        // 先初始化输出，保证调用方即使失败也能拿到确定状态。
-        if (!out)
-            return SingleCameraImportStatus::ParseFailed;
-        out->imageAbsPath = QFileInfo(imagePath).absoluteFilePath();
-        out->cameraMeta = QJsonObject();
-        out->error.clear();
+        bool isCancelled(const std::atomic<bool>* cancelFlag)
+        {
+            return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
+        }
 
-        // UI 传入空路径通常来自无效选中项，直接返回明确错误。
-        if (out->imageAbsPath.isEmpty())
+        QString absolutePath(const QString& path)
+        {
+            return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        }
+
+        bool readImageSize(const QString& imagePath, placamera::ImageSize* size, QString* error)
+        {
+            QString image_error;
+            const QSize image_size = xjw::common::io::readImageSize(imagePath, &image_error);
+            if (!image_size.isValid())
+            {
+                if (error)
+                {
+                    *error = image_error;
+                }
+                return false;
+            }
+            *size = {image_size.width(), image_size.height()};
+            return true;
+        }
+
+        bool parseTsaiImport(const QString& imagePath, const QString& tsaiPath, PreparedFrameCameraImport* output)
+        {
+            output->imageAbsPath = absolutePath(imagePath);
+            output->sourceFile = absolutePath(tsaiPath);
+            output->sourceFormat = QStringLiteral("tsai");
+            output->sourceKind = QStringLiteral("tsai_import");
+            output->camera.reset();
+            output->error.clear();
+            if (!readImageSize(output->imageAbsPath, &output->imageSize, &output->error))
+            {
+                return false;
+            }
+
+            const auto camera = placamera::loadTsaiFramePinhole(
+                xjw::common::io::toUtf8Path(output->sourceFile),
+                placamera::CameraDefinitionId("tsai-import-" +
+                                              QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString()),
+                placamera::FrameId("project-world"));
+            if (!camera)
+            {
+                output->error = QStringLiteral("无法解析相机文件: %1 (%2)")
+                                    .arg(output->sourceFile, QString::fromStdString(camera.message()));
+                return false;
+            }
+            output->camera = PreparedFrameCamera{camera.value().definition, camera.value().pose};
+            return true;
+        }
+    } // namespace
+
+    SingleCameraImportStatus buildSingleCameraImport(const QString& imagePath,
+                                                     const QString& tsaiPath,
+                                                     PreparedFrameCameraImport* out,
+                                                     const std::atomic<bool>* cancelFlag,
+                                                     const CameraImportProgress& progress)
+    {
+        if (!out)
+        {
+            return SingleCameraImportStatus::ParseFailed;
+        }
+        *out = {};
+        if (progress)
+        {
+            progress(0, 1);
+        }
+        if (isCancelled(cancelFlag))
+        {
+            return SingleCameraImportStatus::Cancelled;
+        }
+        if (imagePath.trimmed().isEmpty())
         {
             out->error = QStringLiteral("请选择有效的影像");
             return SingleCameraImportStatus::EmptyImagePath;
         }
-
-        // 统一复用 ProjectSupportUtils 的 tsai 解析逻辑。
-        QString parseErr;
-        if (!parseTsaiCamera(tsaiPath, &out->cameraMeta, &parseErr))
+        if (!parseTsaiImport(imagePath, tsaiPath, out))
         {
-            out->error = parseErr;
             return SingleCameraImportStatus::ParseFailed;
         }
-        QImageReader reader(out->imageAbsPath);
-        const QSize imageSize = reader.size();
-        if (imageSize.isValid())
+        if (isCancelled(cancelFlag))
         {
-            out->cameraMeta[QStringLiteral("image_width")] = imageSize.width();
-            out->cameraMeta[QStringLiteral("image_height")] = imageSize.height();
+            return SingleCameraImportStatus::Cancelled;
         }
-        out->cameraMeta[QStringLiteral("source_file")] = QFileInfo(tsaiPath).absoluteFilePath();
-
+        if (progress)
+        {
+            progress(1, 1);
+        }
         return SingleCameraImportStatus::Ok;
     }
 
-    BatchCameraImportStatus
-    buildBatchCameraImport(const QString& tsaiFolder, const QStringList& projectImages, BatchCameraImportResult* out)
+    bool bindImportedFrameCameras(const QJsonObject& projectCore,
+                                  const QString& projectPath,
+                                  const std::vector<PreparedFrameCameraImport>& imports,
+                                  placamera::CameraInstanceSet* cameras,
+                                  QMap<QString, QJsonObject>* annotationsByImageId,
+                                  QString* error)
     {
-        // 初始化统计字段，避免上次调用残留。
-        if (!out)
-            return BatchCameraImportStatus::NoImportable;
-        out->cameraMetaByImage.clear();
-        out->ambiguousCount = 0;
-        out->parseFailedCount = 0;
-        out->unmatchedCount = 0;
-        out->parseErrors.clear();
-
-        // 1) 收集目录中的 tsai 文件。
-        QDir tsaiDir(tsaiFolder);
-        const QFileInfoList tsaiFiles =
-            tsaiDir.entryInfoList(QStringList() << QStringLiteral("*.tsai") << QStringLiteral("*.TSAI"),
-                                  QDir::Files | QDir::NoSymLinks,
-                                  QDir::Name);
-        if (tsaiFiles.isEmpty())
+        if (!cameras || !annotationsByImageId || imports.empty())
         {
-            return BatchCameraImportStatus::NoTsaiFiles;
-        }
-
-        if (projectImages.isEmpty())
-        {
-            return BatchCameraImportStatus::NoProjectImages;
-        }
-
-        // 2) 构建影像 baseName 索引（同名多影像会形成歧义）。
-        QMap<QString, QStringList> imageBaseMap;
-        for (const QString& imagePath : projectImages)
-        {
-            const QFileInfo imageInfo(imagePath);
-            const QString key = imageInfo.completeBaseName().toLower();
-            if (!key.isEmpty())
-                imageBaseMap[key].append(imageInfo.absoluteFilePath());
-        }
-
-        // 3) 遍历 tsai 文件并尝试匹配与解析。
-        for (const QFileInfo& tsaiFile : tsaiFiles)
-        {
-            const QString key = tsaiFile.completeBaseName().toLower();
-            const QStringList matchedImages = imageBaseMap.value(key);
-            if (matchedImages.isEmpty())
+            if (error)
             {
-                ++out->unmatchedCount;
-                continue;
+                *error = QStringLiteral("没有可绑定的相机结果");
             }
-            // 同名命中多张影像时跳过，避免误绑定。
-            if (matchedImages.size() > 1)
-            {
-                ++out->ambiguousCount;
-                continue;
-            }
-
-            QJsonObject cameraMeta;
-            QString parseErr;
-            if (!parseTsaiCamera(tsaiFile.absoluteFilePath(), &cameraMeta, &parseErr))
-            {
-                ++out->parseFailedCount;
-                out->parseErrors.push_back(parseErr);
-                continue;
-            }
-            QImageReader reader(matchedImages.first());
-            const QSize imageSize = reader.size();
-            if (imageSize.isValid())
-            {
-                cameraMeta[QStringLiteral("image_width")] = imageSize.width();
-                cameraMeta[QStringLiteral("image_height")] = imageSize.height();
-            }
-            cameraMeta[QStringLiteral("source_file")] = tsaiFile.absoluteFilePath();
-
-            out->cameraMetaByImage.insert(matchedImages.first(), cameraMeta);
+            return false;
         }
-
-        if (out->cameraMetaByImage.isEmpty())
+        const auto current = xjw::placamera_runtime::loadProjectCameras(projectCore);
+        if (!current.ok())
         {
-            return BatchCameraImportStatus::NoImportable;
+            if (error)
+            {
+                *error = current.errors.join(QStringLiteral("; "));
+            }
+            return false;
         }
 
-        return BatchCameraImportStatus::Ok;
+        QMap<QString, QString> image_ids_by_path;
+        for (const QJsonValue& value : projectCore.value(QStringLiteral("images")).toArray())
+        {
+            const QJsonObject image = value.toObject();
+            const QString stored_path = image.value(QStringLiteral("path")).toString().trimmed();
+            const QString path = stored_path.isEmpty()
+                                     ? QString()
+                                     : QDir::cleanPath(xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                                           projectPath, stored_path));
+            const QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+            if (path.isEmpty() || image_id.isEmpty() || image_ids_by_path.contains(path))
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("工程影像路径或身份无效: %1").arg(path);
+                }
+                return false;
+            }
+            image_ids_by_path.insert(path, image_id);
+        }
+
+        placamera::CameraInstanceSet pending;
+        QMap<QString, QJsonObject> annotations;
+        for (const PreparedFrameCameraImport& imported : imports)
+        {
+            const QString path = QDir::cleanPath(imported.imageAbsPath);
+            const QString image_id = image_ids_by_path.value(path);
+            if (image_id.isEmpty() || !imported.camera || !imported.imageSize.isValid())
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("相机影像未在当前工程注册或解析结果无效: %1").arg(path);
+                }
+                return false;
+            }
+            try
+            {
+                const placamera::ImageId native_image_id(image_id.toStdString());
+                const auto previous = current.instances.forImage(native_image_id);
+                if (previous.ok() && (previous.value()->modelType() != imported.camera->definition->modelType() ||
+                                      previous.value()->groundFrame() != imported.camera->definition->groundFrame()))
+                {
+                    if (error)
+                    {
+                        *error = QStringLiteral("导入相机与现有模型或地面坐标系不一致: %1").arg(path);
+                    }
+                    return false;
+                }
+                const placamera::CameraInstanceId instance_id(previous.ok() ? previous.value()->instanceId().value()
+                                                                            : "caminst-" + image_id.toStdString());
+                auto model =
+                    placamera::bindCentralCamera(*imported.camera,
+                                                 {instance_id,
+                                                  native_image_id,
+                                                  imported.imageSize,
+                                                  previous.ok() ? previous.value()->captureTime() : std::nullopt,
+                                                  imported.acquisition});
+                if (!model)
+                {
+                    if (error)
+                    {
+                        *error = QStringLiteral("相机身份绑定失败: %1 (%2)")
+                                     .arg(path, QString::fromStdString(model.message()));
+                    }
+                    return false;
+                }
+                const auto added = pending.add(model.takeValue());
+                if (!added.ok())
+                {
+                    if (error)
+                    {
+                        *error = QStringLiteral("重复或冲突的相机影像: %1").arg(path);
+                    }
+                    return false;
+                }
+                annotations.insert(
+                    image_id,
+                    QJsonObject{{QStringLiteral("source"), imported.sourceKind},
+                                {QStringLiteral("metadata"),
+                                 QJsonObject{{QStringLiteral("source_file"), imported.sourceFile},
+                                             {QStringLiteral("source_format"), imported.sourceFormat}}}});
+            }
+            catch (const std::exception& exception)
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("相机身份绑定失败: %1 (%2)").arg(path, QString::fromUtf8(exception.what()));
+                }
+                return false;
+            }
+        }
+        *cameras = std::move(pending);
+        *annotationsByImageId = std::move(annotations);
+        if (error)
+        {
+            error->clear();
+        }
+        return true;
     }
 
 } // namespace xjw::gui::project

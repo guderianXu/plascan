@@ -1,9 +1,9 @@
 #include "PointCloudAlignment.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/point_cloud.h>
 #include <plapoint/registration/icp.h>
 #include <plapoint/search/spatial_kdtree.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <Eigen/Core>
 
 #include <opencv2/core.hpp>
 
@@ -21,7 +21,7 @@ namespace
 {
 
 using AlignmentKdTree = plapoint::search::SpatialKdTree<3, double>;
-using AlignmentCloud = plapoint::PointCloud<double, plamatrix::Device::CPU>;
+using AlignmentCloud = plapoint::PointCloud<plapoint::PointXYZd>;
 
 Point3D operator+(const Point3D &a, const Point3D &b)
 {
@@ -154,22 +154,19 @@ std::vector<double> nearestNeighborErrors(const std::vector<Point3D> &source,
 
 std::shared_ptr<AlignmentCloud> makeAlignmentCloud(const std::vector<Point3D> &points)
 {
-    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(points.size(), 3);
-    for (std::size_t i = 0; i < points.size(); ++i)
+    auto cloud = std::make_shared<AlignmentCloud>();
+    cloud->reserve(points.size());
+    for (const auto &point : points)
     {
-        const auto row = static_cast<plamatrix::Index>(i);
-        matrix(row, 0) = points[i].x;
-        matrix(row, 1) = points[i].y;
-        matrix(row, 2) = points[i].z;
+        cloud->emplace_back(point.x, point.y, point.z);
     }
-    return std::make_shared<AlignmentCloud>(std::move(matrix));
+    return cloud;
 }
 
-plamatrix::DenseMatrix<double, plamatrix::Device::CPU>
+Eigen::Matrix4d
 matrixFromTransform(const SimilarityTransform &transform)
 {
-    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(4, 4);
-    matrix.fill(0.0);
+    Eigen::Matrix4d matrix = Eigen::Matrix4d::Zero();
     for (int row = 0; row < 3; ++row)
     {
         for (int col = 0; col < 3; ++col)
@@ -184,7 +181,7 @@ matrixFromTransform(const SimilarityTransform &transform)
     return matrix;
 }
 
-SimilarityTransform transformFromMatrix(const plamatrix::DenseMatrix<double, plamatrix::Device::CPU> &matrix)
+SimilarityTransform transformFromMatrix(const Eigen::Matrix4d &matrix)
 {
     if (matrix.rows() != 4 || matrix.cols() != 4)
     {
@@ -197,13 +194,13 @@ SimilarityTransform transformFromMatrix(const plamatrix::DenseMatrix<double, pla
     {
         for (int col = 0; col < 3; ++col)
         {
-            transform.rotation[static_cast<std::size_t>(row * 3 + col)] = matrix.getValue(row, col);
+            transform.rotation[static_cast<std::size_t>(row * 3 + col)] = matrix(row, col);
         }
     }
     transform.translation = {
-        matrix.getValue(0, 3),
-        matrix.getValue(1, 3),
-        matrix.getValue(2, 3)
+        matrix(0, 3),
+        matrix(1, 3),
+        matrix(2, 3)
     };
     return transform;
 }
@@ -401,15 +398,14 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
         auto sourceCloud = makeAlignmentCloud(source);
         auto referenceCloud = makeAlignmentCloud(reference);
 
-        plapoint::IterativeClosestPoint<double, plamatrix::Device::CPU> icp;
+        plapoint::IterativeClosestPoint<plapoint::PointXYZd, plapoint::PointXYZd, double> icp;
         icp.setInputSource(sourceCloud);
         icp.setInputTarget(referenceCloud);
         icp.setMaximumIterations(std::max(1, maxIterations));
-        icp.setTransformationEpsilon(1.0e-10);
-        icp.setTransformationRotationEpsilon(1.0e-10);
+        icp.setTransformationEpsilon(1.0e-12);
+        icp.setTransformationRotationEpsilon(std::cos(1.0e-6));
         icp.setEuclideanFitnessEpsilon(1.0e-12);
         icp.setMaxCorrespondenceDistance(std::numeric_limits<double>::infinity());
-        icp.setMinFitnessScore(0.0);
 
         AlignmentCloud aligned;
         const auto initialGuess = matrixFromTransform(seed.transform);
@@ -423,7 +419,7 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
         const AlignmentKdTree referenceTree = buildAlignmentTree(reference);
         result.before = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, nullptr));
         result.after = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, &result.transform));
-        result.success = result.after.rmse <= seed.after.rmse || icp.hasConverged();
+        result.success = result.after.rmse <= seed.after.rmse + 1.0e-9;
         if (!result.success)
         {
             return seed;

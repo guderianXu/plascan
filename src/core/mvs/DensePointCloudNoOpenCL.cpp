@@ -20,7 +20,7 @@ namespace xjw::mvs
     std::vector<DensePoint>
     DensePointCloudOpenCL::unproject(const cv::Mat&,
                                      const cv::Mat&,
-                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+                                     const placamera::FramePinholeModel&,
                                      const cv::Mat&,
                                      float,
                                      float,

@@ -1,4 +1,5 @@
 #pragma once
+#include "DepthPyramidEstimator.h"
 #include "MvsPipelineInternals.h"
 namespace xjw::mvs::pipeline_detail
 {
@@ -13,6 +14,14 @@ namespace xjw::mvs::pipeline_detail
         bool
         estimate(const PatchMatchBackendRequest& request, DepthLevelResult& result, std::string* error_message) override
         {
+            if (!request.referenceCamera)
+            {
+                if (error_message)
+                {
+                    *error_message = "PatchMatch reference camera is missing";
+                }
+                return false;
+            }
             const std::string stage_label = "Level " + std::to_string(request.levelConfig.level) + " PatchMatch";
             cv::Mat confidence;
             const cv::Mat* hint = request.prior && !request.prior->center.empty() ? &request.prior->center : nullptr;
@@ -34,7 +43,7 @@ namespace xjw::mvs::pipeline_detail
                     _refIdx,
                     request.referenceImage,
                     request.sourceImages,
-                    request.referenceCamera,
+                    *request.referenceCamera,
                     request.sourceCameras,
                     request.zNear,
                     request.zFar,

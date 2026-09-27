@@ -159,7 +159,7 @@ namespace xjw::mesh::detail
             for (std::size_t view_index = 0; view_index < views.size(); ++view_index)
             {
                 const VisualHullView& view = views[view_index];
-                if (!view.camera.isValid() || view.silhouetteMask.empty() || view.silhouetteMask.type() != CV_8UC1)
+                if (!view.camera || view.silhouetteMask.empty() || view.silhouetteMask.type() != CV_8UC1)
                 {
                     continue;
                 }
@@ -187,11 +187,18 @@ namespace xjw::mesh::detail
                     depth_rows = view.depthMap.rows;
                 }
 
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-                    view.camera.intrinsics();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                    view.camera.distortion();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = view.camera.pose();
+                const placamera::FramePinholeDefinition& definition = view.camera->pinholeDefinition();
+                if (definition.pixelConvention() != placamera::PixelConvention::PixelCenter)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = "visual hull GPU projection requires pixel-center coordinates";
+                    }
+                    return false;
+                }
+                const placamera::FrameIntrinsics& intrinsics = definition.intrinsics();
+                const placamera::BrownConradyDistortion& distortion = definition.distortion();
+                const placamera::Pose& pose = view.camera->pose();
                 const std::size_t parameter_offset = input->cameraParameters.size();
                 input->cameraParameters.resize(parameter_offset + kVisualHullCameraParameterStride, 0.0f);
                 float* parameters = input->cameraParameters.data() + parameter_offset;
@@ -201,7 +208,7 @@ namespace xjw::mesh::detail
                 }
                 for (int index = 0; index < 3; ++index)
                 {
-                    parameters[9 + index] = static_cast<float>(pose.cameraCenter[index] - world_origin[index]);
+                    parameters[9 + index] = static_cast<float>(pose.center[index] - world_origin[index]);
                 }
                 parameters[12] = static_cast<float>(intrinsics.focalX);
                 parameters[13] = static_cast<float>(intrinsics.focalY);
@@ -214,7 +221,7 @@ namespace xjw::mesh::detail
                 parameters[20] = static_cast<float>(distortion.tangentialP2);
                 parameters[21] = intrinsics.uAxisSign < 0 ? -1.0f : 1.0f;
                 parameters[22] = intrinsics.vAxisSign < 0 ? -1.0f : 1.0f;
-                parameters[23] = pose.depthAxisFlipped ? -1.0f : 1.0f;
+                parameters[23] = definition.depthAxisFlipped() ? -1.0f : 1.0f;
                 parameters[24] = static_cast<float>(0.5 * (std::abs(intrinsics.focalX) + std::abs(intrinsics.focalY)));
 
                 input->viewMetadata.insert(input->viewMetadata.end(),
@@ -370,6 +377,23 @@ namespace xjw::mesh::detail
                 *errorMessage = "visual hull field output or grid is invalid";
             }
             return false;
+        }
+        const placamera::FrameId* ground_frame = nullptr;
+        for (const VisualHullView& view : views)
+        {
+            if (!view.camera)
+            {
+                continue;
+            }
+            if (ground_frame != nullptr && view.camera->groundFrame() != *ground_frame)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = "visual hull views have different ground frames";
+                }
+                return false;
+            }
+            ground_frame = &view.camera->groundFrame();
         }
         field->clear();
         if (config.isCancelled && config.isCancelled())

@@ -102,7 +102,7 @@ Linux/macOS 使用相同参数，只需把可执行文件路径和续行符替�
 
 ## 命令目录
 
-- 相机：`camera_convert_cli`
+- 相机工程：在 GUI 的相机校准窗口直接导入，当前不提供重复的转换 CLI
 - 标靶：`marker_detect_cli`、`marker_print_cli`
 - 影像匹配：`feature_match_cli`、`match_photos_cli`
 - 稠密处理：`rectify_cli`、`dense_match_cli`、`triangulate_cli`、`dense_cloud_refine_cli`
@@ -112,6 +112,9 @@ Linux/macOS 使用相同参数，只需把可执行文件路径和续行符替�
   `mvs_depth_reprocess_cli`、`small_body_terrain_cli`
 - 地形：`rpc_stereo_products_cli`
 - 质量检查：`model_quality_cli`、`mvs_pair_audit_cli`
+
+`model_quality_cli` 使用 `--image-camera-list` 导入外部 Tsai 相机时，还需指定
+`--world-frame <ID>`，声明相机与待验收网格共用的坐标系；使用 `--mvs-workspace` 时从清单读取该身份。
 
 某些命令只在对应核心模块或可选依赖可用时构建。完整的源码归属和扩展规则见
 [`src/cli/README.md`](../src/cli/README.md)，模块边界见

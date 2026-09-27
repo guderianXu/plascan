@@ -22,10 +22,13 @@
 // =============================================================================
 #pragma once
 
-#include "MvsTypes.h"
 #include <cstdint>
-#include <vector>
 #include <string>
+#include <vector>
+
+#include <placamera/frame_camera.h>
+
+#include "MvsTypes.h"
 
 namespace xjw 
 {
@@ -132,8 +135,8 @@ public:
     // srcValidMasks[可选] 源帧可信前景，与 srcGrays 等长；空 Mat=全图有效
     static bool estimate(const cv::Mat& refGray,
                          const std::vector<cv::Mat>& srcGrays,
-                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-                         const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+                         const placamera::FramePinholeModel& refCam,
+                         const std::vector<placamera::FramePinholeModel>& srcCams,
                          float zNear,
                          float zFar,
                          const PatchMatchConfig& config,
@@ -150,8 +153,8 @@ public:
 private:
     static bool estimateGPU(const cv::Mat& refGray,
                             const std::vector<cv::Mat>& srcGrays,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-                            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+                            const placamera::FramePinholeModel& refCam,
+                            const std::vector<placamera::FramePinholeModel>& srcCams,
                             float zNear,
                             float zFar,
                             const PatchMatchConfig& config,
@@ -167,8 +170,8 @@ private:
 
     static bool estimateCPU(const cv::Mat& refGray,
                             const std::vector<cv::Mat>& srcGrays,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-                            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+                            const placamera::FramePinholeModel& refCam,
+                            const std::vector<placamera::FramePinholeModel>& srcCams,
                             float zNear,
                             float zFar,
                             const PatchMatchConfig& config,
@@ -184,8 +187,8 @@ private:
 
     static bool estimateOpenCL(const cv::Mat& refGray,
                                const std::vector<cv::Mat>& srcGrays,
-                               const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-                               const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+                               const placamera::FramePinholeModel& refCam,
+                               const std::vector<placamera::FramePinholeModel>& srcCams,
                                float zNear,
                                float zFar,
                                const PatchMatchConfig& config,

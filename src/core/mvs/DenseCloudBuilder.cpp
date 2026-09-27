@@ -7,7 +7,7 @@
 #include "DensePointCloudCUDA.h"
 #include "DensePointCloudOpenCL.h"
 #include "io/PathIO.h"
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
 #include "log/Logger.h"
@@ -29,12 +29,11 @@ namespace xjw
 
         namespace
         {
-            static plapoint::PointCloud<float, plamatrix::Device::CPU>
-            buildPointCloud(const std::vector<DensePoint>& cloud);
+            static plapoint::GeometryCloud<float> buildPointCloud(const std::vector<DensePoint>& cloud);
 
             std::vector<DensePoint> unprojectCpu(const cv::Mat& depth,
                                                  const cv::Mat& mask,
-                                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
+                                                 const placamera::FramePinholeModel& cam,
                                                  const cv::Mat& colorImg,
                                                  const DenseCloudOptions& options);
         } // namespace
@@ -50,7 +49,7 @@ namespace xjw
 
             std::vector<DensePoint> unprojectCpu(const cv::Mat& depth,
                                                  const cv::Mat& mask,
-                                                 const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
+                                                 const placamera::FramePinholeModel& cam,
                                                  const cv::Mat& colorImg,
                                                  const DenseCloudOptions& options)
             {
@@ -88,15 +87,15 @@ namespace xjw
                             continue;
                         }
 
-                        const double pixel[2] = {static_cast<double>(u), static_cast<double>(v)};
-                        double world[3] = {0.0, 0.0, 0.0};
-                        if (!cam.unprojectPixel(pixel, static_cast<double>(d), world))
+                        const auto ground = cam.imageToGroundAtDepth({static_cast<double>(u), static_cast<double>(v)},
+                                                                     static_cast<double>(d));
+                        if (!ground)
                         {
                             continue;
                         }
-                        const float Xw = static_cast<float>(world[0]);
-                        const float Yw = static_cast<float>(world[1]);
-                        const float Zw = static_cast<float>(world[2]);
+                        const float Xw = static_cast<float>(ground.value().position[0]);
+                        const float Yw = static_cast<float>(ground.value().position[1]);
+                        const float Zw = static_cast<float>(ground.value().position[2]);
 
                         // AABB 裁剪
                         if (options.clipAABB)
@@ -147,7 +146,7 @@ namespace xjw
 
             bool validateUnprojectionInput(const cv::Mat& depth,
                                            const cv::Mat& mask,
-                                           const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                           const placamera::FramePinholeModel& camera,
                                            const cv::Mat& color,
                                            const DenseCloudOptions& options,
                                            std::string* errorMsg)
@@ -168,9 +167,17 @@ namespace xjw
                 {
                     return fail("dense-cloud unprojection requires a CV_32FC1 depth map");
                 }
-                if (!camera.isValid())
+                if (camera.imageSize().samples != depth.cols || camera.imageSize().lines != depth.rows ||
+                    camera.pinholeDefinition().depthAxisFlipped() ||
+                    camera.pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
                 {
-                    return fail("dense-cloud unprojection requires a valid pinhole camera");
+                    return fail("dense-cloud unprojection requires a positive-depth camera on the depth grid");
+                }
+                const auto& distortion = camera.pinholeDefinition().distortion();
+                if (distortion.radialK1 != 0.0 || distortion.radialK2 != 0.0 || distortion.radialK3 != 0.0 ||
+                    distortion.tangentialP1 != 0.0 || distortion.tangentialP2 != 0.0)
+                {
+                    return fail("dense-cloud unprojection requires an undistorted depth-grid camera");
                 }
                 if (!mask.empty() && (mask.type() != CV_8UC1 || mask.size() != depth.size()))
                 {
@@ -198,7 +205,7 @@ namespace xjw
         std::vector<DensePoint>
         DenseCloudBuilder::unproject(const cv::Mat& depth,
                                      const cv::Mat& mask,
-                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                                     const placamera::FramePinholeModel& cameraModel,
                                      const cv::Mat& colorImg,
                                      const DenseCloudOptions& options)
         {
@@ -214,7 +221,7 @@ namespace xjw
         bool DenseCloudBuilder::unprojectWithReport(
             const cv::Mat& depth,
             const cv::Mat& mask,
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+            const placamera::FramePinholeModel& cameraModel,
             const cv::Mat& colorImg,
             const DenseCloudOptions& options,
             std::vector<DensePoint>* cloud,
@@ -438,12 +445,12 @@ namespace xjw
         // =============================================================================
         namespace
         {
-            using DensePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+            using DensePlaCloud = plapoint::GeometryCloud<float>;
 
             static DensePlaCloud buildPointCloud(const std::vector<DensePoint>& cloud)
             {
-                plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
-                plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
+                plamatrix::MatrixXf pts(cloud.size(), 3);
+                plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(cloud.size(), 3);
                 for (size_t i = 0; i < cloud.size(); ++i)
                 {
                     const auto row = static_cast<plamatrix::Index>(i);
@@ -468,14 +475,14 @@ namespace xjw
                 {
                     const auto row = static_cast<plamatrix::Index>(i);
                     DensePoint point;
-                    point.x = matrix.getValue(row, 0);
-                    point.y = matrix.getValue(row, 1);
-                    point.z = matrix.getValue(row, 2);
+                    point.x = matrix.coeff(row, 0);
+                    point.y = matrix.coeff(row, 1);
+                    point.z = matrix.coeff(row, 2);
                     if (cloud.hasColors())
                     {
-                        point.r = cloud.colors()->getValue(row, 0);
-                        point.g = cloud.colors()->getValue(row, 1);
-                        point.b = cloud.colors()->getValue(row, 2);
+                        point.r = cloud.colors()->coeff(row, 0);
+                        point.g = cloud.colors()->coeff(row, 1);
+                        point.b = cloud.colors()->coeff(row, 2);
                     }
                     points.push_back(point);
                 }

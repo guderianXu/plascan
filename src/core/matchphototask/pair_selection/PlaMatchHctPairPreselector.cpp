@@ -85,7 +85,7 @@ namespace xjw::matchphotos
         }
 
         std::optional<std::size_t> imageIndexForPath(const QStringList& images,
-                                                     const std::vector<camera_core::ImageId>& imageIds,
+                                                     const std::vector<placamera::ImageId>& imageIds,
                                                      const QString& imagePath)
         {
             if (images.size() != static_cast<qsizetype>(imageIds.size()))
@@ -119,10 +119,10 @@ namespace xjw::matchphotos
             return std::nullopt;
         }
 
-        const camera_reference::ReferenceCameraGeometry* cameraForImage(
+        const placamera::reference::ReferenceCameraGeometry* cameraForImage(
             const QStringList& images,
-            const std::vector<camera_core::ImageId>& imageIds,
-            const camera_reference::ReferenceCameraGeometryMap& cameras,
+            const std::vector<placamera::ImageId>& imageIds,
+            const placamera::reference::ReferenceCameraGeometryMap& cameras,
             const QString& imagePath)
         {
             const auto index = imageIndexForPath(images, imageIds, imagePath);
@@ -136,9 +136,9 @@ namespace xjw::matchphotos
 
         std::optional<std::array<double, 3>> positionForImage(
             const QStringList& images,
-            const std::vector<camera_core::ImageId>& imageIds,
-            const camera_reference::ReferenceCameraPositionMap& positions,
-            const camera_reference::ReferenceCameraGeometryMap& cameras,
+            const std::vector<placamera::ImageId>& imageIds,
+            const placamera::reference::ReferenceCameraPositionMap& positions,
+            const placamera::reference::ReferenceCameraGeometryMap& cameras,
             const QString& imagePath)
         {
             const auto index = imageIndexForPath(images, imageIds, imagePath);
@@ -155,7 +155,7 @@ namespace xjw::matchphotos
             const auto* camera = cameraForImage(images, imageIds, cameras, imagePath);
             if (camera)
             {
-                return camera->numericState().cameraCenter();
+                return camera->model().pose().center;
             }
             return std::nullopt;
         }
@@ -170,9 +170,9 @@ namespace xjw::matchphotos
 
         std::set<metalign::ImagePair> referencePairs(
                                                      const QStringList& images,
-                                                     const std::vector<camera_core::ImageId>& imageIds,
-                                                     const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
-                                                     const camera_reference::ReferenceCameraPositionMap& referencePositions,
+                                                     const std::vector<placamera::ImageId>& imageIds,
+                                                     const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                                     const placamera::reference::ReferenceCameraPositionMap& referencePositions,
                                                      ReferencePreselectionMode mode,
                                                      int neighborCount,
                                                      bool* usedIndexFallback)
@@ -384,8 +384,8 @@ namespace xjw::matchphotos
     bool PlaMatchHctPairPreselector::select(const QStringList& images,
                                             const MatchPhotosFeatureCache& featureCache,
                                             const MatchPhotosOptions& options,
-                                            const std::vector<camera_core::ImageId>& imageIds,
-                                            const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                            const std::vector<placamera::ImageId>& imageIds,
+                                            const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
                                             image_matching::SiftComputeBackend backend,
                                             int deviceIndex,
                                             PairSelectionResult* output,
@@ -410,9 +410,9 @@ namespace xjw::matchphotos
     bool PlaMatchHctPairPreselector::selectWithPositions(const QStringList& images,
                                                          const MatchPhotosFeatureCache& featureCache,
                                                          const MatchPhotosOptions& options,
-                                                         const std::vector<camera_core::ImageId>& imageIds,
-                                                         const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
-                                                         const camera_reference::ReferenceCameraPositionMap& referencePositions,
+                                                         const std::vector<placamera::ImageId>& imageIds,
+                                                         const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                                         const placamera::reference::ReferenceCameraPositionMap& referencePositions,
                                                          image_matching::SiftComputeBackend backend,
                                                          int deviceIndex,
                                                          PairSelectionResult* output,

@@ -1516,7 +1516,7 @@ QString
 makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView>& views, const SparseCloud& sparse)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    addFramedHashData(&hash, QByteArrayLiteral("plascan.mvs.depth.input.v2"));
+    addFramedHashData(&hash, QByteArrayLiteral("plascan.mvs.depth.input.v3"));
     addFramedHashData(&hash, makeMvsDepthConfigHash(config, static_cast<int>(views.size())).toUtf8());
 
     for (const CameraView& view : views)
@@ -1529,8 +1529,13 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         addHashValue(&hash, view.imageWidth);
         addHashValue(&hash, view.imageHeight);
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-            view.camera.intrinsics();
+        const bool has_camera = static_cast<bool>(view.camera);
+        addHashValue(&hash, has_camera);
+        if (!view.camera)
+        {
+            continue;
+        }
+        const auto& intrinsics = view.camera->pinholeDefinition().intrinsics();
         addHashValue(&hash, intrinsics.focalX);
         addHashValue(&hash, intrinsics.focalY);
         addHashValue(&hash, intrinsics.principalX);
@@ -1539,16 +1544,15 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         addHashValue(&hash, intrinsics.uAxisSign);
         addHashValue(&hash, intrinsics.vAxisSign);
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-            view.camera.distortion();
+        const auto& distortion = view.camera->pinholeDefinition().distortion();
         addHashValue(&hash, distortion.radialK1);
         addHashValue(&hash, distortion.radialK2);
         addHashValue(&hash, distortion.radialK3);
         addHashValue(&hash, distortion.tangentialP1);
         addHashValue(&hash, distortion.tangentialP2);
 
-        const auto rotation = view.camera.cameraToWorldRotation();
-        const auto center = view.camera.cameraCenter();
+        const auto& rotation = view.camera->pose().cameraToWorldRotation;
+        const auto& center = view.camera->pose().center;
         for (const double value : rotation)
         {
             addHashValue(&hash, value);
@@ -1557,19 +1561,13 @@ makeMvsDepthInputHash(const DepthGenConfig& config, const std::vector<CameraView
         {
             addHashValue(&hash, value);
         }
-        const bool depth_axis_flipped = view.camera.depthAxisFlipped();
+        const bool depth_axis_flipped = view.camera->pinholeDefinition().depthAxisFlipped();
         addHashValue(&hash, depth_axis_flipped);
 
-        // Numeric pose values alone do not identify the camera graph entry
-        // that produced this view.  Include the explicit binding whenever it
-        // is present (and the sentinel values otherwise) so two project
-        // cameras with identical numbers but different image/world identities
-        // cannot reuse one another's depth workspace.
-        const bool has_bound_identity = view.camera.hasBoundIdentity();
-        addHashValue(&hash, has_bound_identity);
-        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.instanceId().value()));
-        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.imageId().value()));
-        addFramedHashData(&hash, QByteArray::fromStdString(view.camera.worldFrame().value()));
+        // Equal geometry from distinct project camera instances must not share a depth workspace.
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera->instanceId().value()));
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera->imageId().value()));
+        addFramedHashData(&hash, QByteArray::fromStdString(view.camera->groundFrame().value()));
     }
 
     if (config.enableLearnedMvsCandidates)

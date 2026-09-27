@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustService.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+
+#include <plabundle/solver.h>
+#include <placamera/frame_camera.h>
 
 #include <QDir>
 #include <QFile>
@@ -9,39 +11,46 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makePlanetaryCamera(double centerX)
+    std::shared_ptr<const placamera::FramePinholeModel> makePlanetaryCamera(double centerX)
     {
         static int nextId = 0;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{centerX, 0.0, 0.0}});
         const std::string imageId = QStringLiteral("planetary-image-%1").arg(nextId++).toStdString();
-        EXPECT_TRUE(camera.bindIdentity(xjw::camera_core::CameraInstanceId("planetary-instance-" + imageId),
-                                        xjw::camera_core::ImageId(imageId),
-                                        xjw::coordinate_system::CoordinateFrameId("IAU_MOON")));
-        return camera;
-}
+        const placamera::FrameId frame("IAU_MOON");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("planetary-definition-" + imageId),
+                                                      {1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("planetary-instance-" + imageId),
+            placamera::ImageId(imageId),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, {centerX, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+    }
 
-xjw::BATrack makePlanetaryTieTrack()
-{
-    xjw::BATrack track;
-    track.initialPoint = {{0.0, 0.0, 10.0}};
-    track.observations.push_back({0, 512.0, 384.0, 1.0});
-    track.observations.push_back({1, 412.0, 384.0, 1.0});
-    return track;
-}
+    plabundle::Track makePlanetaryTieTrack()
+    {
+        plabundle::Track track;
+        track.initialPoint = {{0.0, 0.0, 10.0}};
+        track.observations.push_back({0, 512.0, 384.0, 1.0});
+        track.observations.push_back({1, 412.0, 384.0, 1.0});
+        return track;
+    }
 
-QString writePlanetaryLaserJson(const QString &directory,
-                                const QString &sensorModel = QStringLiteral("frame"),
-                                const QString &imageId = QStringLiteral("img0.cub"))
-{
-    QString json = QString::fromUtf8(R"json(
+    QString writePlanetaryLaserJson(const QString& directory,
+                                    const QString& sensorModel = QStringLiteral("frame"),
+                                    const QString& imageId = QStringLiteral("img0.cub"))
+    {
+        QString json = QString::fromUtf8(R"json(
 {
   "schema": "plascan.planetary_laser_dataset",
   "version": 1,
@@ -75,18 +84,18 @@ QString writePlanetaryLaserJson(const QString &directory,
   }]
 }
 )json");
-    json.replace(QStringLiteral("SENSOR_MODEL"), sensorModel);
-    json.replace(QStringLiteral("img0.cub"), imageId);
-    const QString path = QDir(directory).filePath(QStringLiteral("planetary_laser.json"));
-    QFile file(path);
-    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    EXPECT_GT(file.write(json.toUtf8()), 0);
-    return path;
-}
+        json.replace(QStringLiteral("SENSOR_MODEL"), sensorModel);
+        json.replace(QStringLiteral("img0.cub"), imageId);
+        const QString path = QDir(directory).filePath(QStringLiteral("planetary_laser.json"));
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        EXPECT_GT(file.write(json.toUtf8()), 0);
+        return path;
+    }
 
-QString writeIsisPlanetaryLaserJson(const QString &directory)
-{
-    const QByteArray json = R"json(
+    QString writeIsisPlanetaryLaserJson(const QString& directory)
+    {
+        const QByteArray json = R"json(
 {
   "points": [{
     "id": "lola-isis-1",
@@ -106,43 +115,42 @@ QString writeIsisPlanetaryLaserJson(const QString &directory)
   }]
 }
 )json";
-    const QString path = QDir(directory).filePath(QStringLiteral("isis_lidar.json"));
-    QFile file(path);
-    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    EXPECT_GT(file.write(json), 0);
-    return path;
-}
+        const QString path = QDir(directory).filePath(QStringLiteral("isis_lidar.json"));
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        EXPECT_GT(file.write(json), 0);
+        return path;
+    }
 
-xjw::gui::BaServiceOptions makePlanetaryServiceOptions(const QString &directory,
-                                                        const QString &jsonPath)
-{
-    xjw::gui::BaServiceOptions options;
-    options.outputDir = QDir(directory).filePath(QStringLiteral("ba"));
-    options.imagePathByIndex = {
-        QDir(directory).filePath(QStringLiteral("img0.cub")),
-        QDir(directory).filePath(QStringLiteral("img1.cub")),
-    };
-    options.selectedImages = options.imagePathByIndex;
-    options.exportTsai = false;
-    options.exportEvalPlot = false;
-    options.enablePlanetaryLaserRangeConstraints = true;
-    options.planetaryLaserDataPath = jsonPath;
-    options.planetaryLaserCameraCoordinateFrame = QStringLiteral("IAU_MOON");
-    options.planetaryLaserCameraSensorFrame = QStringLiteral("CAMERA");
-    options.planetaryLaserRangeWeight = 1.0;
-    options.planetaryLaserRangeHuberDeltaSigma = 10.0;
-    options.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.maxIterations = 20;
-    return options;
-}
+    xjw::gui::BaServiceOptions makePlanetaryServiceOptions(const QString& directory, const QString& jsonPath)
+    {
+        xjw::gui::BaServiceOptions options;
+        options.outputDir = QDir(directory).filePath(QStringLiteral("ba"));
+        options.imagePathByIndex = {
+            QDir(directory).filePath(QStringLiteral("img0.cub")),
+            QDir(directory).filePath(QStringLiteral("img1.cub")),
+        };
+        options.selectedImages = options.imagePathByIndex;
+        options.exportTsai = false;
+        options.exportEvalPlot = false;
+        options.enablePlanetaryLaserRangeConstraints = true;
+        options.planetaryLaserDataPath = jsonPath;
+        options.planetaryLaserCameraCoordinateFrame = QStringLiteral("IAU_MOON");
+        options.planetaryLaserCameraSensorFrame = QStringLiteral("CAMERA");
+        options.planetaryLaserRangeWeight = 1.0;
+        options.planetaryLaserRangeHuberDeltaSigma = 10.0;
+        options.baOpt.backend.requested = plabundle::Backend::PlaMatrixCpu;
+        options.baOpt.calibration.refineCameraPose = false;
+        options.baOpt.solver.enablePointFilter = false;
+        options.baOpt.solver.maxIterations = 20;
+        return options;
+    }
 
 } // namespace
 
 TEST(BundleAdjustServicePlanetaryLaserTest, RunsRangeShotWithoutPollutingTrackMetrics)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
+    if (!plabundle::Solver::isBackendAvailable(plabundle::Backend::PlaMatrixCpu))
     {
         GTEST_SKIP() << "PlaMatrix backend is not available";
     }
@@ -150,20 +158,16 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RunsRangeShotWithoutPollutingTrackMe
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writePlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
-                                                                                     makePlanetaryCamera(1.0)};
-    std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
-    const xjw::gui::BaServiceOptions options =
-        makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makePlanetaryCamera(0.0),
+                                                                             makePlanetaryCamera(1.0)};
+    std::vector<plabundle::Track> tracks{makePlanetaryTieTrack()};
+    const xjw::gui::BaServiceOptions options = makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
 
-    const xjw::gui::BaServiceResult result =
-        xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
     EXPECT_EQ(result.resultJson.value(QStringLiteral("track_count")).toInt(), 1);
-    const QJsonObject summary = result.resultJson
-                                    .value(QStringLiteral("planetary_laser_range_summary"))
-                                    .toObject();
+    const QJsonObject summary = result.resultJson.value(QStringLiteral("planetary_laser_range_summary")).toObject();
     EXPECT_EQ(summary.value(QStringLiteral("accepted_shots")).toInt(), 1);
     EXPECT_EQ(summary.value(QStringLiteral("range_constraint_count")).toInt(), 1);
     EXPECT_EQ(summary.value(QStringLiteral("ignored_projected_measures")).toInt(), 1);
@@ -171,43 +175,34 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RunsRangeShotWithoutPollutingTrackMe
     EXPECT_LT(summary.value(QStringLiteral("range_rms_after_m")).toDouble(), 0.01);
     const QJsonArray shots = summary.value(QStringLiteral("shots")).toArray();
     ASSERT_EQ(shots.size(), 1);
-    EXPECT_EQ(shots.at(0).toObject().value(QStringLiteral("id")).toString(),
-              QStringLiteral("lola-shot-1"));
-    EXPECT_EQ(shots.at(0).toObject()
-                  .value(QStringLiteral("lever_arm_camera_m"))
-                  .toArray()
-                  .size(),
-              3);
+    EXPECT_EQ(shots.at(0).toObject().value(QStringLiteral("id")).toString(), QStringLiteral("lola-shot-1"));
+    EXPECT_EQ(shots.at(0).toObject().value(QStringLiteral("lever_arm_camera_m")).toArray().size(), 3);
 }
 
 TEST(BundleAdjustServicePlanetaryLaserTest, RejectsLineScanAsStaticFrameCamera)
 {
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
-    const QString jsonPath = writePlanetaryLaserJson(
-        temporaryDirectory.path(), QStringLiteral("line_scan"));
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
-                                                                                     makePlanetaryCamera(1.0)};
-    std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
-    xjw::gui::BaServiceOptions options =
-        makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
+    const QString jsonPath = writePlanetaryLaserJson(temporaryDirectory.path(), QStringLiteral("line_scan"));
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makePlanetaryCamera(0.0),
+                                                                             makePlanetaryCamera(1.0)};
+    std::vector<plabundle::Track> tracks{makePlanetaryTieTrack()};
+    xjw::gui::BaServiceOptions options = makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
 
-    const xjw::gui::BaServiceResult result =
-        xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     EXPECT_FALSE(result.success);
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("line_scan")));
 
     options.dryRun = true;
-    const xjw::gui::BaServiceResult dryRunResult =
-        xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    const xjw::gui::BaServiceResult dryRunResult = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
     EXPECT_FALSE(dryRunResult.success);
     EXPECT_TRUE(dryRunResult.errorMessage.contains(QStringLiteral("line_scan")));
 }
 
 TEST(BundleAdjustServicePlanetaryLaserTest, MapsExplicitIsisSerialAliasToCamera)
 {
-    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::PlaMatrixCpu))
+    if (!plabundle::Solver::isBackendAvailable(plabundle::Backend::PlaMatrixCpu))
     {
         GTEST_SKIP() << "PlaMatrix backend is not available";
     }
@@ -215,17 +210,15 @@ TEST(BundleAdjustServicePlanetaryLaserTest, MapsExplicitIsisSerialAliasToCamera)
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writeIsisPlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
-                                                                                     makePlanetaryCamera(1.0)};
-    std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
-    xjw::gui::BaServiceOptions options =
-        makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makePlanetaryCamera(0.0),
+                                                                             makePlanetaryCamera(1.0)};
+    std::vector<plabundle::Track> tracks{makePlanetaryTieTrack()};
+    xjw::gui::BaServiceOptions options = makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
     xjw::lidar::PlanetaryLaserIsisContext context;
     context.reference.targetName = "MOON";
     context.reference.bodyFixedFrame = "IAU_MOON";
     context.reference.laserFrame = "CAMERA";
-    context.reference.timeSystem =
-        xjw::lidar::PlanetaryLaserTimeSystem::TdbEtSeconds;
+    context.reference.timeSystem = xjw::lidar::PlanetaryLaserTimeSystem::TdbEtSeconds;
     context.reference.latitudeType = "planetocentric";
     context.reference.longitudeDirection = "positive_east";
     context.sensorModel = xjw::lidar::PlanetaryLaserSensorModel::Frame;
@@ -238,33 +231,20 @@ TEST(BundleAdjustServicePlanetaryLaserTest, MapsExplicitIsisSerialAliasToCamera)
     };
     options.planetaryLaserAllowUnmappedMeasuredImages = true;
 
-    const xjw::gui::BaServiceResult result =
-        xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
-    EXPECT_EQ(result.resultJson
-                  .value(QStringLiteral("planetary_laser_range_summary"))
+    EXPECT_EQ(result.resultJson.value(QStringLiteral("planetary_laser_range_summary"))
                   .toObject()
                   .value(QStringLiteral("accepted_shots"))
                   .toInt(),
               1);
-    const QJsonObject savedOptions =
-        result.resultJson.value(QStringLiteral("options")).toObject();
-    EXPECT_TRUE(savedOptions
-                    .value(QStringLiteral(
-                        "planetary_laser_allow_unmapped_measured_images"))
-                    .toBool());
-    const QJsonArray savedAliases = savedOptions
-                                        .value(QStringLiteral(
-                                            "planetary_laser_image_aliases_by_camera_index"))
-                                        .toArray();
+    const QJsonObject savedOptions = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_TRUE(savedOptions.value(QStringLiteral("planetary_laser_allow_unmapped_measured_images")).toBool());
+    const QJsonArray savedAliases =
+        savedOptions.value(QStringLiteral("planetary_laser_image_aliases_by_camera_index")).toArray();
     ASSERT_EQ(savedAliases.size(), 2);
-    EXPECT_EQ(savedAliases.at(0)
-                  .toObject()
-                  .value(QStringLiteral("aliases"))
-                  .toArray()
-                  .at(0)
-                  .toString(),
+    EXPECT_EQ(savedAliases.at(0).toObject().value(QStringLiteral("aliases")).toArray().at(0).toString(),
               QStringLiteral("LRO/1/NACL"));
 }
 
@@ -273,15 +253,13 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RejectsSelectedImagesAsImplicitCamer
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
     const QString jsonPath = writePlanetaryLaserJson(temporaryDirectory.path());
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makePlanetaryCamera(0.0),
-                                                                                     makePlanetaryCamera(1.0)};
-    std::vector<xjw::BATrack> tracks{makePlanetaryTieTrack()};
-    xjw::gui::BaServiceOptions options =
-        makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makePlanetaryCamera(0.0),
+                                                                             makePlanetaryCamera(1.0)};
+    std::vector<plabundle::Track> tracks{makePlanetaryTieTrack()};
+    xjw::gui::BaServiceOptions options = makePlanetaryServiceOptions(temporaryDirectory.path(), jsonPath);
     options.imagePathByIndex.clear();
 
-    const xjw::gui::BaServiceResult result =
-        xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     EXPECT_FALSE(result.success);
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("imagePathByIndex")));
@@ -305,14 +283,10 @@ TEST(BundleAdjustServicePlanetaryLaserTest, MapsProjectImageUuidsInBundleAdjustC
     QString error;
 
     ASSERT_TRUE(xjw::gui::mergePlanetaryLaserProjectImageAliases(
-        meta,
-        {QStringLiteral("E:/data/a.cub"), QStringLiteral("E:/data/c.cub")},
-        &aliases,
-        &error)) << error.toStdString();
+        meta, {QStringLiteral("E:/data/a.cub"), QStringLiteral("E:/data/c.cub")}, &aliases, &error))
+        << error.toStdString();
     ASSERT_EQ(aliases.size(), 2);
-    EXPECT_EQ(aliases.at(0),
-              (QStringList{QStringLiteral("LRO/1/NACL"),
-                           QStringLiteral("uuid-a")}));
+    EXPECT_EQ(aliases.at(0), (QStringList{QStringLiteral("LRO/1/NACL"), QStringLiteral("uuid-a")}));
     EXPECT_EQ(aliases.at(1), QStringList{QStringLiteral("uuid-c")});
 }
 
@@ -328,9 +302,6 @@ TEST(BundleAdjustServicePlanetaryLaserTest, RejectsConflictingProjectImageUuidAl
     QString error;
 
     EXPECT_FALSE(xjw::gui::mergePlanetaryLaserProjectImageAliases(
-        QJsonObject{{QStringLiteral("images"), images}},
-        {QStringLiteral("E:/data/a.cub")},
-        &aliases,
-        &error));
+        QJsonObject{{QStringLiteral("images"), images}}, {QStringLiteral("E:/data/a.cub")}, &aliases, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("不是一一对应")));
 }

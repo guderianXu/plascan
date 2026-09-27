@@ -67,7 +67,8 @@ endif()
 
 target_link_libraries(terrain
     PUBLIC
-        camera_project
+        placamera::placamera
+        plascan::placamera_runtime
         plapoint::plapoint
         plascan_common_io
     PRIVATE

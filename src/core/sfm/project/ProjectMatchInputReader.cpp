@@ -1,13 +1,8 @@
 #include "ProjectMatchInputReader.h"
 
 #include "ImageMatchFile.h"
-#include "ProjectCameraIO.h"
-#include "camera/core/capabilities/CameraOperationPlan.h"
-#include "camera/core/model/CameraInstanceSet.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRuntime.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "project/ProjectCameraIO.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectCommonUtils.h"
 
 #include <QDir>
@@ -19,7 +14,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <string>
 #include <utility>
 
 namespace xjw::core::project
@@ -57,7 +51,7 @@ namespace xjw::core::project
         struct SelectedRuntimeInstance
         {
             QString normalizedPath;
-            std::shared_ptr<const xjw::camera_core::CameraInstance> instance;
+            std::shared_ptr<const placamera::RasterModel> instance;
         };
 
         QString canonicalPairKey(int leftCameraIndex, int rightCameraIndex)
@@ -74,12 +68,6 @@ namespace xjw::core::project
         QString imageFileNameKey(const QString& path)
         {
             return QFileInfo(QDir::fromNativeSeparators(path.trimmed())).fileName().toCaseFolded();
-        }
-
-        QJsonObject numericStateSnapshot(
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& state)
-        {
-            return xjw::common::project::serializeFramePinholeNumericState(state);
         }
 
         bool betterCandidate(const PairCandidate& left, const PairCandidate& right)
@@ -240,13 +228,10 @@ namespace xjw::core::project
         }
         *input = {};
 
-        // Decode the canonical definition/instance graph before constructing the
-        // numerical pinhole view required by the current SfM kernels.  This
-        // keeps the capability boundary at the project entry point: RPC and
-        // pushbroom instances are reported as unsupported instead of being
+        // Decode the canonical definition/instance graph at the project boundary.
+        // RPC and pushbroom instances are reported as unsupported instead of being
         // silently interpreted as static pinhole cameras.
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            meta, xjw::camera_models::makeBuiltinCameraModelRegistry());
+        const auto runtime = xjw::placamera_runtime::loadProjectCameras(meta);
         if (!runtime.ok())
         {
             input->diagnostics.firstCameraError = runtime.errors.join(QStringLiteral("; "));
@@ -284,7 +269,7 @@ namespace xjw::core::project
         QSet<QString> image_ids_in_document;
         QMap<QString, int> image_row_by_path;
         std::vector<SelectedRuntimeInstance> selectedRuntimeInstances;
-        xjw::camera_core::CameraInstanceSet selectedInstances;
+        placamera::CameraInstanceSet selectedInstances;
         auto rejectSelectedCamera = [input](const QString& normalized_path,
                                              const QString& image_id,
                                              const QString& reason)
@@ -336,23 +321,21 @@ namespace xjw::core::project
                     QStringLiteral("selected image %1 has no canonical image_uuid").arg(normalized_path);
                 return false;
             }
-            const auto runtimeInstance = runtime.instances.forImage(
-                xjw::camera_core::ImageId(imageId.toStdString()));
+            const auto runtimeInstance = runtime.instances.forImage(placamera::ImageId(imageId.toStdString()));
             if (!runtimeInstance.ok())
             {
                 return rejectSelectedCamera(normalized_path,
                                             imageId,
-                                            QString::fromStdString(runtimeInstance.error));
+                                            QString::fromStdString(runtimeInstance.message()));
             }
 
-            std::string frameError;
-            if (!selectedInstances.add(runtimeInstance.instance, &frameError))
+            if (!selectedInstances.add(runtimeInstance.value()))
             {
                 return rejectSelectedCamera(normalized_path,
                                             imageId,
-                                            QString::fromStdString(frameError));
+                                            QStringLiteral("cannot add camera instance to PlaCamera selection"));
             }
-            selectedRuntimeInstances.push_back({normalized_path, runtimeInstance.instance});
+            selectedRuntimeInstances.push_back({normalized_path, runtimeInstance.value()});
         }
 
         for (const QString& selected_path : selected_normalized_order)
@@ -369,84 +352,84 @@ namespace xjw::core::project
         // SfM/BA input.  RPC, pushbroom and future camera models are rejected as a
         // complete selection when they do not expose the static operation contract;
         // no pinhole subset is silently constructed.
-        const xjw::camera_core::CameraOperationPlan operationPlan =
-            xjw::camera_core::planCameraOperation(
-                selectedInstances, xjw::camera_core::CameraOperation::StaticSfM);
-        if (!operationPlan.ok())
+        const auto capabilityPlan = selectedInstances.requireCapabilities(
+            placamera::CapabilitySet{placamera::CapabilityKind::Projection,
+                                     placamera::CapabilityKind::StaticPose,
+                                     placamera::CapabilityKind::Optimization});
+        const auto framePlan = selectedInstances.requireCommonGroundFrame();
+        if (!capabilityPlan.ok() || !framePlan.ok())
         {
             input->diagnostics.unsupportedCameraCount +=
-                static_cast<int>(operationPlan.capabilityFailures.size());
+                static_cast<int>(capabilityPlan.failures.size());
+            QStringList failures;
+            for (const auto& failure : capabilityPlan.failures)
+            {
+                failures.append(QStringLiteral("%1: %2")
+                                    .arg(QString::fromStdString(failure.imageId.value()),
+                                         QString::fromStdString(failure.message) +
+                                             QStringLiteral(" (required: projection, static_pose, optimization)")));
+            }
+            for (const auto& failure : framePlan.failures)
+            {
+                failures.append(QStringLiteral("%1: %2")
+                                    .arg(QString::fromStdString(failure.imageId.value()),
+                                         QString::fromStdString(failure.message)));
+            }
+            if (!framePlan.ok())
+            {
+                for (const SelectedRuntimeInstance& selected : selectedRuntimeInstances)
+                {
+                    failures.append(QStringLiteral("%1: ground frame %2")
+                                        .arg(QString::fromStdString(selected.instance->imageId().value()),
+                                             QString::fromStdString(selected.instance->groundFrame().value())));
+                }
+            }
             input->diagnostics.firstCameraError =
-                QString::fromStdString(operationPlan.failureMessage());
+                failures.isEmpty() ? QStringLiteral("selected camera set does not satisfy static SfM requirements")
+                                   : failures.join(QStringLiteral("; "));
             return false;
         }
 
-        // Convert typed instances only after the selected set has passed the frame
-        // contract.  Keep the conversion in temporary arrays so a later identity
-        // or numeric-state failure cannot leave a partial solver input in `input`.
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> resolvedCameras;
-        std::vector<std::shared_ptr<const xjw::camera_models::frame_pinhole::FramePinholeInstance>>
-            resolvedCameraInstances;
-        std::vector<xjw::camera_core::ImageId> resolvedImageIds;
+        // Retain typed instances only after the selected set has passed the frame
+        // contract. Keep them in temporary arrays so a later identity failure
+        // cannot leave a partial project input in `input`.
+        std::vector<std::shared_ptr<const placamera::FramePinholeModel>> resolvedCameraInstances;
+        std::vector<placamera::ImageId> resolvedImageIds;
         QStringList resolvedImagePaths;
         QMap<QString, int> resolvedCameraIndexByImageId;
         QMap<QString, int> resolvedCameraIndexByPath;
         QMap<QString, QJsonObject> resolvedBeforeCamMeta;
-        resolvedCameras.reserve(selectedRuntimeInstances.size());
         resolvedCameraInstances.reserve(selectedRuntimeInstances.size());
         resolvedImageIds.reserve(selectedRuntimeInstances.size());
         resolvedImagePaths.reserve(static_cast<qsizetype>(selectedRuntimeInstances.size()));
         for (const SelectedRuntimeInstance& selected : selectedRuntimeInstances)
         {
             const QString& normalized_path = selected.normalizedPath;
-            const std::shared_ptr<const xjw::camera_core::CameraInstance>& instance = selected.instance;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState numericState;
-            std::string numericStateError;
-            const auto pinhole =
-                std::dynamic_pointer_cast<const xjw::camera_models::frame_pinhole::FramePinholeInstance>(instance);
+            const std::shared_ptr<const placamera::RasterModel>& instance = selected.instance;
+            const auto pinhole = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(instance);
             if (!pinhole)
-            {
-                return rejectSelectedCamera(
-                    normalized_path,
-                    QString::fromStdString(instance->imageId().value()),
-                    QStringLiteral("camera instance is not a frame-pinhole instance"));
-            }
-            const bool converted = xjw::camera_models::frame_pinhole::makeFramePinholeNumericState(
-                pinhole, &numericState, &numericStateError);
-            if (!converted)
             {
                 return rejectSelectedCamera(normalized_path,
                                             QString::fromStdString(instance->imageId().value()),
-                                            QString::fromStdString(numericStateError));
+                                            QStringLiteral("camera instance is not a frame-pinhole instance"));
             }
-
-            const int camera_index = static_cast<int>(resolvedCameras.size());
+            const int camera_index = static_cast<int>(resolvedCameraInstances.size());
             const QString image_id = QString::fromStdString(instance->imageId().value());
-            if (resolvedCameraIndexByPath.contains(normalized_path)
-                || resolvedCameraIndexByImageId.contains(image_id))
+            if (resolvedCameraIndexByPath.contains(normalized_path) || resolvedCameraIndexByImageId.contains(image_id))
             {
                 input->diagnostics.firstInputError =
                     QStringLiteral("selected camera identity or path is duplicated: image_uuid=%1, path=%2")
                         .arg(image_id, normalized_path);
                 return false;
             }
-            if (numericState.imageId() != instance->imageId())
-            {
-                input->diagnostics.firstInputError =
-                    QStringLiteral("numeric camera identity does not match the selected camera instance: %1")
-                        .arg(image_id);
-                return false;
-            }
             resolvedCameraIndexByPath.insert(normalized_path, camera_index);
             resolvedCameraIndexByImageId.insert(image_id, camera_index);
             resolvedCameraInstances.push_back(pinhole);
-            resolvedCameras.push_back(std::move(numericState));
-            resolvedImageIds.push_back(instance->imageId());
+            resolvedImageIds.emplace_back(instance->imageId().value());
             resolvedImagePaths.append(normalized_path);
-            resolvedBeforeCamMeta.insert(normalized_path, numericStateSnapshot(resolvedCameras.back()));
+            resolvedBeforeCamMeta.insert(normalized_path, xjw::common::project::serializeFramePinholeModel(*pinhole));
         }
 
-        input->cameras = std::move(resolvedCameras);
         input->cameraInstances = std::move(resolvedCameraInstances);
         input->imageIdByIndex = std::move(resolvedImageIds);
         input->imagePathByIndex = std::move(resolvedImagePaths);

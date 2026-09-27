@@ -1,8 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraInstanceUpdate.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
 #include "ProjectTiePointResultService.h"
 #include "project/ProjectDocumentModel.h"
 #include "project/ProjectSessionModel.h"
@@ -16,6 +14,7 @@
 #include <QStringList>
 #include <QVector>
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -67,12 +66,12 @@ namespace xjw::gui::project
         QStringList imagesByCategory(const QString& category) const;
         QStringList allImages() const;
         QString matchFile(const QString& firstImage, const QString& secondImage) const;
-        QMap<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        getPinholeNumericStatesForImages(const QStringList& images, bool* hasCamerasForAll = nullptr) const;
-        std::vector<xjw::camera_core::ImageId> getImageIdsForImages(const QStringList& images,
+        std::vector<placamera::ImageId> getImageIdsForImages(const QStringList& images,
                                                                     bool* allResolved = nullptr) const;
-        xjw::camera_reference::ReferenceCameraGeometryMap
+        placamera::reference::ReferenceCameraGeometryMap
         getReferenceCameraGeometriesForImages(const QStringList& images, bool* hasCamerasForAll = nullptr) const;
+        QMap<QString, std::shared_ptr<const placamera::FramePinholeModel>>
+        getPinholeModelsForImages(const QStringList& images, bool* hasCamerasForAll = nullptr) const;
         QStringList getRpcCameraImagePaths(const QStringList& images, bool* hasCamerasForAll = nullptr) const;
         QJsonObject loadUiSettings() const;
         void saveUiSettings(const QJsonObject& settings);
@@ -112,7 +111,8 @@ namespace xjw::gui::project
                                          QString* denseCloudPath,
                                          QString* errorMessage = nullptr) const;
         bool stageBundleAdjustMetadata(const ProjectSessionContext& expected,
-                                       const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+                                       const placamera::CameraInstanceSet& cameraInstances,
+                                       const QMap<QString, QJsonObject>& annotationsByImageId,
                                        const QJsonObject& bundleAdjustResult,
                                        ProjectBundleAdjustMetadataStageToken* token,
                                        QString* errorMessage = nullptr);
@@ -130,49 +130,18 @@ namespace xjw::gui::project
                                    QStringList* clearedImages = nullptr,
                                    QString* errorMessage = nullptr);
 
-        bool setCameraInstances(const QMap<QString, QJsonObject>& cameras,
-                                int* updatedCount = nullptr,
-                                QString* errorMessage = nullptr);
-        bool setCameraInstances(const ProjectSessionContext& expected,
-                                const QMap<QString, QJsonObject>& cameras,
-                                int* updatedCount = nullptr,
-                                QString* errorMessage = nullptr);
-        bool setCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
-                                    int* updatedCount = nullptr,
-                                    QString* errorMessage = nullptr);
-        bool setCameraInstancesById(const ProjectSessionContext& expected,
-                                    const xjw::camera_project::CameraInstanceUpdates& updates,
-                                    int* updatedCount = nullptr,
-                                    QString* errorMessage = nullptr);
-        bool replaceCameraInstances(const QStringList& targetImagePaths,
-                                    const QMap<QString, QJsonObject>& cameras,
-                                    int* updatedCount = nullptr,
-                                    int* clearedCount = nullptr,
-                                    QString* errorMessage = nullptr);
-        bool replaceCameraInstances(const ProjectSessionContext& expected,
-                                    const QStringList& targetImagePaths,
-                                    const QMap<QString, QJsonObject>& cameras,
-                                    int* updatedCount = nullptr,
-                                    int* clearedCount = nullptr,
-                                    QString* errorMessage = nullptr);
-        bool replaceCameraInstancesById(const xjw::camera_project::CameraImageIds& targetImageIds,
-                                        const xjw::camera_project::CameraInstanceUpdates& updates,
-                                        int* updatedCount = nullptr,
-                                        int* clearedCount = nullptr,
-                                        QString* errorMessage = nullptr);
-        bool replaceCameraInstancesById(const ProjectSessionContext& expected,
-                                        const xjw::camera_project::CameraImageIds& targetImageIds,
-                                        const xjw::camera_project::CameraInstanceUpdates& updates,
-                                        int* updatedCount = nullptr,
-                                        int* clearedCount = nullptr,
-                                        QString* errorMessage = nullptr);
-        bool clearCameraInstances(const QStringList& imagePaths,
-                                  int* updatedCount = nullptr,
-                                  QString* errorMessage = nullptr);
-        bool clearCameraInstances(const ProjectSessionContext& expected,
-                                  const QStringList& imagePaths,
-                                  int* updatedCount = nullptr,
-                                  QString* errorMessage = nullptr);
+        bool upsertNativeCameraInstances(const ProjectSessionContext& expected,
+                                         const placamera::CameraInstanceSet& instances,
+                                         const QMap<QString, QJsonObject>& annotationsByImageId,
+                                         int* writtenCount = nullptr,
+                                         QString* errorMessage = nullptr);
+        bool replaceNativeCameraInstances(const ProjectSessionContext& expected,
+                                          const std::vector<placamera::ImageId>& targetImageIds,
+                                          const placamera::CameraInstanceSet& instances,
+                                          const QMap<QString, QJsonObject>& annotationsByImageId,
+                                          int* writtenCount = nullptr,
+                                          int* clearedCount = nullptr,
+                                          QString* errorMessage = nullptr);
         bool appendIntersectionResult(const QJsonObject& result, QString* errorMessage = nullptr);
         bool appendIntersectionResult(const ProjectSessionContext& expected,
                                       const QJsonObject& result,
@@ -200,9 +169,6 @@ namespace xjw::gui::project
                             int matchCount);
 
     private:
-        std::unordered_map<xjw::camera_core::ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        pinholeNumericStatesByImageId(const std::vector<xjw::camera_core::ImageId>& imageIds,
-                                      bool* hasCamerasForAll = nullptr) const;
         bool requireProjectData(int* updatedCount, int* clearedCount, QString* errorMessage) const;
         bool requireCurrentProjectData(const ProjectSessionContext& expected,
                                        int* updatedCount,

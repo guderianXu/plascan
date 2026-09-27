@@ -1,7 +1,7 @@
 #include "AsteroidProjection.h"
 
-#include <plapoint/core/point_cloud.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plapoint/geometry_cloud.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <opencv2/core.hpp>
 
@@ -57,8 +57,7 @@ std::array<double, 9> AsteroidProjection::identityRotation()
 // computeCenter
 // -----------------------------------------------------------------------------
 
-AsteroidBodyCenter AsteroidProjection::computeCenter(
-    const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc)
+AsteroidBodyCenter AsteroidProjection::computeCenter(const plapoint::GeometryCloud<float>& pc)
 {
     AsteroidBodyCenter result;
     if (pc.size() == 0)
@@ -98,10 +97,9 @@ AsteroidBodyCenter AsteroidProjection::computeCenter(
 // fitEllipsoid  (PCA-based)
 // -----------------------------------------------------------------------------
 
-TriaxialEllipsoidParams AsteroidProjection::fitEllipsoid(
-    const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc,
-    const AsteroidBodyCenter &center,
-    std::array<double, 9> *rotationMatrix)
+TriaxialEllipsoidParams AsteroidProjection::fitEllipsoid(const plapoint::GeometryCloud<float>& pc,
+                                                         const AsteroidBodyCenter& center,
+                                                         std::array<double, 9>* rotationMatrix)
 {
     TriaxialEllipsoidParams result;
 

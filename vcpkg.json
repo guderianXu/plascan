@@ -5,6 +5,7 @@
   "builtin-baseline": "3c5d90a305ff00ca841f085a74a7ce74ee777dee",
   "dependencies": [
     "apriltag",
+    "eigen3",
     {
       "name": "glslang",
       "features": [

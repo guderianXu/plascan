@@ -1,7 +1,7 @@
 #include "reference/CoordinateReference.h"
 
-#include "coordinate_system/context/CoordinateContext.h"
-#include "coordinate_system/gdal/GdalCoordinateTransform.h"
+#include <placoordinate/context/CoordinateContext.h>
+#include <placoordinate/gdal/GdalCoordinateTransform.h>
 
 #include <gtest/gtest.h>
 
@@ -11,11 +11,11 @@
 #include <vector>
 
 namespace cp = xjw::control_points;
-namespace cs = xjw::coordinate_system;
+namespace cs = placoordinate;
 
 namespace
 {
-    using namespace xjw::coordinate_system;
+    using namespace placoordinate;
 
     CoordinateFrame referenceFrame(const char* id, CoordinateFrameKind kind, AngleUnit angleUnit)
     {

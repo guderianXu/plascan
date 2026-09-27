@@ -15,83 +15,29 @@ find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_TEST_QT_COMPONENTS})
 find_package(Python3 COMPONENTS Interpreter)
 include(PlascanTestRuntime)
 
-add_executable(test_camera_core_types
-    test_camera_core_types.cpp
+add_executable(test_camera_instance_set
+    test_camera_instance_set.cpp
 )
-target_link_libraries(test_camera_core_types PRIVATE
-    camera_core
+target_link_libraries(test_camera_instance_set PRIVATE
+    placamera::placamera
     GTest::gtest_main
 )
-target_include_directories(test_camera_core_types PRIVATE
+target_include_directories(test_camera_instance_set PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
 )
-gtest_discover_tests(test_camera_core_types)
-
-add_executable(test_camera_core_registry
-    test_camera_core_registry.cpp
-)
-target_link_libraries(test_camera_core_registry PRIVATE
-    camera_core
-    GTest::gtest_main
-)
-target_include_directories(test_camera_core_registry PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core
-)
-gtest_discover_tests(test_camera_core_registry)
-
-add_executable(test_camera_model_factories
-    test_camera_model_factories.cpp
-)
-target_link_libraries(test_camera_model_factories PRIVATE
-    camera_models_registry
-    GTest::gtest_main
-)
-target_include_directories(test_camera_model_factories PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core
-)
-gtest_discover_tests(test_camera_model_factories)
+gtest_discover_tests(test_camera_instance_set)
 
 add_executable(test_camera_capability_requirements
     test_camera_capability_requirements.cpp
 )
 target_link_libraries(test_camera_capability_requirements PRIVATE
-    camera_core
-    camera_models_frame_pinhole
-    camera_models_rpc
-    camera_models_linescan
+    placamera::placamera
     GTest::gtest_main
 )
 target_include_directories(test_camera_capability_requirements PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
 )
 gtest_discover_tests(test_camera_capability_requirements)
-
-add_executable(test_camera_reference_resolver
-    test_camera_reference_resolver.cpp
-)
-target_link_libraries(test_camera_reference_resolver PRIVATE
-    camera_reference
-    camera_core
-    GTest::gtest_main
-)
-target_include_directories(test_camera_reference_resolver PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core
-)
-gtest_discover_tests(test_camera_reference_resolver)
-
-add_executable(test_camera_reference_comparator
-    test_camera_reference_comparator.cpp
-)
-target_link_libraries(test_camera_reference_comparator PRIVATE
-    camera_reference
-    camera_models_frame_pinhole
-    camera_models_rpc
-    GTest::gtest_main
-)
-target_include_directories(test_camera_reference_comparator PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core
-)
-gtest_discover_tests(test_camera_reference_comparator)
 
 # vcpkg builds Qt statically on macOS. Static platform plugins cannot be found
 # through QT_QPA_PLATFORM_PLUGIN_PATH, so tests that request the offscreen
@@ -107,6 +53,13 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
         -DPLASCAN_SOURCE_DIR=${CMAKE_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_dependency_paths.cmake
+)
+
+add_test(
+    NAME PlaCoordinate.PlaScanDirectConsumers
+    COMMAND ${CMAKE_COMMAND}
+        -DPLASCAN_SOURCE_ROOT=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/scripts/validation/check_placoordinate_direct_consumers.cmake
 )
 
 # 验证开发构建实际携带可加载的 Qt TLS 后端。真实 HTTPS 请求默认跳过，可通过
@@ -219,6 +172,7 @@ add_executable(test_metashape_camera_reference_importer
 )
 target_link_libraries(test_metashape_camera_reference_importer PRIVATE
     Qt6::Core
+    placamera::placamera
     GTest::gtest_main
 )
 target_include_directories(test_metashape_camera_reference_importer PRIVATE
@@ -237,8 +191,9 @@ add_executable(test_reference_models
 )
 target_link_libraries(test_reference_models PRIVATE
     camera
-    camera_reference
+    placamera::reference
     control_points
+    plascan::placamera_runtime
     plascan_common_project
     Qt6::Core
     Qt6::Gui
@@ -427,14 +382,11 @@ gtest_discover_tests(test_lidar_constraint_map)
 add_executable(test_lidar_constraint_association test_lidar_constraint_association.cpp)
 target_link_libraries(test_lidar_constraint_association PRIVATE
     lidar
-    bundle_adjust
-    camera
+    plabundle::plabundle
     GTest::gtest_main
 )
 target_include_directories(test_lidar_constraint_association PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/lidar
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 gtest_discover_tests(test_lidar_constraint_association)
 
@@ -443,111 +395,13 @@ gtest_discover_tests(test_lidar_constraint_association)
 # ==============================================================================
 add_executable(test_bundle_adjust_lidar_constraints test_bundle_adjust_lidar_constraints.cpp)
 target_link_libraries(test_bundle_adjust_lidar_constraints PRIVATE
-    bundle_adjust
-    camera
+    plabundle::plabundle
     GTest::gtest_main
 )
 target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 gtest_discover_tests(test_bundle_adjust_lidar_constraints)
-
-# ==============================================================================
-# test_bundle_adjust_projection — BA AutoDiff 投影模型与针孔数值状态投影一致性
-# ==============================================================================
-add_executable(test_bundle_adjust_projection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_projection.cpp
-)
-target_link_libraries(test_bundle_adjust_projection PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_projection PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_projection)
-
-# ==============================================================================
-# test_bundle_adjust_shared_focal — BA 无相机自标定的共享焦距优化
-# ==============================================================================
-add_executable(test_bundle_adjust_shared_focal
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_shared_focal.cpp
-)
-target_link_libraries(test_bundle_adjust_shared_focal PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_shared_focal PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_shared_focal)
-
-# ==============================================================================
-# test_bundle_adjust_adaptive_camera_model — 逐参数相机模型可靠性与参数掩码
-# ==============================================================================
-add_executable(test_bundle_adjust_adaptive_camera_model
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_adaptive_camera_model.cpp
-)
-target_link_libraries(test_bundle_adjust_adaptive_camera_model PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_adaptive_camera_model PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_adaptive_camera_model)
-
-add_executable(test_bundle_adjust_plamatrix_backend
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_plamatrix_backend.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_plamatrix_extended.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_plamatrix_constraints.cpp
-)
-target_link_libraries(test_bundle_adjust_plamatrix_backend PRIVATE
-    bundle_adjust
-    camera
-    plamatrix::plamatrix
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_plamatrix_backend PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_plamatrix_backend)
-
-add_executable(test_bundle_adjust_backend_selection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_backend_selection.cpp
-)
-target_link_libraries(test_bundle_adjust_backend_selection PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_backend_selection PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_backend_selection)
-
-add_executable(test_bundle_adjust_quality_gate
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_quality_gate.cpp
-)
-target_link_libraries(test_bundle_adjust_quality_gate PRIVATE
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_bundle_adjust_quality_gate PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_bundle_adjust_quality_gate)
 
 # ==============================================================================
 # test_bundle_adjust_service_lidar — 服务层 LiDAR 约束接入与 JSON 输出
@@ -562,8 +416,7 @@ target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
     plascan_common_project
     lidar
     sfm_core
-    camera_reference_core
-    bundle_adjust
+    placamera::reference
     camera
     control_points
     Qt6::Core
@@ -574,7 +427,6 @@ target_include_directories(test_bundle_adjust_service_lidar PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
     ${CMAKE_SOURCE_DIR}/src/core/lidar
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/control_points
     ${CMAKE_SOURCE_DIR}/src/common/log
@@ -587,7 +439,7 @@ if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
         test_planetary_laser_preview.cpp
     )
     target_link_libraries(test_planetary_laser_preview PRIVATE
-        camera_project
+        plascan::placamera_runtime
         gui_project
         Qt6::Core
         GTest::gtest_main
@@ -677,6 +529,7 @@ add_executable(test_project_depth_batch_lineage
 )
 target_link_libraries(test_project_depth_batch_lineage PRIVATE
     gui_project
+    plascan::placamera_runtime
     mvs_pipeline
     Qt6::Core
     GTest::gtest_main
@@ -755,6 +608,7 @@ add_executable(test_project_resource_service
 )
 target_link_libraries(test_project_resource_service PRIVATE
     gui_project
+    GDAL::GDAL
     Qt6::Core
     Qt6::Widgets
     GTest::gtest_main
@@ -876,8 +730,6 @@ target_link_libraries(test_gui_project_utils PRIVATE
     mvs_pipeline
     sfm
     camera
-    intersection
-    bundle_adjust
     qc
     control_points
     marker_print_qt
@@ -926,8 +778,6 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/image_matching
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/lidar
     ${CMAKE_SOURCE_DIR}/src/core/qc
     ${CMAKE_SOURCE_DIR}/src/core/control_points
@@ -996,6 +846,7 @@ gtest_discover_tests(test_photo_strip_widget_refresh
             "${PLASCAN_GUI_TEST_RUNTIME_MODIFICATIONS}")
 
 add_executable(test_browser_debug_bridge
+    test_application_shutdown_coordinator.cpp
     test_browser_debug_bridge.cpp
 )
 target_link_libraries(test_browser_debug_bridge PRIVATE
@@ -1697,3 +1548,9 @@ target_include_directories(test_project_session_context PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/terrain
 )
 gtest_discover_tests(test_project_session_context)
+
+# Application code may depend on public numerical and geometry contracts only.
+add_test(NAME PlaScan.NumericalApiBoundary
+    COMMAND ${CMAKE_COMMAND}
+        "-DPLASCAN_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_numerical_api_boundary.cmake")

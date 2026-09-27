@@ -24,11 +24,11 @@ TEST(BundleAdjustCliGTest, SourceExposesLidarCompareOptionsAndHeadlessDefaults)
         "bool exportEvalPlot = false;",
         "--export-eval-plot",
         "options.exportEvalPlot = exportEvalPlot;",
-        "baInput.surveyControlTrackCount > 0",
-        "baOptions.enableControlPointConstraints = true",
-        "baInput.scaleBarConstraints",
-        "baOptions.enableScaleBarConstraints = true",
-        "baOptions.scaleBarConstraints = baInput.scaleBarConstraints",
+        "input.surveyControlTrackCount > 0",
+        "options.enableControlPointConstraints =",
+        "input.scaleBarConstraints",
+        "options.enableScaleBarConstraints =",
+        "options.scaleBarConstraints = input.scaleBarConstraints",
         "survey_control_tracks",
         "scale_bars",
     });
@@ -137,7 +137,7 @@ TEST(BundleAdjustCliGTest, FailedStrictAbGateDoesNotWriteLaserCameras)
         QStringLiteral("if (failOnQualityGate && !quality_gate_passed)"));
     ASSERT_GE(gateGuard, 0);
     const qsizetype cameraWriteback = source.indexOf(
-        QStringLiteral("projectSession.updateCameraInstances"), gateGuard);
+        QStringLiteral("projectSession.upsertNativeCameraInstances"), gateGuard);
     ASSERT_GE(cameraWriteback, 0);
     EXPECT_LT(gateGuard, cameraWriteback);
     EXPECT_NE(source.indexOf(QStringLiteral("质量门禁失败，未写回相机"), gateGuard), -1);

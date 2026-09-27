@@ -4,6 +4,8 @@
 #include <chrono>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <string>
 
 #include "engine/PinholeEngine.h"
 #include "engine/RpcEngine.h"
@@ -17,6 +19,23 @@ namespace
     namespace engine = xjw::aerial_triangulation::engine;
     using namespace xjw::common::file;
     using Json = nlohmann::json;
+
+    std::shared_ptr<const placamera::FramePinholeModel> makePinholeCamera(const char* imageId)
+    {
+        const placamera::FrameId frame("world");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId(std::string("definition-") + imageId),
+            placamera::FrameIntrinsics{500.0, 500.0, 320.0, 240.0, 1.0, 1, 1},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId(std::string("instance-") + imageId),
+            placamera::ImageId(imageId),
+            definition,
+            placamera::ImageSize{640, 480},
+            placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+    }
 
     class StandardAerialEngineTest : public testing::Test
     {
@@ -129,9 +148,8 @@ namespace
         engine::PinholeInput input;
         input.graph = std::make_shared<engine::TiePointGraph>();
         EXPECT_FALSE(engine::runPinhole(input).success);
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(500, 500, 320, 240);
-        input.images = {{0, _images[0], camera, "sensor"}, {0, _images[1], camera, "sensor"}};
+        input.images = {{0, _images[0], makePinholeCamera("first"), "sensor"},
+                        {0, _images[1], makePinholeCamera("second"), "sensor"}};
         EXPECT_NE(engine::runPinhole(input).summary.find("ID"), std::string::npos);
         input.images[1].id = 1;
         auto graph = std::make_shared<engine::TiePointGraph>();
@@ -140,13 +158,35 @@ namespace
         EXPECT_NE(engine::runPinhole(input).summary.find("未准备"), std::string::npos);
     }
 
+    TEST_F(StandardAerialEngineTest, RejectsMissingPlaCameraInstance)
+    {
+        engine::PinholeInput input;
+        input.graph = std::make_shared<engine::TiePointGraph>();
+        input.images = {{0, _images[0], makePinholeCamera("first"), "sensor"}, {1, _images[1], nullptr, "sensor"}};
+
+        const auto result = engine::runPinhole(input);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.summary.find("PlaCamera"), std::string::npos);
+    }
+
+    TEST_F(StandardAerialEngineTest, RejectsDuplicateCanonicalCameraIdentity)
+    {
+        engine::PinholeInput input;
+        input.graph = std::make_shared<engine::TiePointGraph>();
+        const auto camera = makePinholeCamera("same");
+        input.images = {{0, _images[0], camera, "sensor"}, {1, _images[1], camera, "sensor"}};
+
+        const auto result = engine::runPinhole(input);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.summary.find("身份重复"), std::string::npos);
+    }
+
     TEST_F(StandardAerialEngineTest, CancelsBothNumericalEntrypointsWithoutQtCallbacks)
     {
         engine::PinholeInput pinhole;
         pinhole.graph = std::make_shared<engine::TiePointGraph>();
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(500, 500, 320, 240);
-        pinhole.images = {{0, _images[0], camera, "sensor"}, {1, _images[1], camera, "sensor"}};
+        pinhole.images = {{0, _images[0], makePinholeCamera("first"), "sensor"},
+                          {1, _images[1], makePinholeCamera("second"), "sensor"}};
         pinhole.cancelFlag = std::make_shared<std::atomic<bool>>(true);
         EXPECT_EQ(engine::runPinhole(pinhole).summary, "用户取消");
         engine::RpcInput rpc;

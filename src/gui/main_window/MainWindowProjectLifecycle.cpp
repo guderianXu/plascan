@@ -12,6 +12,7 @@
 #include "ProjectDashboardWidget.h"
 #include "project/ProjectSessionModel.h"
 #include "ProjectLifecyclePresenter.h"
+#include "ApplicationShutdownCoordinator.h"
 #include "project/services/ProjectServiceContainer.h"
 #include "project/services/ProjectSession.h"
 #include "ProjectUiHydrator.h"
@@ -389,6 +390,19 @@ void MainWindow::applyUiSettings(const QJsonObject& ui)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (_shutdownReadyToClose)
+    {
+        event->accept();
+        QMainWindow::closeEvent(event);
+        return;
+    }
+
+    if (_shutdownCoordinator && _shutdownCoordinator->isShutdownInProgress())
+    {
+        event->ignore();
+        return;
+    }
+
     if (_projectLifecyclePresenter && _projectLifecyclePresenter->isCloseSavePending())
     {
         event->ignore();
@@ -417,7 +431,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
         if (btn == QMessageBox::Save)
         {
-            _projectLifecyclePresenter->requestCloseAfterSave();
+            if (!_projectLifecyclePresenter || !_projectLifecyclePresenter->requestCloseAfterSave())
+            {
+                statusBar()->showMessage(tr("项目保存尚未启动，已取消退出。"), 5000);
+            }
             event->ignore();
             return;
         }
@@ -430,6 +447,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (_config)
     {
         _config->windowState()->save(this);
+    }
+
+    if (_shutdownCoordinator)
+    {
+        event->ignore();
+        setEnabled(false);
+        if (!_shutdownCoordinator->requestShutdown())
+        {
+            setEnabled(true);
+        }
+        return;
     }
 
     event->accept();

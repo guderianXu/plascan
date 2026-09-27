@@ -1,11 +1,6 @@
 #include "PointCloudWorkflowConfig.h"
 
-#ifdef PLAPOINT_WITH_CUDA
-#include <plapoint/gpu/cuda_check.h>
-#endif
-#ifdef PLAPOINT_WITH_OPENCL
-#include <plapoint/opencl/opencl_runtime.h>
-#endif
+#include <plapoint/core/processing_policy.h>
 
 #include <QtGlobal>
 
@@ -54,9 +49,9 @@ QString processingDeviceUnavailableReason(plapoint::ProcessingDevice device)
     if (device == plapoint::ProcessingDevice::CUDA)
     {
 #ifdef PLAPOINT_WITH_CUDA
-        return plapoint::gpu::hasUsableCudaDevice()
-            ? QString()
-            : QStringLiteral("请求的 CUDA 点云处理后端没有可用设备");
+        return plapoint::isProcessingDeviceAvailable(plapoint::ProcessingDevice::CUDA)
+                   ? QString()
+                   : QStringLiteral("请求的 CUDA 点云处理后端没有可用设备");
 #else
         return QStringLiteral("PlaPoint 构建时未启用 CUDA 点云处理后端");
 #endif
@@ -64,9 +59,9 @@ QString processingDeviceUnavailableReason(plapoint::ProcessingDevice device)
     if (device == plapoint::ProcessingDevice::OpenCL)
     {
 #ifdef PLAPOINT_WITH_OPENCL
-        return plapoint::opencl::hasUsableOpenClDevice()
-            ? QString()
-            : QStringLiteral("请求的 OpenCL 点云处理后端没有可用 GPU 或在线编译器");
+        return plapoint::isProcessingDeviceAvailable(plapoint::ProcessingDevice::OpenCL)
+                   ? QString()
+                   : QStringLiteral("请求的 OpenCL 点云处理后端没有可用 GPU 或在线编译器");
 #else
         return QStringLiteral("PlaPoint 构建时未启用 OpenCL 点云处理后端");
 #endif

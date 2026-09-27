@@ -21,7 +21,10 @@ from env_common import (
 
 BASE_PACKAGES = [
     "numpy",
+    "pillow",
     "scipy",
+    "rasterio",
+    "trimesh",
     "opencv-python>=5.0,<6",
     "kornia",
     "git+https://github.com/cvg/LightGlue.git",

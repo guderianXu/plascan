@@ -181,15 +181,11 @@ int bitCount(std::uint16_t mask)
     return count;
 }
 
-bool surfaceNormalAt(const cv::Mat& depth,
-                     int row,
-                     int column,
-                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                     cv::Vec3f* normal)
+bool surfaceNormalAt(
+    const cv::Mat& depth, int row, int column, const placamera::FramePinholeModel& camera, cv::Vec3f* normal)
 {
-    if (!normal || depth.type() != CV_32FC1 || !camera.isValid() ||
-        row <= 0 || row + 1 >= depth.rows ||
-        column <= 0 || column + 1 >= depth.cols)
+    if (!normal || depth.type() != CV_32FC1 || row <= 0 || row + 1 >= depth.rows || column <= 0 ||
+        column + 1 >= depth.cols)
     {
         return false;
     }
@@ -197,32 +193,28 @@ bool surfaceNormalAt(const cv::Mat& depth,
     const float right_depth = depth.at<float>(row, column + 1);
     const float upper_depth = depth.at<float>(row - 1, column);
     const float lower_depth = depth.at<float>(row + 1, column);
-    if (!validDepth(left_depth) || !validDepth(right_depth) ||
-        !validDepth(upper_depth) || !validDepth(lower_depth))
+    if (!validDepth(left_depth) || !validDepth(right_depth) || !validDepth(upper_depth) || !validDepth(lower_depth))
     {
         return false;
     }
-    auto unproject = [&](double x, double y, float value, cv::Vec3f *point)
+    auto unproject = [&](double x, double y, float value, cv::Vec3f* point)
     {
-        const double pixel[2] = {x, y};
-        double world[3] = {};
-        if (!camera.unprojectPixel(pixel, value, world))
+        const auto ground = camera.imageToGroundAtDepth({x, y}, value);
+        if (!ground)
         {
             return false;
         }
-        *point = cv::Vec3f(static_cast<float>(world[0]),
-                          static_cast<float>(world[1]),
-                          static_cast<float>(world[2]));
+        *point = cv::Vec3f(static_cast<float>(ground.value().position[0]),
+                           static_cast<float>(ground.value().position[1]),
+                           static_cast<float>(ground.value().position[2]));
         return true;
     };
     cv::Vec3f left;
     cv::Vec3f right;
     cv::Vec3f upper;
     cv::Vec3f lower;
-    if (!unproject(column - 1, row, left_depth, &left) ||
-        !unproject(column + 1, row, right_depth, &right) ||
-        !unproject(column, row - 1, upper_depth, &upper) ||
-        !unproject(column, row + 1, lower_depth, &lower))
+    if (!unproject(column - 1, row, left_depth, &left) || !unproject(column + 1, row, right_depth, &right) ||
+        !unproject(column, row - 1, upper_depth, &upper) || !unproject(column, row + 1, lower_depth, &lower))
     {
         return false;
     }
@@ -241,7 +233,7 @@ bool normalsAgree(const cv::Mat& surface,
                   int first_column,
                   int second_row,
                   int second_column,
-                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                  const placamera::FramePinholeModel& camera,
                   float maximum_angle_degrees)
 {
     cv::Vec3f first;
@@ -252,8 +244,7 @@ bool normalsAgree(const cv::Mat& surface,
         return false;
     }
     const float cosine = std::clamp(std::fabs(first.dot(second)), 0.0f, 1.0f);
-    const float angle = std::acos(cosine) * 180.0f /
-        static_cast<float>(CV_PI);
+    const float angle = std::acos(cosine) * 180.0f / static_cast<float>(CV_PI);
     return angle <= maximum_angle_degrees;
 }
 
@@ -326,30 +317,32 @@ bool agreesWithLocalReference(const cv::Mat &reference_depth,
 
 } // namespace
 
-cv::Mat
-projectSourceDepthToReference(const cv::Mat& source_depth,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
-                              const cv::Size& reference_size,
-                              float maximum_projection_distance_pixels,
-                              std::uint64_t* projected_candidate_count,
-                              int row_worker_count,
-                              const std::atomic<bool>* cancelled)
+cv::Mat projectSourceDepthToReference(const cv::Mat& source_depth,
+                                      const placamera::FramePinholeModel& source_camera,
+                                      const placamera::FramePinholeModel& reference_camera,
+                                      const cv::Size& reference_size,
+                                      float maximum_projection_distance_pixels,
+                                      std::uint64_t* projected_candidate_count,
+                                      int row_worker_count,
+                                      const std::atomic<bool>* cancelled)
 {
     if (projected_candidate_count)
     {
         *projected_candidate_count = 0;
     }
     if (source_depth.empty() || source_depth.type() != CV_32FC1 ||
-        !source_camera.isValid() || !reference_camera.isValid() ||
-        reference_size.width <= 0 || reference_size.height <= 0)
+        source_camera.groundFrame() != reference_camera.groundFrame() ||
+        source_camera.imageSize().samples != source_depth.cols ||
+        source_camera.imageSize().lines != source_depth.rows ||
+        reference_camera.imageSize().samples != reference_size.width ||
+        reference_camera.imageSize().lines != reference_size.height || reference_size.width <= 0 ||
+        reference_size.height <= 0)
     {
         return {};
     }
 
     cv::Mat projected(reference_size, CV_32FC1, cv::Scalar(0.0f));
-    const float maximum_distance = std::clamp(
-        maximum_projection_distance_pixels, 0.25f, 1.5f);
+    const float maximum_distance = std::clamp(maximum_projection_distance_pixels, 0.25f, 1.5f);
     std::atomic<std::uint64_t> candidate_count{0};
     parallelForRows(
         source_depth.rows,
@@ -357,74 +350,67 @@ projectSourceDepthToReference(const cv::Mat& source_depth,
         cancelled,
         [&](int source_row)
         {
-        std::uint64_t row_candidate_count = 0;
-        const float *source_values = source_depth.ptr<float>(source_row);
-        for (int source_column = 0; source_column < source_depth.cols; ++source_column)
-        {
-            if ((source_column & 63) == 0 && cancelled &&
-                cancelled->load(std::memory_order_relaxed))
+            std::uint64_t row_candidate_count = 0;
+            const float* source_values = source_depth.ptr<float>(source_row);
+            for (int source_column = 0; source_column < source_depth.cols; ++source_column)
             {
-                break;
-            }
-            const float source_value = source_values[source_column];
-            if (!validDepth(source_value))
-            {
-                continue;
-            }
-            const double source_pixel[2] = {
-                static_cast<double>(source_column), static_cast<double>(source_row)};
-            double world[3] = {};
-            if (!source_camera.unprojectPixel(source_pixel, source_value, world))
-            {
-                continue;
-            }
-            double reference_pixel[2] = {};
-            double reference_value = 0.0;
-            if (!reference_camera.projectWorldPointWithDepth(
-                    world, reference_pixel, reference_value) ||
-                !std::isfinite(reference_value) || reference_value <= 0.0)
-            {
-                continue;
-            }
-
-            const int first_column = static_cast<int>(std::floor(reference_pixel[0]));
-            const int first_row = static_cast<int>(std::floor(reference_pixel[1]));
-            for (int delta_row = 0; delta_row <= 1; ++delta_row)
-            {
-                for (int delta_column = 0; delta_column <= 1; ++delta_column)
+                if ((source_column & 63) == 0 && cancelled && cancelled->load(std::memory_order_relaxed))
                 {
-                    const int column = first_column + delta_column;
-                    const int row = first_row + delta_row;
-                    if (column < 0 || column >= projected.cols ||
-                        row < 0 || row >= projected.rows)
+                    break;
+                }
+                const float source_value = source_values[source_column];
+                if (!validDepth(source_value))
+                {
+                    continue;
+                }
+                const auto ground = source_camera.imageToGroundAtDepth(
+                    {static_cast<double>(source_column), static_cast<double>(source_row)}, source_value);
+                if (!ground)
+                {
+                    continue;
+                }
+                const auto projection = reference_camera.groundToImage(ground.value());
+                if (!projection || !projection.value().positiveDepth ||
+                    !std::isfinite(*projection.value().positiveDepth) || *projection.value().positiveDepth <= 0.0)
+                {
+                    continue;
+                }
+                const double reference_pixel[2] = {projection.value().image.sample, projection.value().image.line};
+                const double reference_value = *projection.value().positiveDepth;
+
+                const int first_column = static_cast<int>(std::floor(reference_pixel[0]));
+                const int first_row = static_cast<int>(std::floor(reference_pixel[1]));
+                for (int delta_row = 0; delta_row <= 1; ++delta_row)
+                {
+                    for (int delta_column = 0; delta_column <= 1; ++delta_column)
                     {
-                        continue;
+                        const int column = first_column + delta_column;
+                        const int row = first_row + delta_row;
+                        if (column < 0 || column >= projected.cols || row < 0 || row >= projected.rows)
+                        {
+                            continue;
+                        }
+                        const double offset_x = reference_pixel[0] - column;
+                        const double offset_y = reference_pixel[1] - row;
+                        if (std::sqrt(offset_x * offset_x + offset_y * offset_y) > maximum_distance)
+                        {
+                            continue;
+                        }
+                        const float candidate = static_cast<float>(reference_value);
+                        float& stored_value = projected.ptr<float>(row)[column];
+                        std::atomic_ref<float> stored(stored_value);
+                        float observed = stored.load(std::memory_order_relaxed);
+                        while ((!validDepth(observed) || candidate < observed) &&
+                               !stored.compare_exchange_weak(
+                                   observed, candidate, std::memory_order_relaxed, std::memory_order_relaxed))
+                        {
+                        }
+                        ++row_candidate_count;
                     }
-                    const double offset_x = reference_pixel[0] - column;
-                    const double offset_y = reference_pixel[1] - row;
-                    if (std::sqrt(offset_x * offset_x + offset_y * offset_y) >
-                        maximum_distance)
-                    {
-                        continue;
-                    }
-                    const float candidate = static_cast<float>(reference_value);
-                    float &stored_value = projected.ptr<float>(row)[column];
-                    std::atomic_ref<float> stored(stored_value);
-                    float observed = stored.load(std::memory_order_relaxed);
-                    while ((!validDepth(observed) || candidate < observed) &&
-                           !stored.compare_exchange_weak(
-                               observed,
-                               candidate,
-                               std::memory_order_relaxed,
-                               std::memory_order_relaxed))
-                    {
-                    }
-                    ++row_candidate_count;
                 }
             }
-        }
-        candidate_count.fetch_add(row_candidate_count, std::memory_order_relaxed);
-    });
+            candidate_count.fetch_add(row_candidate_count, std::memory_order_relaxed);
+        });
     if (projected_candidate_count)
     {
         *projected_candidate_count = candidate_count.load(std::memory_order_relaxed);
@@ -954,23 +940,23 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     return result;
 }
 
-CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
-    cv::Mat& reference_depth,
-    const cv::Mat& support_mask,
-    const std::vector<cv::Mat>& projected_source_depths,
-    const CrossViewHoleRepairOptions& options,
-    cv::Mat* reference_confidence,
-    cv::Mat* consistent_source_votes,
-    cv::Mat* repaired_mask,
-    cv::Mat* geometry_source_mask,
-    cv::Mat* source_inverse_depth_sum,
-    cv::Mat* source_inverse_depth_squared_sum,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* reference_camera,
-    const cv::Mat* guide_gray,
-    cv::Mat* anchored_interpolation_mask,
-    int row_worker_count,
-    const std::atomic<bool>* cancelled,
-    const cv::Mat* native_interpolation_anchor_eligibility_mask)
+CrossViewHoleRepairStats
+repairDepthHolesFromProjectedSources(cv::Mat& reference_depth,
+                                     const cv::Mat& support_mask,
+                                     const std::vector<cv::Mat>& projected_source_depths,
+                                     const CrossViewHoleRepairOptions& options,
+                                     cv::Mat* reference_confidence,
+                                     cv::Mat* consistent_source_votes,
+                                     cv::Mat* repaired_mask,
+                                     cv::Mat* geometry_source_mask,
+                                     cv::Mat* source_inverse_depth_sum,
+                                     cv::Mat* source_inverse_depth_squared_sum,
+                                     const placamera::FramePinholeModel* reference_camera,
+                                     const cv::Mat* guide_gray,
+                                     cv::Mat* anchored_interpolation_mask,
+                                     int row_worker_count,
+                                     const std::atomic<bool>* cancelled,
+                                     const cv::Mat* native_interpolation_anchor_eligibility_mask)
 {
     CrossViewHoleRepairStats stats;
     if (reference_depth.empty() || reference_depth.type() != CV_32FC1 ||
@@ -1263,15 +1249,15 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     {
         return stats;
     }
-    if (!options.enableTwoSourceGrowth || !has_votes || !has_geometry_evidence ||
-        !reference_camera || !reference_camera->isValid())
+    if (!options.enableTwoSourceGrowth || !has_votes || !has_geometry_evidence || !reference_camera ||
+        reference_camera->imageSize().samples != reference_depth.cols ||
+        reference_camera->imageSize().lines != reference_depth.rows)
     {
         interpolate_anchored_components();
         return stats;
     }
 
-    const int maximum_growth_distance = std::clamp(
-        options.maximumGrowthDistancePixels, 1, 8);
+    const int maximum_growth_distance = std::clamp(options.maximumGrowthDistancePixels, 1, 8);
     const float maximum_growth_spread = std::clamp(
         options.maximumGrowthInverseDepthSpread, 0.001f, 0.05f);
     const float maximum_normal_angle = std::clamp(

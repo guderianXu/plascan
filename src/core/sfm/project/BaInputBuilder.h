@@ -8,12 +8,14 @@
  * 追加完整标记系统。输出把求解输入、统计和结果回写绑定放在同一索引空间中。
  */
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraInstanceUpdate.h"
-#include "BundleAdjustSolver.h"
+#include <placoordinate/context/CoordinateContext.h>
 #include "model/MarkerSet.h"
 #include "project/ProjectMatchInputReader.h"
 #include "registration/ControlNetworkSolver.h"
+
+#include <placamera/frame_camera.h>
+
+#include <plabundle/problem.h>
 
 #include <QJsonObject>
 #include <QMap>
@@ -21,11 +23,6 @@
 
 #include <vector>
 #include <memory>
-
-namespace xjw::coordinate_system
-{
-    class CoordinateContext;
-}
 
 namespace xjw::core::project
 {
@@ -41,20 +38,19 @@ namespace xjw::core::project
     /**
      * @brief 从工程构建出的 BA 输入及来源统计。
      *
-     * `cameras`、`imageIdByIndex`、`imagePathByIndex` 和所有 BAObservation::cameraIndex 共享索引；
+     * `cameraInstances`、`imageIdByIndex`、`imagePathByIndex` 和所有 Observation::cameraIndex 共享索引；
      * `tracks` 与 Marker/ScaleBar binding 中的 trackIndex 共享索引。调用方若过滤或重排
      * 任一数组，必须同步更新绑定。
      */
     struct BaInputBuildResult
     {
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras; ///< BA 输入数值状态。
-        std::vector<std::shared_ptr<const xjw::camera_models::frame_pinhole::FramePinholeInstance>>
-            cameraInstances;                                        ///< 与 cameras 对应的 typed instance 身份。
-        xjw::camera_project::CameraImageIds imageIdByIndex;         ///< 与 cameras 对应的 canonical ImageId。
-        QStringList imagePathByIndex;                               ///< 相机索引到影像路径。
-        QMap<QString, QJsonObject> beforeCamMeta;                   ///< 更新前相机 JSON 快照。
-        std::vector<xjw::BATrack> tracks;                           ///< 自动连接点和人工控制轨迹。
-        std::vector<xjw::BAScaleBarConstraint> scaleBarConstraints; ///< 跨 track 尺度约束。
+        std::vector<std::shared_ptr<const placamera::FramePinholeModel>>
+            cameraInstances; ///< 控制网定向后的 canonical 相机实例。
+        std::vector<placamera::ImageId> imageIdByIndex; ///< 与 cameraInstances 对应的 canonical ImageId。
+        QStringList imagePathByIndex;                          ///< 相机索引到影像路径。
+        QMap<QString, QJsonObject> beforeCamMeta;              ///< 更新前相机 JSON 快照。
+        std::vector<plabundle::Track> tracks;                  ///< 自动连接点和人工控制轨迹。
+        std::vector<plabundle::ScaleBarConstraint> scaleBarConstraints; ///< 跨 track 尺度约束。
 
         // 自动匹配轨迹统计。
         int indexedObservationCount = 0; ///< `.pimatch` 中带稳定特征索引的观测数。
@@ -103,7 +99,7 @@ namespace xjw::core::project
     struct MarkerBaInput
     {
         const control_points::MarkerSet* markerSet = nullptr; ///< 调用期间必须保持有效。
-        const xjw::coordinate_system::CoordinateContext* coordinateContext = nullptr; ///< 可选权威坐标上下文。
+        const placoordinate::CoordinateContext* coordinateContext = nullptr; ///< 可选权威坐标上下文。
     };
 
     /**

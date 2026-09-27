@@ -15,26 +15,23 @@ namespace xjw::mvs
         // MVS is the last numerical consumer in the reconstruction chain.  Do
         // the same strict state/frame gate used by SfM and BA before any
         // raster, CUDA, or workspace side effect is started.
-        std::optional<xjw::coordinate_system::CoordinateFrameId> commonFrame;
+        std::optional<placoordinate::CoordinateFrameId> commonFrame;
         for (std::size_t viewIndex = 0; viewIndex < _views.size(); ++viewIndex)
         {
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _views[viewIndex].camera;
-            std::string cameraError;
-            if (!camera.isValid() || !camera.validateNumericalState(&cameraError))
+            const auto& camera = _views[viewIndex].camera;
+            if (!camera)
             {
                 const QString message =
-                    QStringLiteral("MVS 影像相机数值状态非法[%1]：%2")
-                        .arg(static_cast<qulonglong>(viewIndex))
-                        .arg(QString::fromStdString(cameraError.empty() ? std::string("相机未准备") : cameraError));
+                    QStringLiteral("MVS 影像 PlaCamera 模型缺失[%1]").arg(static_cast<qulonglong>(viewIndex));
                 errorOccurred(message);
                 emitFinishedOnce(false);
                 return;
             }
             if (!commonFrame.has_value())
             {
-                commonFrame = camera.worldFrame();
+                commonFrame = camera->groundFrame();
             }
-            else if (*commonFrame != camera.worldFrame())
+            else if (*commonFrame != camera->groundFrame())
             {
                 const QString message = QStringLiteral("MVS 相机集合混用 world frame；必须先显式归一化");
                 errorOccurred(message);
@@ -257,7 +254,15 @@ namespace xjw::mvs
             frame.preparedRasterSize = cv::Size(_views[static_cast<std::size_t>(frame_index)].imageWidth,
                                                 _views[static_cast<std::size_t>(frame_index)].imageHeight);
             frame.effectiveNativeFinalDepthGrid = true;
-            frame.cameraModel = recovered_frame.camera;
+            if (!recovered_frame.cameraModel ||
+                recovered_frame.cameraModel->imageSize().samples != recovered_frame.depth.cols ||
+                recovered_frame.cameraModel->imageSize().lines != recovered_frame.depth.rows)
+            {
+                errorOccurred(QStringLiteral("recovered 深度相机缺少有效 identity/frame 或与深度网格尺寸不一致"));
+                emitFinishedOnce(false);
+                return;
+            }
+            frame.cameraModel = std::move(recovered_frame.cameraModel);
             frame.sourceViewIndices = std::move(recovered_frame.sourceViewIndices);
             frame.requestedSourceViewCount = 16;
             frame.sourceViewShortfall =

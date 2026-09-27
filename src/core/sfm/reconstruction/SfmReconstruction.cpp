@@ -92,8 +92,7 @@ namespace xjw
         return count;
     }
 
-    void SfmReconstruction::registerImage(ImageId imageId,
-                                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    void SfmReconstruction::registerImage(ImageId imageId, const placamera::FramePinholeNumericState& camera)
     {
         auto it = imageDataMap.find(imageId);
         if (it == imageDataMap.end())
@@ -101,7 +100,7 @@ namespace xjw
             return;
         }
         it->second.registered = true;
-        cameraMap[imageId] = camera;
+        cameraMap.insert_or_assign(imageId, camera);
     }
 
     void SfmReconstruction::deregisterImage(ImageId imageId)
@@ -118,7 +117,7 @@ namespace xjw
     // 相机管理
     // ============================================================
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState& SfmReconstruction::camera(ImageId imageId)
+    placamera::FramePinholeNumericState& SfmReconstruction::camera(ImageId imageId)
     {
         auto it = cameraMap.find(imageId);
         if (it == cameraMap.end())
@@ -128,7 +127,7 @@ namespace xjw
         return it->second;
     }
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& SfmReconstruction::camera(ImageId imageId) const
+    const placamera::FramePinholeNumericState& SfmReconstruction::camera(ImageId imageId) const
     {
         auto it = cameraMap.find(imageId);
         if (it == cameraMap.end())

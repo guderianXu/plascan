@@ -39,7 +39,7 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
                        "--max-point-iterations", "--max-camera-iterations", "--huber-delta",
                        "--damping", "--finite-diff-eps", "--step-tolerance", "--ba-max-dense-schur-cameras"):
             self.assertNotIn(option, source)
-        benchmark = (ROOT / "src/core/bundle_adjust/tools/ba_backend_benchmark.cpp").read_text(encoding="utf-8")
+        benchmark = (ROOT / "3rdparty/plabundle/benchmark/plabundle_benchmark.cpp").read_text(encoding="utf-8")
         self.assertNotIn("legacy_cpu", benchmark)
         self.assertNotIn("--max-dense-schur-cameras", benchmark)
 

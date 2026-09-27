@@ -80,7 +80,7 @@ Agisoft 表头 `#Name, Lat, Lon, Ell.H(m)` 会明确映射为
 这些字段作为 raw reference 保留，并不表示可以直接进入数值解算。BA 与空三入口会调用
 `resolveMetricReferenceCoordinate()`：无 context 时将投影/地心线性 CRS 的坐标与 sigma 规范轴序并换算为米；
 EPSG:4979 等角度坐标直接拒绝。有显式、米制 `CoordinateContext` 时，源 CRS 必须已经注册，再由
-`coordinate_system_gdal` 转换到唯一 solver reference，并用数值 Jacobian 传播对角标准差。同一次求解中的
+`placoordinate::gdal` 转换到唯一 solver reference，并用数值 Jacobian 传播对角标准差。同一次求解中的
 混合 context、solver reference 或垂直基准仍会拒绝。
 
 ## 目录
@@ -91,8 +91,8 @@ control_points/
 ├── io/             JSON sidecar、迁移、CSV 导入导出
 ├── commands/       可撤销 MarkerChangeSet
 ├── detection/      AprilTag、非编码检测、合并和复核队列
-├── geometry/       三角化、预测和亚像素几何
-├── reference/      raw/Qt DTO、旧线性 CRS 归一化与 solver 前门禁；context-aware 变换来自 coordinate_system
+├── geometry/       直接使用 PlaCamera 成像射线与投影的标记三角化、预测和亚像素几何
+├── reference/      raw/Qt DTO、旧线性 CRS 归一化与 solver 前门禁；context-aware 变换来自 PlaCoordinate
 ├── registration/   PriorTrack 和控制网络解算
 ├── quality/        投影、控制点、检查点和比例尺报告
 ├── print/          共享页面渲染和 PDF 输出

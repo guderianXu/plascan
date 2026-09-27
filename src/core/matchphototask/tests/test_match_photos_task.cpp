@@ -8,15 +8,13 @@
 #include "MatchingStage.h"
 #include "MatchPhotosMaskSupport.h"
 #include "PlaMatchHctPairPreselector.h"
-#include "ProjectCameraIO.h"
+#include "project/ProjectCameraIO.h"
 #include "ReferencePoseEpipolarGeometry.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
-#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
 #include "plamatch_hct/PlaMatchHctAlgorithm.h"
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
 
 #include <QDir>
 #include <QJsonObject>
@@ -30,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -39,45 +38,38 @@
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeGuidedTestCamera(
-        double centerX, const std::string& imageId = "guided-image", const std::string& frame = "world")
+    placamera::FramePinholeModel makeGuidedTestCamera(double centerX,
+                                                      const std::string& imageId = "guided-image",
+                                                      const std::string& frame = "world",
+                                                      placamera::BrownConradyDistortion distortion = {})
     {
-        using namespace xjw::camera_models::frame_pinhole;
-        const auto definition =
-            FramePinholeDefinition::create(xjw::camera_core::CameraDefinitionId("guided-definition-" + imageId),
-                                           Intrinsics{1000.0, 1000.0, 500.0, 400.0, 1.0, 1, 1},
-                                           Distortion{},
-                                           PixelConvention::PixelCenter,
-                                           xjw::coordinate_system::CoordinateFrameId(frame));
-        const auto pose = xjw::camera_core::Pose::create(xjw::coordinate_system::CoordinateFrameId(frame),
-                                                         {centerX, 0.0, 0.0},
-                                                         {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
-        const auto instance =
-            FramePinholeInstance::create(xjw::camera_core::CameraInstanceId("guided-instance-" + imageId),
-                                         xjw::camera_core::ImageId(imageId),
-                                         definition,
-                                         {1000, 800},
-                                         pose);
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
-        std::string error;
-        EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &state, &error))
-            << error;
-        return state;
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("guided-definition-" + imageId),
+            placamera::FrameIntrinsics{1000.0, 1000.0, 500.0, 400.0, 1.0, 1, 1},
+            distortion,
+            placamera::PixelConvention::PixelCenter,
+            placamera::FrameId(frame));
+        const auto pose = placamera::Pose::create(
+            placamera::FrameId(frame), {centerX, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+        return placamera::FramePinholeModel::create(placamera::CameraInstanceId("guided-instance-" + imageId),
+                                                    placamera::ImageId(imageId),
+                                                    definition,
+                                                    placamera::ImageSize{1000, 800},
+                                                    pose);
     }
 
-    xjw::camera_reference::ReferenceCameraGeometry
+    placamera::reference::ReferenceCameraGeometry
     makeGuidedTestGeometry(double centerX, const std::string& imageId, const std::string& frame = "world")
     {
-        std::string error;
-        auto geometry = xjw::camera_reference::ReferenceCameraGeometry::create(
-            makeGuidedTestCamera(centerX, imageId, frame), &error);
-        EXPECT_TRUE(geometry.has_value()) << error;
-        return std::move(*geometry);
+        auto geometry = placamera::reference::ReferenceCameraGeometry::create(
+            std::make_shared<const placamera::FramePinholeModel>(makeGuidedTestCamera(centerX, imageId, frame)));
+        EXPECT_TRUE(geometry) << geometry.message();
+        return geometry.takeValue();
     }
 
-    std::vector<xjw::camera_core::ImageId> imageIdsFor(const QStringList& images)
+    std::vector<placamera::ImageId> imageIdsFor(const QStringList& images)
     {
-        std::vector<xjw::camera_core::ImageId> ids;
+        std::vector<placamera::ImageId> ids;
         ids.reserve(static_cast<std::size_t>(images.size()));
         for (const QString& image : images)
         {
@@ -259,10 +251,10 @@ TEST(PlaMatchHctPairPreselectorTest, MatchesReferenceModeFallbackSemantics)
     EXPECT_TRUE(output.restrictPairs);
     options.pairPolicy.maxPairs = 0;
 
-    xjw::camera_reference::ReferenceCameraGeometryMap estimatedCameras;
-    estimatedCameras.emplace(xjw::camera_core::ImageId("a.png"), makeGuidedTestGeometry(0.0, "a.png"));
-    estimatedCameras.emplace(xjw::camera_core::ImageId("b.png"), makeGuidedTestGeometry(10.0, "b.png"));
-    estimatedCameras.emplace(xjw::camera_core::ImageId("c.png"), makeGuidedTestGeometry(11.0, "c.png"));
+    placamera::reference::ReferenceCameraGeometryMap estimatedCameras;
+    estimatedCameras.emplace(placamera::ImageId("a.png"), makeGuidedTestGeometry(0.0, "a.png"));
+    estimatedCameras.emplace(placamera::ImageId("b.png"), makeGuidedTestGeometry(10.0, "b.png"));
+    estimatedCameras.emplace(placamera::ImageId("c.png"), makeGuidedTestGeometry(11.0, "c.png"));
     options.referencePreselectionMode = xjw::matchphotos::ReferencePreselectionMode::Estimated;
     ASSERT_TRUE(xjw::matchphotos::PlaMatchHctPairPreselector::select(images,
                                                                      cache,
@@ -310,19 +302,19 @@ TEST(PlaMatchHctPairPreselectorTest, UsesPositionOnlyReferenceWithoutCoarseFeatu
     options.useGenericPreselection = false;
     options.useReferencePreselection = true;
     options.referencePreselectionNeighbors = 1;
-    xjw::camera_reference::ReferenceCameraPositionMap positions;
-    positions.emplace(
-        xjw::camera_core::ImageId("a.png"),
-        *xjw::camera_reference::ReferenceCameraPosition::create(
-            xjw::camera_core::ImageId("a.png"), xjw::coordinate_system::CoordinateFrameId("world"), {0.0, 0.0, 0.0}));
-    positions.emplace(
-        xjw::camera_core::ImageId("b.png"),
-        *xjw::camera_reference::ReferenceCameraPosition::create(
-            xjw::camera_core::ImageId("b.png"), xjw::coordinate_system::CoordinateFrameId("world"), {100.0, 0.0, 0.0}));
-    positions.emplace(
-        xjw::camera_core::ImageId("c.png"),
-        *xjw::camera_reference::ReferenceCameraPosition::create(
-            xjw::camera_core::ImageId("c.png"), xjw::coordinate_system::CoordinateFrameId("world"), {101.0, 0.0, 0.0}));
+    placamera::reference::ReferenceCameraPositionMap positions;
+    auto positionA = placamera::reference::ReferenceCameraPosition::create(
+        placamera::ImageId("a.png"), placoordinate::CoordinateFrameId("world"), {0.0, 0.0, 0.0});
+    auto positionB = placamera::reference::ReferenceCameraPosition::create(
+        placamera::ImageId("b.png"), placoordinate::CoordinateFrameId("world"), {100.0, 0.0, 0.0});
+    auto positionC = placamera::reference::ReferenceCameraPosition::create(
+        placamera::ImageId("c.png"), placoordinate::CoordinateFrameId("world"), {101.0, 0.0, 0.0});
+    ASSERT_TRUE(positionA);
+    ASSERT_TRUE(positionB);
+    ASSERT_TRUE(positionC);
+    positions.emplace(placamera::ImageId("a.png"), positionA.takeValue());
+    positions.emplace(placamera::ImageId("b.png"), positionB.takeValue());
+    positions.emplace(placamera::ImageId("c.png"), positionC.takeValue());
 
     xjw::matchphotos::PairSelectionResult output;
     xjw::matchphotos::PlaMatchHctPairPreselectionStats stats;
@@ -360,8 +352,9 @@ TEST(ReferencePoseEpipolarGeometryTest, BuildsHorizontalEpipolarConstraint)
 
 TEST(ReferencePoseEpipolarGeometryTest, RejectsDistortedRawPixelGeometry)
 {
-    auto distorted = makeGuidedTestCamera(0.0, "left");
-    distorted.setDistortion(0.01, 0.0, 0.0, 0.0, 0.0);
+    placamera::BrownConradyDistortion distortion;
+    distortion.radialK1 = 0.01;
+    const auto distorted = makeGuidedTestCamera(0.0, "left", "world", distortion);
 
     EXPECT_FALSE(
         xjw::matchphotos::fundamentalFromReferenceCameras(distorted, makeGuidedTestCamera(1.0, "right")).valid);
@@ -375,55 +368,44 @@ TEST(ReferencePoseEpipolarGeometryTest, RejectsDeclaredWorldFrameMismatch)
     EXPECT_FALSE(xjw::matchphotos::fundamentalFromReferenceCameras(first, second).valid);
 }
 
-TEST(ReferenceCameraGeometryTest, RequiresBoundNumericIdentity)
+TEST(ReferenceCameraGeometryTest, RejectsNullPlaCameraModel)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState unbound;
-    std::string error;
-    EXPECT_FALSE(xjw::camera_reference::ReferenceCameraGeometry::create(unbound, &error).has_value());
-    EXPECT_NE(error.find("bound camera instance"), std::string::npos);
+    const auto geometry = placamera::reference::ReferenceCameraGeometry::create(nullptr);
+    EXPECT_FALSE(geometry);
+    EXPECT_NE(geometry.message().find("PlaCamera"), std::string::npos);
 }
 
 TEST(ReferenceCameraGeometryTest, RejectsReferenceOutsideOrderedInputSet)
 {
-    const std::vector<xjw::camera_core::ImageId> imageIds{xjw::camera_core::ImageId("image-a"),
-                                                          xjw::camera_core::ImageId("image-b")};
-    xjw::camera_reference::ReferenceCameraGeometryMap geometries;
-    geometries.emplace(xjw::camera_core::ImageId("image-outside"), makeGuidedTestGeometry(0.0, "image-outside"));
+    const std::vector<placamera::ImageId> imageIds{placamera::ImageId("image-a"),
+                                                          placamera::ImageId("image-b")};
+    placamera::reference::ReferenceCameraGeometryMap geometries;
+    geometries.emplace(placamera::ImageId("image-outside"), makeGuidedTestGeometry(0.0, "image-outside"));
 
-    std::string error;
-    EXPECT_FALSE(xjw::camera_reference::validateReferenceCameraInputs(
-        imageIds, 2, geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &error));
-    EXPECT_NE(error.find("outside the input image set"), std::string::npos);
+    const auto validation = placamera::reference::validateReferenceCameraInputs(
+        imageIds, 2, geometries, placamera::reference::ReferenceCameraPositionMap{});
+    EXPECT_FALSE(validation);
+    EXPECT_NE(validation.message().find("outside the input image set"), std::string::npos);
 }
 
 TEST(ReferenceCameraGeometryTest, RejectsDuplicateOrderedImageIds)
 {
-    const std::vector<xjw::camera_core::ImageId> imageIds{xjw::camera_core::ImageId("image-a"),
-                                                          xjw::camera_core::ImageId("image-a")};
-    xjw::camera_reference::ReferenceCameraGeometryMap geometries;
-    geometries.emplace(xjw::camera_core::ImageId("image-a"), makeGuidedTestGeometry(0.0, "image-a"));
+    const std::vector<placamera::ImageId> imageIds{placamera::ImageId("image-a"),
+                                                          placamera::ImageId("image-a")};
+    placamera::reference::ReferenceCameraGeometryMap geometries;
+    geometries.emplace(placamera::ImageId("image-a"), makeGuidedTestGeometry(0.0, "image-a"));
 
-    std::string error;
-    EXPECT_FALSE(xjw::camera_reference::validateReferenceCameraInputs(
-        imageIds, 2, geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &error));
-    EXPECT_NE(error.find("duplicate identity"), std::string::npos);
+    const auto validation = placamera::reference::validateReferenceCameraInputs(
+        imageIds, 2, geometries, placamera::reference::ReferenceCameraPositionMap{});
+    EXPECT_FALSE(validation);
+    EXPECT_NE(validation.message().find("duplicate identity"), std::string::npos);
 }
 
 TEST(ReferencePoseEpipolarGeometryTest, PreservesDeclaredWorldFrameInProjectCameraMetadata)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState source;
-    source.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
-    source.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-    ASSERT_TRUE(source.bindIdentity(xjw::camera_core::CameraInstanceId("camera-instance"),
-                                    xjw::camera_core::ImageId("image"),
-                                    xjw::coordinate_system::CoordinateFrameId("local-frame")));
-    const QJsonObject metadata = xjw::common::project::serializeFramePinholeNumericState(source);
+    const QJsonObject metadata = xjw::common::project::serializeFramePinholeModel(
+        makeGuidedTestCamera(0.0, "image", "local-frame"));
     EXPECT_EQ(metadata.value(QStringLiteral("world_frame")).toString(), QStringLiteral("local-frame"));
-
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState restored;
-    ASSERT_TRUE(xjw::common::project::decodeFramePinholeNumericState(metadata, &restored));
-    EXPECT_TRUE(restored.validateNumericalState());
-    EXPECT_FALSE(restored.hasBoundIdentity());
 }
 
 TEST(MatchPhotosGuidedPolicyTest, UsesTrustedReferencePoseWhenEstimatedModelIsUnavailable)

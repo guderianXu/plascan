@@ -1,6 +1,8 @@
 #include "DataTreeResourceUtils.h"
 
-#include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QDir>
 #include <QFileInfo>
@@ -36,11 +38,6 @@ namespace xjw::gui::widgets::data_tree
         return path.toCaseFolded();
     }
 
-    bool jsonArrayHasAtLeast(const QJsonValue& value, int size)
-    {
-        return value.isArray() && value.toArray().size() >= size;
-    }
-
     bool objectHasTrueFlag(const QJsonObject& object, std::initializer_list<const char*> keys)
     {
         for (const char* key : keys)
@@ -69,51 +66,67 @@ namespace xjw::gui::widgets::data_tree
         return false;
     }
 
-    bool cameraHasPose(const QJsonObject& camera)
+    QSet<QString> projectCameraAlignedImageIds(const QJsonObject& projectMetadata)
     {
-        if (camera.isEmpty() || camera.value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+        QSet<QString> aligned;
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectMetadata);
+        if (!loaded.ok())
         {
-            return false;
+            return aligned;
         }
-
-        if (objectHasTrueFlag(camera, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
-            objectHasAlignedStatus(camera))
+        for (const QJsonValue& value : projectMetadata.value(QStringLiteral("camera_instances")).toArray())
         {
-            return true;
+            const QJsonObject instance = value.toObject();
+            const QString image_id = instance.value(QStringLiteral("image_uuid")).toString();
+            if (image_id.isEmpty())
+            {
+                continue;
+            }
+            const QJsonObject state = instance.value(QStringLiteral("state")).toObject();
+            const QJsonObject metadata = state.value(QStringLiteral("metadata")).toObject();
+            if (state.value(QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
+                metadata.value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+            {
+                continue;
+            }
+            const auto camera = loaded.instances.forImage(placamera::ImageId(image_id.toStdString()));
+            if (!camera.ok())
+            {
+                continue;
+            }
+            const bool annotated =
+                objectHasTrueFlag(state, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
+                objectHasAlignedStatus(state) ||
+                objectHasTrueFlag(metadata, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
+                objectHasAlignedStatus(metadata);
+            if (annotated || dynamic_cast<const placamera::FramePinholeModel*>(camera.value().get()) != nullptr)
+            {
+                aligned.insert(image_id);
+            }
         }
-
-        if (jsonArrayHasAtLeast(camera.value(QStringLiteral("C")), 3) &&
-            jsonArrayHasAtLeast(camera.value(QStringLiteral("R")), 9))
-        {
-            return true;
-        }
-
-        return camera.value(QStringLiteral("pose")).isObject() ||
-               camera.value(QStringLiteral("camera_pose")).isObject() ||
-               camera.value(QStringLiteral("extrinsics")).isObject() ||
-               camera.value(QStringLiteral("transform")).isObject();
+        return aligned;
     }
 
-    bool imageObjectHasAlignedPose(const QJsonObject& image, const QJsonObject& projectMetadata)
-    {
-        if (objectHasTrueFlag(image, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
-            objectHasAlignedStatus(image))
-        {
-            return true;
-        }
-        return cameraHasPose(xjw::common::project::projectCameraModelParameters(projectMetadata, image));
-    }
-
-    bool
-    imageIsAligned(const QJsonValue& image, const QSet<QString>& alignedImageKeys, const QJsonObject& projectMetadata)
+    bool imageIsAligned(const QJsonValue& image,
+                        const QSet<QString>& alignedImageKeys,
+                        const QSet<QString>& cameraAlignedImageIds)
     {
         const QString key = imagePathKey(imagePathFromValue(image));
         if (!key.isEmpty() && alignedImageKeys.contains(key))
         {
             return true;
         }
-
-        return image.isObject() && imageObjectHasAlignedPose(image.toObject(), projectMetadata);
+        if (!image.isObject())
+        {
+            return false;
+        }
+        const QJsonObject image_record = image.toObject();
+        if (objectHasTrueFlag(image_record, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
+            objectHasAlignedStatus(image_record))
+        {
+            return true;
+        }
+        return cameraAlignedImageIds.contains(image_record.value(QStringLiteral("image_uuid")).toString());
     }
 
 } // namespace xjw::gui::widgets::data_tree

@@ -10,6 +10,25 @@
 namespace
 {
 
+    std::shared_ptr<const placamera::FramePinholeModel>
+    makeDepthCamera(double principalX, int imageSize, double centerX = 0.0)
+    {
+        const placamera::FrameId frame("uninitialized-frame");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("streaming-test-definition"),
+            placamera::FrameIntrinsics{20.0, 20.0, principalX, 4.0},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("streaming-test-instance"),
+            placamera::ImageId("streaming-test-image"),
+            definition,
+            {imageSize, imageSize},
+            placamera::Pose::create(
+                frame, {centerX, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+    }
+
     TEST(StreamingDepthFusionServiceTest, BuildsBalancedReferenceWindows)
     {
         EXPECT_EQ(xjw::mvs::streamingFusionWindowIndices(0, 5, 3), (std::vector<int>{0, 1, 2, 3}));
@@ -62,9 +81,7 @@ namespace
         const xjw::mvs::FusionFrameLoader loader = [](int frameIndex, xjw::mvs::FusionFrameInput* frame, std::string*)
         {
             frame->depthMap = cv::Mat(8, 8, CV_32FC1, cv::Scalar(5.0f));
-            frame->cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
-            frame->cameraModel.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                                       {static_cast<double>(frameIndex), 0.0, 0.0});
+            frame->cameraModel = makeDepthCamera(4.0, 8, static_cast<double>(frameIndex));
             frame->imgW = frame->depthMap.cols;
             frame->imgH = frame->depthMap.rows;
             return true;
@@ -91,14 +108,9 @@ namespace
                 frame.depthMap = cv::Mat::zeros(kGridSize, kGridSize, CV_32FC1);
                 frame.depthMap.at<float>(4, 4) = 8.0f;
                 frame.geometrySupportCount = cv::Mat(kGridSize, kGridSize, CV_16UC1, cv::Scalar(2));
-                frame.cameraModel.setIntrinsics(
-                    20.0, 20.0, 4.0 + principal_offsets[static_cast<std::size_t>(index)], 4.0);
-                frame.cameraModel.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-                frame.cameraModel.setImageSize(xjw::camera_core::ImageSize{kGridSize, kGridSize});
-                frame.sourceCamera = frame.cameraModel.scaledIntrinsics(static_cast<double>(raster_scale),
-                                                                        static_cast<double>(raster_scale));
-                frame.sourceCamera.setImageSize(
-                    xjw::camera_core::ImageSize{kGridSize * raster_scale, kGridSize * raster_scale});
+                frame.cameraModel =
+                    makeDepthCamera(4.0 + principal_offsets[static_cast<std::size_t>(index)], kGridSize);
+                frame.preparedRasterSize = cv::Size(kGridSize * raster_scale, kGridSize * raster_scale);
                 frame.imgW = kGridSize;
                 frame.imgH = kGridSize;
                 frame.viewIndex = index;
@@ -149,9 +161,8 @@ namespace
             frame->depthMap.at<float>(4, 4) = 8.0f;
             frame->geometrySupportCount = cv::Mat(9, 9, CV_16UC1, cv::Scalar(2));
             frame->geometrySupportPrevalidated = true;
-            frame->cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
-            frame->cameraModel.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-            frame->sourceCamera = frame->cameraModel;
+            frame->cameraModel = makeDepthCamera(4.0, 9);
+            frame->preparedRasterSize = cv::Size(9, 9);
             frame->imgW = frame->depthMap.cols;
             frame->imgH = frame->depthMap.rows;
             frame->viewIndex = frameIndex;

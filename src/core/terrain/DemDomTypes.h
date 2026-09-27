@@ -1,7 +1,7 @@
 #pragma once
 
-#include <plapoint/core/point_cloud.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plapoint/geometry_cloud.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <QString>
 #include <QMap>
@@ -12,7 +12,7 @@ namespace xjw
 {
 
 // Convenience alias for the CPU point cloud type
-using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using PlaPointCloud = plapoint::GeometryCloud<float>;
 
 /**
  * @brief DEM 栅格输出格式。

@@ -2,7 +2,7 @@
 
 #include "engine/TiePointGraph.h"
 #include "pipeline/IncrementalSfm.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 
 #include <atomic>
 #include <filesystem>
@@ -18,7 +18,7 @@ namespace xjw::aerial_triangulation::engine
     {
         ImageId id = kInvalidImageId;
         std::filesystem::path path;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::shared_ptr<const placamera::FramePinholeModel> camera;
         std::string sensorKey;
     };
 

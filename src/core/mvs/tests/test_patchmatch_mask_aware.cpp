@@ -89,13 +89,22 @@ constexpr int kHeight = 49;
 constexpr int kDisparity = 5;
 constexpr float kExpectedDepth = 10.0f;
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double center_x)
+placamera::FramePinholeModel makeCamera(double center_x)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(50.0, 50.0, kWidth * 0.5, kHeight * 0.5);
-    camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                   std::array<double, 3>{center_x, 0.0, 0.0});
-    return camera.normalizedForPositiveDepth();
+    const std::string suffix = center_x == 0.0 ? "reference" : "source";
+    const placamera::FrameId frame("patchmatch-mask-world");
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("patchmatch-mask-definition"),
+        placamera::FrameIntrinsics{50.0, 50.0, kWidth * 0.5, kHeight * 0.5},
+        {},
+        placamera::PixelConvention::PixelCenter,
+        frame);
+    return placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("patchmatch-mask-" + suffix),
+        placamera::ImageId("patchmatch-mask-image-" + suffix),
+        definition,
+        placamera::ImageSize{kWidth, kHeight},
+        placamera::Pose::create(frame, {center_x, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
 }
 
 cv::Mat makeReferenceImage()
@@ -171,7 +180,7 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
         reference,
         std::vector<cv::Mat>{source},
         makeCamera(0.0),
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{makeCamera(1.0)},
+        std::vector<placamera::FramePinholeModel>{makeCamera(1.0)},
         5.0f,
         15.0f,
         config,

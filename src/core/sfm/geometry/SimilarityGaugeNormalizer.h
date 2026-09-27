@@ -9,8 +9,9 @@
  * 原位置；它不假设相机沿圆轨迹运动。
  */
 
-#include "BundleAdjustSolver.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
+
+#include <plabundle/result.h>
 
 #include <string>
 #include <vector>
@@ -31,11 +32,11 @@ struct SimilarityGaugeNormalizationResult
  * 第一台相机的中心恢复到 BA 前的位置，所有其它相机中心和三维点相对该中心
  * 做同一尺度变换。相机旋转和内参保持不变，因此不会改变重投影几何。
  */
-SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& referenceCameras,
-    int anchorCameraIndex,
-    int scaleCameraIndex,
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* refinedCameras,
-    std::vector<BARefinedPoint>* refinedPoints);
+SimilarityGaugeNormalizationResult
+normalizeSimilarityGauge(const std::vector<placamera::FramePinholeNumericState>& referenceCameras,
+                         int anchorCameraIndex,
+                         int scaleCameraIndex,
+                         std::vector<placamera::FramePinholeNumericState>* refinedCameras,
+                         std::vector<plabundle::RefinedPoint>* refinedPoints);
 
 } // namespace xjw

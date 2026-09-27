@@ -17,11 +17,9 @@ namespace xjw::matchphotos
                 values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]);
         }
 
-        bool hasNegligibleDistortion(
-            const camera_models::frame_pinhole::FramePinholeNumericState& camera)
+        bool hasNegligibleDistortion(const placamera::FramePinholeModel& camera)
         {
-            const camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.pinholeDefinition().distortion();
             const double maximum = std::max({std::abs(distortion.radialK1),
                                              std::abs(distortion.radialK2),
                                              std::abs(distortion.radialK3),
@@ -49,29 +47,30 @@ namespace xjw::matchphotos
 
     } // namespace
 
-    ReferencePoseEpipolarGeometry fundamentalFromReferenceCameras(
-        const camera_models::frame_pinhole::FramePinholeNumericState& camera0,
-        const camera_models::frame_pinhole::FramePinholeNumericState& camera1)
+    ReferencePoseEpipolarGeometry fundamentalFromReferenceCameras(const placamera::FramePinholeModel& camera0,
+                                                                  const placamera::FramePinholeModel& camera1)
     {
         ReferencePoseEpipolarGeometry result;
-        if (!camera0.hasBoundIdentity() || !camera1.hasBoundIdentity() || !camera0.isValid() || !camera1.isValid() ||
-            !camera0.validateNumericalState() || !camera1.validateNumericalState() ||
-            !hasNegligibleDistortion(camera0) || !hasNegligibleDistortion(camera1))
+        if (!hasNegligibleDistortion(camera0) || !hasNegligibleDistortion(camera1))
         {
             return result;
         }
 
         // A fundamental matrix is meaningful only when both poses are
         // expressed in the same explicitly bound world frame.
-        if (camera0.worldFrame() != camera1.worldFrame())
+        if (camera0.groundFrame() != camera1.groundFrame())
         {
             return result;
         }
 
-        const auto normalized0 = camera0.normalizedForPositiveDepth();
-        const auto normalized1 = camera1.normalizedForPositiveDepth();
-        const auto intrinsics0 = normalized0.intrinsics();
-        const auto intrinsics1 = normalized1.intrinsics();
+        const auto normalized0 = camera0.normalizedForPositiveDepth(
+            placamera::CameraDefinitionId(camera0.definitionId().value() + ":epipolar"),
+            placamera::CameraInstanceId(camera0.instanceId().value() + ":epipolar"));
+        const auto normalized1 = camera1.normalizedForPositiveDepth(
+            placamera::CameraDefinitionId(camera1.definitionId().value() + ":epipolar"),
+            placamera::CameraInstanceId(camera1.instanceId().value() + ":epipolar"));
+        const auto& intrinsics0 = normalized0.pinholeDefinition().intrinsics();
+        const auto& intrinsics1 = normalized1.pinholeDefinition().intrinsics();
         const bool validIntrinsics = std::isfinite(intrinsics0.focalX) && intrinsics0.focalX > 0.0 &&
                                      std::isfinite(intrinsics0.focalY) && intrinsics0.focalY > 0.0 &&
                                      std::isfinite(intrinsics0.principalX) && std::isfinite(intrinsics0.principalY) &&
@@ -83,15 +82,15 @@ namespace xjw::matchphotos
             return result;
         }
 
-        const cv::Matx33d rotation0CameraToWorld = matrix3x3(normalized0.cameraToWorldRotation());
-        const cv::Matx33d rotation1WorldToCamera = matrix3x3(normalized1.worldToCameraRotation());
+        const cv::Matx33d rotation0CameraToWorld = matrix3x3(normalized0.pose().cameraToWorldRotation);
+        const cv::Matx33d rotation1WorldToCamera = matrix3x3(normalized1.pose().cameraToWorldRotation).t();
         if (!validRotation(rotation0CameraToWorld) || !validRotation(rotation1WorldToCamera))
         {
             return result;
         }
 
-        const std::array<double, 3> center0 = normalized0.cameraCenter();
-        const std::array<double, 3> center1 = normalized1.cameraCenter();
+        const std::array<double, 3>& center0 = normalized0.pose().center;
+        const std::array<double, 3>& center1 = normalized1.pose().center;
         const cv::Vec3d centerDelta(center0[0] - center1[0], center0[1] - center1[1], center0[2] - center1[2]);
         result.baseline = cv::norm(centerDelta);
         if (!std::isfinite(result.baseline) || result.baseline <= 1.0e-12)

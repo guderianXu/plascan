@@ -86,6 +86,8 @@ namespace xjw::gui::project
         bool isImageImportActive() const;
         bool isPortableExportInProgress() const;
         bool isBusy() const;
+        bool hasPendingWork() const;
+        void cancelActiveTask();
         ProjectSession* session() const noexcept
         {
             return _session;

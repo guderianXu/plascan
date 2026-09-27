@@ -2,7 +2,8 @@
 
 #include "DemDomTypes.h"
 #include "OrthoGenerationOptions.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QJsonObject>
 #include <QString>
@@ -12,6 +13,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace xjw
@@ -22,7 +24,7 @@ namespace xjw
         QString imageId;
         QString imagePath;
         QString exclusionMaskPath;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::shared_ptr<const placamera::FramePinholeModel> camera;
     };
 
     struct OrthoOutputGrid

@@ -1,25 +1,23 @@
 #include "TriangulationService.h"
 #include "ImageMatchRepository.h"
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
 #include <opencv2/imgcodecs.hpp>
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
+#include <placamera/frame_numeric_state.h>
 
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
-#include <QMap>
 #include <QTemporaryDir>
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace
@@ -60,29 +58,39 @@ namespace
         EXPECT_TRUE(written.success) << qPrintable(written.errorMessage);
         QJsonArray images;
         QJsonArray records;
-        QMap<QString, QJsonObject> cameraMetadataByPath;
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("triangulation-test-definition"),
+                                                      {32.0, 32.0, 8.0, 6.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
         for (int index = 0; index < 2; ++index)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-            camera.setIntrinsics(32.0, 32.0, 8.0, 6.0);
-            camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {2.0 * index, 0.0, 0.0});
-            images.append(QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("image-%1").arg(index)},
+            const QString image_id = QStringLiteral("image-%1").arg(index);
+            images.append(QJsonObject{{QStringLiteral("image_uuid"), image_id},
                                       {QStringLiteral("path"), paths[index]},
                                       {QStringLiteral("samples"), 32},
                                       {QStringLiteral("lines"), 24}});
-            QJsonObject cameraMetadata = xjw::common::project::serializeFramePinholeNumericState(camera);
-            cameraMetadata.insert(QStringLiteral("image_width"), 32);
-            cameraMetadata.insert(QStringLiteral("image_height"), 24);
-            cameraMetadataByPath.insert(paths[index], cameraMetadata);
+            const auto added =
+                cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("triangulation-test-" + image_id.toStdString()),
+                    placamera::ImageId(image_id.toStdString()),
+                    definition,
+                    {32, 24},
+                    placamera::Pose::create(
+                        frame, {2.0 * index, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+            EXPECT_TRUE(added.ok()) << added.message();
             /* Keep the match records separate from the canonical camera graph. */
             records.append(QJsonObject{{QStringLiteral("image"), paths[index]},
                                        {QStringLiteral("output"), repository.shardPath(paths[index])}});
         }
-        QJsonObject metadata{{QStringLiteral("images"), images}, {QStringLiteral("image_match_results"), records},
+        QJsonObject metadata{{QStringLiteral("images"), images},
+                             {QStringLiteral("image_match_results"), records},
                              {QStringLiteral("camera_definitions"), QJsonArray{}},
                              {QStringLiteral("camera_instances"), QJsonArray{}}};
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-            &metadata, cameraMetadataByPath);
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&metadata, cameras);
         EXPECT_TRUE(update.ok()) << update.errors.join(';').toStdString();
         return metadata;
     }
@@ -195,63 +203,49 @@ TEST(TriangulationColorTest, KeepsNeutralGrayAndGeometryWhenAllImagesAreUnreadab
 
 TEST(TriangulationGeometryTest, RejectsDifferentWorldFrames)
 {
-    using xjw::camera_core::CameraDefinitionId;
-    using xjw::camera_core::CameraInstanceId;
-    using xjw::camera_core::ImageId;
-    using xjw::camera_core::ImageSize;
-    using xjw::camera_core::Pose;
-    using xjw::camera_models::frame_pinhole::Distortion;
-    using xjw::camera_models::frame_pinhole::FramePinholeDefinition;
-    using xjw::camera_models::frame_pinhole::FramePinholeInstance;
-    using xjw::camera_models::frame_pinhole::Intrinsics;
-    using xjw::camera_models::frame_pinhole::PixelConvention;
-    using xjw::coordinate_system::CoordinateFrameId;
+    using placamera::BrownConradyDistortion;
+    using placamera::FrameIntrinsics;
+    using placamera::FramePinholeDefinition;
+    using placamera::FramePinholeModel;
+    using placamera::PixelConvention;
+    using placoordinate::CoordinateFrameId;
 
-    const auto makeState = [](const char* image,
-                              const char* frame,
-                              double centerX)
+    const auto makeState = [](const char* image, const char* frame, double centerX)
     {
-        Intrinsics intrinsics;
+        FrameIntrinsics intrinsics;
         intrinsics.focalX = 32.0;
         intrinsics.focalY = 32.0;
         intrinsics.principalX = 8.0;
         intrinsics.principalY = 6.0;
-        const auto definition = FramePinholeDefinition::create(
-            CameraDefinitionId(std::string("definition-") + image),
-            intrinsics,
-            Distortion{},
-            PixelConvention::PixelCenter,
-            CoordinateFrameId(frame));
-        const auto pose = Pose::create(
-            CoordinateFrameId(frame),
-            {{centerX, 0.0, 0.0}},
-            {{1.0, 0.0, 0.0,
-              0.0, 1.0, 0.0,
-              0.0, 0.0, 1.0}});
-        const FramePinholeInstance instance = FramePinholeInstance::create(
-            CameraInstanceId(std::string("instance-") + image),
-            ImageId(image),
-            definition,
-            ImageSize{32, 24},
-            pose);
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
-        EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &state));
-        return state;
+        const auto definition =
+            FramePinholeDefinition::create(placamera::CameraDefinitionId(std::string("definition-") + image),
+                                           intrinsics,
+                                           BrownConradyDistortion{},
+                                           PixelConvention::PixelCenter,
+                                           CoordinateFrameId(frame));
+        const auto pose = placamera::Pose::create(
+            CoordinateFrameId(frame), {{centerX, 0.0, 0.0}}, {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}});
+        const FramePinholeModel instance =
+            FramePinholeModel::create(placamera::CameraInstanceId(std::string("instance-") + image),
+                                      placamera::ImageId(image),
+                                      definition,
+                                      placamera::ImageSize{32, 24},
+                                      pose);
+        return placamera::FramePinholeNumericState::fromModel(instance);
     };
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState left = makeState("left", "world-a", 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState right = makeState("right", "world-b", 2.0);
-    ASSERT_TRUE(left.validateNumericalState());
-    ASSERT_TRUE(right.validateNumericalState());
-    const auto intersection = xjw::camera_models::frame_pinhole::FramePinholeNumericState::triangulatePair(
-        left, {{8.0, 6.0}}, right, {{1.6, 6.0}});
+    const placamera::FramePinholeNumericState left = makeState("left", "world-a", 0.0);
+    const placamera::FramePinholeNumericState right = makeState("right", "world-b", 2.0);
+    const auto intersection = placamera::FramePinholeNumericState::triangulatePair(
+        left, {8.0, 6.0}, right, {1.6, 6.0});
 
-    EXPECT_FALSE(intersection.valid);
+    EXPECT_FALSE(intersection.ok());
+    EXPECT_EQ(intersection.errorCode(), placamera::CameraErrorCode::FrameMismatch);
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState sameFrameRight =
+    const placamera::FramePinholeNumericState sameFrameRight =
         makeState("right-same", "world-a", 2.0);
-    ASSERT_TRUE(sameFrameRight.validateNumericalState());
-    const auto sameFrameIntersection = xjw::camera_models::frame_pinhole::FramePinholeNumericState::triangulatePair(
-        left, {{8.0, 6.0}}, sameFrameRight, {{1.6, 6.0}});
-    EXPECT_TRUE(sameFrameIntersection.valid);
+    const auto sameFrameIntersection = placamera::FramePinholeNumericState::triangulatePair(
+        left, {8.0, 6.0}, sameFrameRight, {1.6, 6.0});
+    ASSERT_TRUE(sameFrameIntersection.ok()) << sameFrameIntersection.message();
+    EXPECT_EQ(sameFrameIntersection.value().point.frame.value(), "world-a");
 }

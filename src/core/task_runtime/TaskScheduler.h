@@ -115,6 +115,7 @@ namespace xjw::task_runtime
 
         std::uint64_t subscribe(EventListener listener);
         void unsubscribe(std::uint64_t subscriptionId);
+        void requestShutdown();
         void shutdown();
 
     private:
@@ -143,6 +144,7 @@ namespace xjw::task_runtime
         void publishEvents(const std::vector<TaskEvent>& events) const;
 
         TaskSchedulerLimits _limits;
+        std::mutex _shutdownMutex;
         mutable std::mutex _mutex;
         mutable std::condition_variable _stateChanged;
         bool _stopping = false;

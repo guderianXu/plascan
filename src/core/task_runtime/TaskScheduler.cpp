@@ -557,25 +557,29 @@ namespace xjw::task_runtime
         _listeners.erase(subscriptionId);
     }
 
+    void TaskScheduler::requestShutdown()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_stopping)
+        {
+            return;
+        }
+        _stopping = true;
+        for (auto& [run_id, record] : _runs)
+        {
+            (void)run_id;
+            if (!isTerminalTaskState(record->snapshot.state))
+            {
+                TaskControlSource(*record->control).requestCancellation();
+            }
+        }
+        _stateChanged.notify_all();
+    }
+
     void TaskScheduler::shutdown()
     {
-        {
-            std::lock_guard<std::mutex> lock(_mutex);
-            if (_stopping)
-            {
-                return;
-            }
-            _stopping = true;
-            for (auto& [run_id, record] : _runs)
-            {
-                (void)run_id;
-                if (!isTerminalTaskState(record->snapshot.state))
-                {
-                    TaskControlSource(*record->control).requestCancellation();
-                }
-            }
-            _stateChanged.notify_all();
-        }
+        std::lock_guard<std::mutex> shutdown_lock(_shutdownMutex);
+        requestShutdown();
         for (std::thread& worker : _workers)
         {
             if (worker.joinable())

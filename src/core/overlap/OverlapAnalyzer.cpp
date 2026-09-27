@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <sstream>
 
 namespace
@@ -105,30 +106,29 @@ double medianValue(std::vector<double> values, double fallback)
     return values[values.size() / 2];
 }
 
-bool centerRayWorldDirection(const xjw::OverlapImageInput &image, std::array<double, 3> *dir)
+bool centerRayWorldDirection(const xjw::OverlapImageInput& image, std::array<double, 3>* dir)
 {
     if (!dir || image.width <= 0 || image.height <= 0)
     {
         return false;
     }
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = image.camera;
-    if (!camera.validateNumericalState())
+    if (!image.camera)
     {
         return false;
     }
 
-    const std::array<double, 2> centerPixel{{0.5 * double(image.width), 0.5 * double(image.height)}};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
-    if (!camera.rayForPixel(centerPixel, &ray))
+    const auto ray = image.camera->imageToImagingLocus(
+        {0.5 * static_cast<double>(image.width), 0.5 * static_cast<double>(image.height)});
+    if (!ray.ok())
     {
         return false;
     }
-    *dir = ray.direction;
+    *dir = ray.value().direction;
     return true;
 }
 
-double medianNearestSpacingXY(const std::vector<xjw::OverlapImageInput> &images)
+double medianNearestSpacingXY(const std::vector<xjw::OverlapImageInput>& images)
 {
     if (images.size() < 2)
     {
@@ -139,7 +139,7 @@ double medianNearestSpacingXY(const std::vector<xjw::OverlapImageInput> &images)
     nearest.reserve(images.size());
     for (size_t i = 0; i < images.size(); ++i)
     {
-        const auto ci = images[i].camera.cameraCenter();
+        const auto& ci = images[i].camera->pose().center;
         double best = std::numeric_limits<double>::max();
         for (size_t j = 0; j < images.size(); ++j)
         {
@@ -147,7 +147,7 @@ double medianNearestSpacingXY(const std::vector<xjw::OverlapImageInput> &images)
             {
                 continue;
             }
-            const auto cj = images[j].camera.cameraCenter();
+            const auto& cj = images[j].camera->pose().center;
             best = std::min(best, distance2D(ci[0], ci[1], cj[0], cj[1]));
         }
         if (best < std::numeric_limits<double>::max())
@@ -179,7 +179,7 @@ SphereSurfaceBuildResult buildReferenceSphereSurface(const std::vector<xjw::Over
 
     for (const xjw::OverlapImageInput &image : images)
     {
-        const auto c = image.camera.cameraCenter();
+        const auto& c = image.camera->pose().center;
         xs.push_back(c[0]);
         ys.push_back(c[1]);
         zs.push_back(c[2]);
@@ -387,6 +387,7 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         }
         return false;
     }
+    std::optional<placamera::FrameId> common_frame;
     for (const OverlapImageInput& image : images)
     {
         if (image.width <= 0 || image.height <= 0)
@@ -398,16 +399,31 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
             return false;
         }
 
-        std::string cameraError;
-        if (!image.camera.validateNumericalState(&cameraError))
+        if (!image.camera)
         {
             if (errorMsg)
             {
-                *errorMsg = "数值相机状态无效: " + image.imagePath;
-                if (!cameraError.empty())
-                {
-                    *errorMsg += " | " + cameraError;
-                }
+                *errorMsg = "PlaCamera 相机模型缺失: " + image.imagePath;
+            }
+            return false;
+        }
+        if (!common_frame)
+        {
+            common_frame = image.camera->groundFrame();
+        }
+        else if (*common_frame != image.camera->groundFrame())
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "重叠分析相机的世界坐标系不一致: " + image.imagePath;
+            }
+            return false;
+        }
+        if (image.camera->imageSize().samples != image.width || image.camera->imageSize().lines != image.height)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "影像尺寸与 PlaCamera 模型不一致: " + image.imagePath;
             }
             return false;
         }
@@ -448,17 +464,13 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         bool centerOk = false;
         if (useSphere)
         {
-            centerOk = GroundBackProjector::imageCenterToSphere(images[i].camera,
-                                                                images[i].width,
-                                                                images[i].height,
-                                                                sphere,
-                                                                &result->centers[i],
-                                                                &err);
+            centerOk = GroundBackProjector::imageCenterToSphere(
+                *images[i].camera, images[i].width, images[i].height, sphere, &result->centers[i], &err);
         }
         else
         {
             const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem;
-            centerOk = GroundBackProjector::imageCenterToGround(images[i].camera,
+            centerOk = GroundBackProjector::imageCenterToGround(*images[i].camera,
                                                                 images[i].width,
                                                                 images[i].height,
                                                                 options.dem,
@@ -489,17 +501,13 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         bool radiusOk = false;
         if (useSphere)
         {
-            radiusOk = GroundBackProjector::estimateFootprintRadiusOnSphere(images[i].camera,
-                                                                            images[i].width,
-                                                                            images[i].height,
-                                                                            sphere,
-                                                                            &radius,
-                                                                            &err);
+            radiusOk = GroundBackProjector::estimateFootprintRadiusOnSphere(
+                *images[i].camera, images[i].width, images[i].height, sphere, &radius, &err);
         }
         else
         {
             const bool useFixedZ = options.groundModel != OverlapGroundModel::Dem;
-            radiusOk = GroundBackProjector::estimateFootprintRadius(images[i].camera,
+            radiusOk = GroundBackProjector::estimateFootprintRadius(*images[i].camera,
                                                                     images[i].width,
                                                                     images[i].height,
                                                                     options.dem,

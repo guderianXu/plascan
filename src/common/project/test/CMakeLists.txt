@@ -1,6 +1,13 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
 
+add_executable(test_camera_reference_set_store test_camera_reference_set_store.cpp)
+target_link_libraries(test_camera_reference_set_store PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_camera_reference_set_store DISCOVERY_MODE PRE_TEST)
+
 add_executable(test_common_project_io test_project_io.cpp)
 target_link_libraries(test_common_project_io PRIVATE
   plascan_common_project
@@ -26,7 +33,11 @@ add_executable(test_common_project_camera_io test_project_camera_io.cpp)
 target_link_libraries(test_common_project_camera_io PRIVATE
   plascan_common_project
   camera
+  plascan::placamera_runtime
   GTest::gtest_main
+)
+target_compile_definitions(test_common_project_camera_io PRIVATE
+  TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
 )
 gtest_discover_tests(test_common_project_camera_io DISCOVERY_MODE PRE_TEST)
 
@@ -66,6 +77,7 @@ target_link_libraries(test_project_chunk_index PRIVATE
 gtest_discover_tests(test_project_chunk_index DISCOVERY_MODE PRE_TEST)
 
 add_executable(test_project_session test_project_session.cpp)
+target_compile_definitions(test_project_session PRIVATE TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_project_session PRIVATE
   plascan_common_project
   camera

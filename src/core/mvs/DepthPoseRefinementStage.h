@@ -1,10 +1,12 @@
 #pragma once
 
+#include <placamera/frame_camera.h>
+
 #include "DepthPoseAlignmentRefiner.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
 #include <opencv2/core.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,7 +33,7 @@ namespace xjw::mvs
     struct DepthPoseRefinementFrame
     {
         int cameraIndex = -1;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::shared_ptr<const placamera::FramePinholeModel> camera;
         cv::Mat depthMap;
         cv::Mat normalMap;
         cv::Mat confidence;
@@ -56,7 +58,7 @@ namespace xjw::mvs
         double correctionRotationDegrees = 0.0;
         std::string reason;
         DepthPoseAlignmentCorrection correction;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState derivedCamera;
+        std::shared_ptr<const placamera::FramePinholeModel> derivedCamera;
     };
 
     struct DepthPoseRefinementStageResult
@@ -74,9 +76,8 @@ namespace xjw::mvs
         static DepthPoseRefinementStageResult buildCandidates(const std::vector<DepthPoseRefinementFrame>& frames,
                                                               const DepthPoseRefinementOptions& options = {});
 
-        static xjw::camera_models::frame_pinhole::FramePinholeNumericState
-        deriveCameraCandidate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                              const DepthPoseAlignmentCorrection& correction);
+        static placamera::FramePinholeModel deriveCameraCandidate(const placamera::FramePinholeModel& camera,
+                                                                  const DepthPoseAlignmentCorrection& correction);
     };
 
 } // namespace xjw::mvs

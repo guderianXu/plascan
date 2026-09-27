@@ -15,9 +15,9 @@ namespace xjw
 namespace mvs
 {
 
-    static cv::Mat buildK(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    static cv::Mat buildK(const placamera::FramePinholeModel& camera)
     {
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
+        const auto& intrinsics = camera.pinholeDefinition().intrinsics();
         cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
         K.at<double>(0, 0) = intrinsics.focalX;
         K.at<double>(0, 2) = intrinsics.principalX;
@@ -26,24 +26,31 @@ namespace mvs
         return K;
 }
 
-static cv::Mat buildRcw(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+static cv::Mat buildRcw(const placamera::FramePinholeModel& camera)
 {
-    const std::array<double, 9> rotation = camera.worldToCameraRotation();
+    const auto& rotation = camera.pose().cameraToWorldRotation;
     cv::Mat R(3, 3, CV_64F);
-    for (int i = 0; i < 9; ++i)
+    for (int row = 0; row < 3; ++row)
     {
-        R.at<double>(i / 3, i % 3) = rotation[i];
+        for (int column = 0; column < 3; ++column)
+        {
+            R.at<double>(row, column) = rotation[column * 3 + row];
+        }
     }
     return R;
 }
 
-static cv::Mat buildT(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+static cv::Mat buildT(const placamera::FramePinholeModel& camera)
 {
-    const std::array<double, 3> translation = camera.worldToCameraTranslation();
+    const auto& center = camera.pose().center;
+    const cv::Mat rotation = buildRcw(camera);
     cv::Mat t(3, 1, CV_64F);
-    t.at<double>(0) = translation[0];
-    t.at<double>(1) = translation[1];
-    t.at<double>(2) = translation[2];
+    for (int row = 0; row < 3; ++row)
+    {
+        t.at<double>(row) = -(rotation.at<double>(row, 0) * center[0]
+            + rotation.at<double>(row, 1) * center[1]
+            + rotation.at<double>(row, 2) * center[2]);
+    }
     return t;
 }
 
@@ -60,9 +67,9 @@ static std::array<double, 9> toArray9(const cv::Mat &matrix)
     return values;
 }
 
-static bool hasLensDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+static bool hasLensDistortion(const placamera::FramePinholeModel& camera)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
+    const auto& distortion = camera.pinholeDefinition().distortion();
     constexpr double epsilon = 1e-15;
     return std::fabs(distortion.radialK1) > epsilon
         || std::fabs(distortion.radialK2) > epsilon
@@ -71,29 +78,35 @@ static bool hasLensDistortion(const xjw::camera_models::frame_pinhole::FramePinh
         || std::fabs(distortion.tangentialP2) > epsilon;
 }
 
-static xjw::camera_models::frame_pinhole::FramePinholeNumericState
-cameraFromWorldToCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+static placamera::FramePinholeModel
+cameraFromWorldToCamera(const placamera::FramePinholeModel& source,
                         const cv::Mat& rotationWorldToCamera,
                         double focalX,
                         double focalY,
                         double principalX,
-                        double principalY)
+                        double principalY,
+                        int uAxisSign,
+                        placamera::ImageSize imageSize,
+                        const std::string& suffix)
 {
-    // Rectification changes only the pixel pose/scale representation.  Keep
-    // the source binding so a derived raster camera can still be traced back
-    // to the canonical image/instance and world frame when it is persisted.
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState result = source;
-    result.setIntrinsics(focalX, focalY, principalX, principalY);
-    result.setPixelPitch(source.pixelPitch());
-    result.setPose(toArray9(rotationWorldToCamera.t()), source.cameraCenter());
-    result.setAxisDirections(1, 1);
-    result.setDepthAxisFlipped(false);
-    result.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
-    return result;
+    const placamera::FrameIntrinsics intrinsics{
+        focalX, focalY, principalX, principalY, source.pinholeDefinition().intrinsics().pixelPitch, uAxisSign, 1};
+    auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId(source.definitionId().value() + suffix),
+        intrinsics,
+        placamera::BrownConradyDistortion{},
+        source.pinholeDefinition().pixelConvention(),
+        source.groundFrame());
+    const auto pose = placamera::Pose::create(
+        source.groundFrame(), source.pose().center, toArray9(rotationWorldToCamera.t()));
+    return placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId(source.instanceId().value() + suffix),
+        placamera::ImageId(source.imageId().value() + suffix),
+        std::move(definition), imageSize, pose, source.captureTime());
 }
 
-static xjw::camera_models::frame_pinhole::FramePinholeNumericState
-buildRectifiedCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
+static placamera::FramePinholeModel
+buildRectifiedCamera(const placamera::FramePinholeModel& source,
                      const cv::Mat& rectRotation,
                      const cv::Mat& projection)
 {
@@ -104,30 +117,39 @@ buildRectifiedCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumeri
                                    projection.at<double>(0, 0),
                                    projection.at<double>(1, 1),
                                    projection.at<double>(0, 2),
-                                   projection.at<double>(1, 2));
+                                   projection.at<double>(1, 2),
+                                   1,
+                                   source.imageSize(),
+                                   "-rectified");
 }
 
-static xjw::camera_models::frame_pinhole::FramePinholeNumericState
-transposeRectifiedCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source)
+static placamera::FramePinholeModel
+transposeRectifiedCamera(const placamera::FramePinholeModel& source)
 {
     cv::Mat rotation = buildRcw(source);
     for (int column = 0; column < 3; ++column)
     {
         std::swap(rotation.at<double>(0, column), rotation.at<double>(1, column));
+        rotation.at<double>(0, column) = -rotation.at<double>(0, column);
     }
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = source.intrinsics();
+    const auto& intrinsics = source.pinholeDefinition().intrinsics();
+    // Swapping the image axes is a reflection. Keep the camera pose a proper
+    // rotation and represent that reflection in the pixel-axis convention.
     return cameraFromWorldToCamera(source,
                                    rotation,
                                    intrinsics.focalY,
                                    intrinsics.focalX,
                                    intrinsics.principalY,
-                                   intrinsics.principalX);
+                                   intrinsics.principalX,
+                                   -1,
+                                   {source.imageSize().lines, source.imageSize().samples},
+                                   "-transposed");
 }
 
 bool EpipolarRectifier::rectify(const cv::Mat& imgLeft,
                                 const cv::Mat& imgRight,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camLeft,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camRight,
+                                const placamera::FramePinholeModel& camLeft,
+                                const placamera::FramePinholeModel& camRight,
                                 RectifiedPair& result,
                                 std::string* errorMsg)
 {
@@ -142,9 +164,15 @@ bool EpipolarRectifier::rectify(const cv::Mat& imgLeft,
         if (errorMsg) *errorMsg = "Input image sizes do not match";
         return false;
     }
-    if (!camLeft.isValid() || !camRight.isValid())
+    if (camLeft.groundFrame() != camRight.groundFrame())
     {
-        if (errorMsg) *errorMsg = "输入相机无效";
+        if (errorMsg) *errorMsg = "左右相机坐标系不一致";
+        return false;
+    }
+    if (camLeft.imageSize().samples != imgLeft.cols || camLeft.imageSize().lines != imgLeft.rows
+        || camRight.imageSize().samples != imgRight.cols || camRight.imageSize().lines != imgRight.rows)
+    {
+        if (errorMsg) *errorMsg = "影像尺寸与相机模型不一致";
         return false;
     }
     if (hasLensDistortion(camLeft) || hasLensDistortion(camRight))
@@ -152,10 +180,14 @@ bool EpipolarRectifier::rectify(const cv::Mat& imgLeft,
         if (errorMsg) *errorMsg = "极线校正要求输入影像先完成镜头去畸变";
         return false;
     }
-    if (camLeft.uAxisSign() != 1 || camLeft.vAxisSign() != 1 || camLeft.depthAxisFlipped()
-        || camRight.uAxisSign() != 1 || camRight.vAxisSign() != 1 || camRight.depthAxisFlipped())
+    const auto& left_intrinsics = camLeft.pinholeDefinition().intrinsics();
+    const auto& right_intrinsics = camRight.pinholeDefinition().intrinsics();
+    if (left_intrinsics.uAxisSign != 1 || left_intrinsics.vAxisSign != 1
+        || camLeft.pinholeDefinition().depthAxisFlipped()
+        || right_intrinsics.uAxisSign != 1 || right_intrinsics.vAxisSign != 1
+        || camRight.pinholeDefinition().depthAxisFlipped())
     {
-        if (errorMsg) *errorMsg = "极线校正要求正深度规范化 FramePinholeNumericState";
+        if (errorMsg) *errorMsg = "极线校正要求正深度规范化 PlaCamera 模型";
         return false;
     }
 
@@ -265,8 +297,8 @@ bool EpipolarRectifier::rectify(const cv::Mat& imgLeft,
         result.H1inv = result.H1.inv();
         result.H2inv = result.H2.inv();
 
-        result.rectCamLeft = transposeRectifiedCamera(result.rectCamLeft);
-        result.rectCamRight = transposeRectifiedCamera(result.rectCamRight);
+        result.rectCamLeft = transposeRectifiedCamera(*result.rectCamLeft);
+        result.rectCamRight = transposeRectifiedCamera(*result.rectCamRight);
     }
 
     std::fprintf(stderr,
@@ -290,17 +322,18 @@ bool EpipolarRectifier::rectify(const cv::Mat& imgLeft,
 cv::Mat EpipolarRectifier::unrectifyDepth(
     const cv::Mat& rectifiedDepth,
     const RectifiedPair& pair,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
+    const placamera::FramePinholeModel& originalReferenceCamera,
     int origW,
     int origH)
 {
     const cv::Mat &reference_homography = pair.refIsRight ? pair.H2 : pair.H1;
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectified_reference_camera =
+    const std::optional<placamera::FramePinholeModel>& rectified_reference_camera =
         pair.refIsRight ? pair.rectCamRight : pair.rectCamLeft;
     if (rectifiedDepth.empty() || rectifiedDepth.type() != CV_32FC1 ||
         reference_homography.empty() || reference_homography.rows != 3 ||
-        reference_homography.cols != 3 || !originalReferenceCamera.isValid() ||
-        !rectified_reference_camera.isValid() || origW <= 0 || origH <= 0)
+        reference_homography.cols != 3 || !rectified_reference_camera ||
+        rectified_reference_camera->groundFrame() != originalReferenceCamera.groundFrame() ||
+        origW <= 0 || origH <= 0)
     {
         return cv::Mat();
     }
@@ -345,14 +378,17 @@ cv::Mat EpipolarRectifier::unrectifyDepth(
             // length and not axial Z in the original camera. Reconstruct the
             // point on the exact target ray and express it in the original
             // reference camera before storing it in the unrectified grid.
-            const double rectified_pixel[2] = {rx, ry};
-            double world[3] = {};
-            if (!rectified_reference_camera.unprojectPixel(
-                    rectified_pixel, rectified_depth, world))
+            const auto world = rectified_reference_camera->imageToGroundAtDepth({rx, ry}, rectified_depth);
+            if (!world)
             {
                 continue;
             }
-            const double original_depth = originalReferenceCamera.positiveDepth(world);
+            const auto depth = originalReferenceCamera.signedDepth(world.value());
+            if (!depth)
+            {
+                continue;
+            }
+            const double original_depth = depth.value();
             if (std::isfinite(original_depth) && original_depth > 0.0 &&
                 original_depth <= std::numeric_limits<float>::max())
             {
@@ -364,8 +400,8 @@ cv::Mat EpipolarRectifier::unrectifyDepth(
 }
 
 bool EpipolarRectifier::rectifiedDepthRange(
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectifiedReferenceCamera,
+    const placamera::FramePinholeModel& originalReferenceCamera,
+    const placamera::FramePinholeModel& rectifiedReferenceCamera,
     int originalWidth,
     int originalHeight,
     float originalNear,
@@ -373,7 +409,7 @@ bool EpipolarRectifier::rectifiedDepthRange(
     float& rectifiedNear,
     float& rectifiedFar)
 {
-    if (!originalReferenceCamera.isValid() || !rectifiedReferenceCamera.isValid() ||
+    if (originalReferenceCamera.groundFrame() != rectifiedReferenceCamera.groundFrame() ||
         hasLensDistortion(originalReferenceCamera) ||
         hasLensDistortion(rectifiedReferenceCamera) ||
         originalWidth <= 0 || originalHeight <= 0 ||
@@ -399,15 +435,19 @@ bool EpipolarRectifier::rectifiedDepthRange(
     {
         for (const double column : columns)
         {
-            const double pixel[2] = {column, row};
             for (const double depth : depths)
             {
-                double world[3] = {};
-                if (!originalReferenceCamera.unprojectPixel(pixel, depth, world))
+                const auto world = originalReferenceCamera.imageToGroundAtDepth({column, row}, depth);
+                if (!world)
                 {
                     return false;
                 }
-                const double rectified_depth = rectifiedReferenceCamera.positiveDepth(world);
+                const auto signed_depth = rectifiedReferenceCamera.signedDepth(world.value());
+                if (!signed_depth)
+                {
+                    return false;
+                }
+                const double rectified_depth = signed_depth.value();
                 if (!std::isfinite(rectified_depth) || rectified_depth <= 0.0)
                 {
                     return false;

@@ -1,13 +1,16 @@
 #pragma once
 
-#include "DepthPyramidPropagation.h"
-
 #include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include <placamera/frame_camera.h>
+
+#include "DepthPyramidPropagation.h"
 
 namespace xjw
 {
@@ -21,8 +24,8 @@ namespace xjw
             std::vector<cv::Mat> sourceImages;
             std::vector<cv::Mat> sourceValidMasks;
             std::vector<cv::Mat> sourceDepthMaps;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState referenceCamera;
-            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> sourceCameras;
+            std::optional<placamera::FramePinholeModel> referenceCamera;
+            std::vector<placamera::FramePinholeModel> sourceCameras;
             float zNear = 0.0f;
             float zFar = 0.0f;
             DepthPyramidLevelConfig levelConfig;
@@ -46,8 +49,8 @@ namespace xjw
             std::vector<cv::Mat> sourceValidMasks;
             std::vector<cv::Mat> sourceDepthMaps;
             cv::Mat guideImage;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState referenceCamera;
-            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> sourceCameras;
+            std::optional<placamera::FramePinholeModel> referenceCamera;
+            std::vector<placamera::FramePinholeModel> sourceCameras;
             float zNear = 0.0f;
             float zFar = 0.0f;
             DepthPyramidConfig pyramidConfig;

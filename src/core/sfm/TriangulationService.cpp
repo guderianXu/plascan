@@ -7,7 +7,7 @@
 #include "io/ImageIO.h"
 #include "Logger.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/ply_io.h>
 #include <opencv2/imgcodecs.hpp>
 
@@ -121,7 +121,7 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     // 阶段 2：核心过滤器只做几何计算，不执行 IO。这里把 UI/工程选项翻译为
     // 无 Qt 参数，并保留每一种拒绝原因用于诊断。
     const xjw::InitialSparseTriangulationResult coreResult =
-        xjw::InitialSparsePointFilter::filter(buildResult.cameras,
+        xjw::InitialSparsePointFilter::filter(buildResult.cameraInstances,
                                               buildResult.tracks,
                                               coreOptions);
 
@@ -161,7 +161,7 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
             return false;
         }
 
-        const xjw::BATrack &track = buildResult.tracks[
+        const plabundle::Track &track = buildResult.tracks[
             static_cast<std::size_t>(point.sourceTrackIndex)];
 
         int sampleCount = 0;
@@ -169,7 +169,7 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         int sumG = 0;
         int sumB = 0;
 
-        for (const xjw::BAObservation &observation : track.observations)
+        for (const plabundle::Observation &observation : track.observations)
         {
             if (observation.cameraIndex < 0 || observation.cameraIndex >= camCount)
             {
@@ -276,9 +276,9 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     const QString sparseCloudPath = QDir(options.outputDir).filePath(QStringLiteral("sparse_cloud.ply"));
     try
     {
-        using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(exportWithColor.size(), 3);
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(exportWithColor.size(), 3);
+        using PlaCloud = plapoint::GeometryCloud<float>;
+        plamatrix::MatrixXf points(exportWithColor.size(), 3);
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(exportWithColor.size(), 3);
         for (std::size_t i = 0; i < static_cast<std::size_t>(exportWithColor.size()); ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
@@ -328,7 +328,7 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
 
     const QJsonObject quality = xjw::common::project::buildSparseQualityMetadata(
         pointsArray,
-        static_cast<int>(buildResult.cameras.size()),
+        static_cast<int>(buildResult.cameraInstances.size()),
         false,
         xjw::common::project::kSparseResultKindPairwisePreview);
     result.resultJson = xjw::common::project::mergeSparseQualityIntoRecord(summary, quality);

@@ -17,9 +17,10 @@ namespace xjw::core::project
     /**
      * @brief 把匹配对追加为 BA track，并更新多视轨迹统计。
      *
-     * 每条轨迹会用首个可用观测对三角化初值；若相机深度轴元数据不一致，会尝试
-     * 方向回退。所有观测权重继承匹配置信度，输出追加到 result 而非覆盖已有控制轨迹。
+     * 每条轨迹用 PlaCamera 的首个可交会观测对生成初值；若全部交会失败，
+     * 使用前两台相机的光心中点。所有观测权重继承匹配置信度，输出追加到 result。
      */
-    void appendBaTracks(const ProjectMatchInput& input, BaInputBuildResult* result);
+    /// Returns false if a selected camera has no matching PlaCamera instance.
+    bool appendBaTracks(const ProjectMatchInput& input, BaInputBuildResult* result);
 
 } // namespace xjw::core::project

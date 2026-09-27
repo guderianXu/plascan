@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 #include "graph/CorrespondenceGraph.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "tracks/CorrespondenceTrackThinner.h"
@@ -9,23 +9,31 @@
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double cx, double cy, double cz)
+    placamera::FramePinholeNumericState makeCamera(double cx, double cy, double cz)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
-        const std::array<double, 9> rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-        const std::array<double, 3> center = {cx, cy, cz};
-        camera.setPose(rotation, center);
-        return camera;
+        const placamera::FrameId frame("track-processing-world");
+        const auto suffix = std::to_string(cx) + "-" + std::to_string(cy) + "-" + std::to_string(cz);
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("track-processing-definition-" + suffix),
+            {1200.0, 1200.0, 512.0, 384.0, 1.0, 1, 1},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return placamera::FramePinholeNumericState::fromModel(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("track-processing-instance-" + suffix),
+            placamera::ImageId("track-processing-image-" + suffix),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, {cx, cy, cz}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
     }
 
-    xjw::FeatureKeypoint projectPoint(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    xjw::FeatureKeypoint projectPoint(const placamera::FramePinholeNumericState& camera,
                                       const std::array<double, 3>& xyz)
     {
-        const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
-        double projected[2] = {0.0, 0.0};
-        EXPECT_TRUE(camera.projectWorldPoint(worldPoint, projected));
-        return xjw::FeatureKeypoint{static_cast<float>(projected[0]), static_cast<float>(projected[1])};
+        const auto projected = camera.groundToImage({camera.groundFrame(), xyz});
+        EXPECT_TRUE(projected);
+        return xjw::FeatureKeypoint{static_cast<float>(projected.value().image.sample),
+                                    static_cast<float>(projected.value().image.line)};
     }
 
 } // namespace
@@ -154,9 +162,9 @@ TEST(CorrespondenceTrackThinnerTest, EnforcesPerImageLimitAndPrefersLongTracks)
 
 TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
     const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
 
     xjw::SfmReconstruction reconstruction;
@@ -197,7 +205,7 @@ TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 
 TEST(ReferenceMultiViewTriangulationTest, BindsCompleteTrackBeforeAllImagesRegister)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -245,7 +253,7 @@ TEST(ReferenceMultiViewTriangulationTest, BindsCompleteTrackBeforeAllImagesRegis
 
 TEST(ReferenceMultiViewTriangulationTest, RestoresFilteredPointInItsStableSlot)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -303,15 +311,14 @@ TEST(ReferenceMultiViewTriangulationTest, RestoresFilteredPointInItsStableSlot)
 
 TEST(KnownPoseMultiViewTriangulationTest, RejectsGeometryInconsistentComponentAsOneTrack)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = makeCamera(80.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera3 = makeCamera(88.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera2 = makeCamera(80.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera3 = makeCamera(88.0, 0.0, 0.0);
     const std::array<double, 3> leftPoint = {4.0, 0.5, 40.0};
     const std::array<double, 3> rightPoint = {84.0, -0.5, 40.0};
 
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
-        camera0, camera1, camera2, camera3};
+    const std::vector<placamera::FramePinholeNumericState> cameras{camera0, camera1, camera2, camera3};
 
     xjw::SfmReconstruction reconstruction;
     for (xjw::ImageId imageId = 0; imageId < static_cast<xjw::ImageId>(cameras.size()); ++imageId)
@@ -356,14 +363,14 @@ TEST(KnownPoseMultiViewTriangulationTest, RejectsGeometryInconsistentComponentAs
 
 TEST(KnownPoseMultiViewTriangulationTest, KeepsNativeTwoViewTrack)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
     const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
 
     xjw::SfmReconstruction reconstruction;
     xjw::CorrespondenceGraph graph;
     xjw::Track track;
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{camera0, camera1};
+    const std::vector<placamera::FramePinholeNumericState> cameras{camera0, camera1};
     for (xjw::ImageId imageId = 0; imageId < 2; ++imageId)
     {
         xjw::ImageData image;
@@ -391,7 +398,7 @@ TEST(KnownPoseMultiViewTriangulationTest, KeepsNativeTwoViewTrack)
 
 TEST(KnownPoseMultiViewTriangulationTest, DefersPureTwoViewTrackAfterBootstrap)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -429,7 +436,7 @@ TEST(KnownPoseMultiViewTriangulationTest, DefersPureTwoViewTrackAfterBootstrap)
 
 TEST(KnownPoseMultiViewTriangulationTest, KeepsTwoViewCandidateWithPotentialThirdViewSupport)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -466,7 +473,7 @@ TEST(KnownPoseMultiViewTriangulationTest, KeepsTwoViewCandidateWithPotentialThir
 
 TEST(IncrementalTriangulationTest, DefersNewPureTwoViewPointAfterThirdImageRegisters)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -498,7 +505,7 @@ TEST(IncrementalTriangulationTest, DefersNewPureTwoViewPointAfterThirdImageRegis
 
 TEST(KnownPoseMultiViewTriangulationTest, RejectsWholeTrackWhenAnyObservationIsInconsistent)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -546,7 +553,7 @@ TEST(KnownPoseMultiViewTriangulationTest, RejectsWholeTrackWhenAnyObservationIsI
 
 TEST(KnownPoseMultiViewTriangulationTest, RejectsTransitiveTwoViewCandidateWithoutDirectMatch)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(80.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -587,7 +594,7 @@ TEST(KnownPoseMultiViewTriangulationTest, RejectsTransitiveTwoViewCandidateWitho
 
 TEST(KnownPoseMultiViewTriangulationTest, RejectsUnstableTwoViewFragmentFromLongTrack)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(0.1, 0.0, 0.0),
         makeCamera(50.0, 0.0, 0.0),
@@ -635,7 +642,7 @@ TEST(KnownPoseMultiViewTriangulationTest, DoesNotApplyNonReferenceLocalDepthFilt
     };
     const auto runCase = [](int referenceCount)
     {
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+        const std::vector<placamera::FramePinholeNumericState> cameras{
             makeCamera(0.0, 0.0, 0.0),
             makeCamera(1.0, 0.0, 0.0),
             makeCamera(2.0, 0.0, 0.0),
@@ -710,7 +717,7 @@ TEST(KnownPoseMultiViewTriangulationTest, DoesNotApplyNonReferenceLocalDepthFilt
 
 TEST(TriangulationFilterTest, RemovesBadObservationWithoutDeletingSupportedPoint)
 {
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -750,10 +757,10 @@ TEST(TriangulationFilterTest, RemovesBadObservationWithoutDeletingSupportedPoint
 
 TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeRejectingObservation)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{camera0, camera1, camera2};
+    const placamera::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera2 = makeCamera(16.0, 0.0, 0.0);
+    const std::vector<placamera::FramePinholeNumericState> cameras{camera0, camera1, camera2};
     const std::vector<xjw::FeatureKeypoint> observations{
         {632.324869f, 398.877649f},
         {391.894366f, 398.785406f},
@@ -807,8 +814,7 @@ TEST(KnownPoseMultiViewTriangulationTest, ConsistentLongTrackUsesSingleMultiview
 
     for (xjw::ImageId imageId = 0; imageId < kImageCount; ++imageId)
     {
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-            makeCamera(static_cast<double>(imageId), 0.0, 0.0);
+        const placamera::FramePinholeNumericState camera = makeCamera(static_cast<double>(imageId), 0.0, 0.0);
         xjw::ImageData image;
         image.id = imageId;
         image.keypoints.push_back(projectPoint(camera, xyz));
@@ -836,7 +842,7 @@ TEST(KnownPoseMultiViewTriangulationTest, ConsistentLongTrackUsesSingleMultiview
 TEST(KnownPoseMultiViewTriangulationTest, ParallelCandidateGenerationCommitsInTrackOrder)
 {
     constexpr int kTrackCount = 205;
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
+    const std::vector<placamera::FramePinholeNumericState> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -893,8 +899,8 @@ TEST(KnownPoseMultiViewTriangulationTest, ParallelCandidateGenerationCommitsInTr
 
 TEST(IncrementalTriangulationTest, DoesNotReuseObservationOwnedByExistingPoint)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera0 = makeCamera(0.0, 0.0, 0.0);
+    const placamera::FramePinholeNumericState camera1 = makeCamera(8.0, 0.0, 0.0);
     const std::array<double, 3> existingPoint = {0.5, 0.2, 40.0};
     const std::array<double, 3> differentPoint = {6.0, 2.0, 35.0};
 

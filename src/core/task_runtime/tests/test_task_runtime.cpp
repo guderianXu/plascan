@@ -7,7 +7,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -127,6 +129,54 @@ namespace
         std::atomic_int _maximum{0};
     };
 
+    class ShutdownGatedExecutor final : public ITaskExecutor
+    {
+    public:
+        TaskExecutionOutcome execute(const TaskDefinition&, TaskExecutionContext& context) override
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _entered = true;
+            }
+            _condition.notify_all();
+
+            std::unique_lock<std::mutex> lock(_mutex);
+            _condition.wait(lock, [this] { return _released; });
+            lock.unlock();
+            _finished.store(true);
+            return {context.control.pollAtSafePoint("shutdown_gate") == TaskControlDecision::Cancel
+                        ? TaskExecutionStatus::Cancelled
+                        : TaskExecutionStatus::Succeeded};
+        }
+
+        bool waitUntilEntered(std::chrono::milliseconds timeout)
+        {
+            std::unique_lock<std::mutex> lock(_mutex);
+            return _condition.wait_for(lock, timeout, [this] { return _entered; });
+        }
+
+        bool finished() const
+        {
+            return _finished.load();
+        }
+
+        void release()
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _released = true;
+            }
+            _condition.notify_all();
+        }
+
+    private:
+        std::mutex _mutex;
+        std::condition_variable _condition;
+        std::atomic_bool _finished{false};
+        bool _entered = false;
+        bool _released = false;
+    };
+
     class RejectingEpochGuard final : public IProjectEpochGuard
     {
     public:
@@ -180,6 +230,43 @@ namespace
         ASSERT_EQ(order.size(), 2u);
         EXPECT_EQ(order[0], "prepare");
         EXPECT_EQ(order[1], "publish");
+    }
+
+    TEST(TaskSchedulerTest, ShutdownRequestCancelsWithoutJoiningWorkers)
+    {
+        TaskScheduler scheduler({1, {}});
+        auto executor = std::make_shared<ShutdownGatedExecutor>();
+        scheduler.registerExecutor("test", executor);
+        const auto submitted = scheduler.submit(makeTask("shutdown-gate"));
+        ASSERT_TRUE(submitted.accepted) << submitted.error;
+        ASSERT_TRUE(executor->waitUntilEntered(2s));
+
+        std::promise<void> shutdown_requested;
+        std::future<void> request_finished = shutdown_requested.get_future();
+        std::thread requester(
+            [&]
+            {
+                scheduler.requestShutdown();
+                shutdown_requested.set_value();
+            });
+        const bool returned_before_release = request_finished.wait_for(2s) == std::future_status::ready;
+        if (!returned_before_release)
+        {
+            executor->release();
+        }
+        requester.join();
+        EXPECT_TRUE(returned_before_release);
+        if (returned_before_release)
+        {
+            EXPECT_FALSE(executor->finished());
+            executor->release();
+        }
+
+        scheduler.shutdown();
+        EXPECT_TRUE(executor->finished());
+        const auto cancelled = scheduler.snapshot(submitted.runIds.front());
+        ASSERT_TRUE(cancelled.has_value());
+        EXPECT_EQ(cancelled->state, TaskState::Cancelled);
     }
 
     TEST(TaskSchedulerTest, PausesWithCheckpointReleasesWorkerAndResumesSameRun)

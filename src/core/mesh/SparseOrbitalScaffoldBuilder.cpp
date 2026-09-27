@@ -7,8 +7,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
 
@@ -25,15 +25,15 @@ namespace xjw::mesh
 namespace
 {
 
-using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-constexpr float kLengthEpsilon = 1.0e-12f;
+    using PlaCloud = plapoint::GeometryCloud<float>;
+    constexpr float kLengthEpsilon = 1.0e-12f;
 
-void setError(std::string *error, const std::string &message)
-{
-    if (error)
+    void setError(std::string* error, const std::string& message)
     {
-        *error = message;
-    }
+        if (error)
+        {
+            *error = message;
+        }
 }
 
 std::filesystem::path normalizedAbsolutePath(const std::filesystem::path &path)
@@ -254,14 +254,13 @@ std::vector<std::array<float, 3>> rejectRadialOutliers(
 
 PlaCloud toPlaCloud(const std::vector<std::array<float, 3>> &points)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(
-        static_cast<plamatrix::Index>(points.size()), 3);
+    plamatrix::MatrixXf matrix(static_cast<plamatrix::Index>(points.size()), 3);
     for (std::size_t index = 0; index < points.size(); ++index)
     {
         const auto row = static_cast<plamatrix::Index>(index);
         for (int axis = 0; axis < 3; ++axis)
         {
-            matrix.setValue(row, axis, points[index][static_cast<std::size_t>(axis)]);
+            matrix(row, axis) = points[index][static_cast<std::size_t>(axis)];
         }
     }
     return PlaCloud(std::move(matrix));
@@ -714,11 +713,11 @@ SparseOrbitalScaffoldResult SparseOrbitalScaffoldBuilder::build(
         try
         {
             const PlaCloud statistical_output =
-                plapoint::statisticalOutlierRemoval(
-                    statistical_input,
-                    options.statisticalOutlierNeighborCount,
-                    options.statisticalOutlierStdDevMultiplier,
-                    &removed_indices);
+                plapoint::statisticalOutlierRemoval(statistical_input,
+                                                    options.statisticalOutlierNeighborCount,
+                                                    options.statisticalOutlierStdDevMultiplier,
+                                                    plapoint::ProcessingDevice::Auto,
+                                                    &removed_indices);
             const auto statistical_points = fromPlaCloud(statistical_output);
             if (statistical_points.size() >= options.minimumPointCount)
             {

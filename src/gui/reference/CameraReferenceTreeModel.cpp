@@ -1,6 +1,10 @@
 #include "CameraReferenceTreeModel.h"
 
 #include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
+#include <placamera/rpc_camera.h>
 
 #include <QFileInfo>
 #include <QHash>
@@ -10,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 namespace xjw::gui::reference
 {
@@ -29,27 +34,14 @@ namespace xjw::gui::reference
         {
             QString uuid;
             QString path;
-            QJsonObject camera;
+            placamera::RpcParameters parameters;
         };
 
-        QVector<RpcProjectCamera> rpcProjectCameras(const QJsonObject& metadata)
+        struct ProjectCameras
         {
-            QVector<RpcProjectCamera> result;
-            const QJsonObject files = xjw::common::project::projectFilesRootObject(metadata);
-            for (const QJsonValue& value : files.value(QStringLiteral("images")).toArray())
-            {
-                const QJsonObject image = value.toObject();
-                const QJsonObject camera = xjw::common::project::projectCameraModelParameters(metadata, image);
-                if (camera.value(QStringLiteral("model")).toString() != QStringLiteral("rpc00b"))
-                {
-                    continue;
-                }
-                result.append({image.value(QStringLiteral("image_uuid")).toString(),
-                               image.value(QStringLiteral("path")).toString(),
-                               camera});
-            }
-            return result;
-        }
+            QHash<QString, EstimatedCamera> estimated;
+            QVector<RpcProjectCamera> rpc;
+        };
 
         struct ErrorStats
         {
@@ -142,25 +134,6 @@ namespace xjw::gui::reference
             }
         }
 
-        std::optional<camera_reference::Vector3d> vectorFromJson(const QJsonValue& value)
-        {
-            const QJsonArray array = value.toArray();
-            if (array.size() < 3)
-            {
-                return std::nullopt;
-            }
-            camera_reference::Vector3d result{};
-            for (int index = 0; index < 3; ++index)
-            {
-                if (!array.at(index).isDouble() || !std::isfinite(array.at(index).toDouble()))
-                {
-                    return std::nullopt;
-                }
-                result[static_cast<std::size_t>(index)] = array.at(index).toDouble();
-            }
-            return result;
-        }
-
         std::optional<camera_reference::Vector3d> yprFromMatrix(const camera_reference::Matrix3d& rotation)
         {
             for (const double entry : rotation)
@@ -187,44 +160,39 @@ namespace xjw::gui::reference
                 {yaw * radiansToDegrees, pitch * radiansToDegrees, roll * radiansToDegrees}};
         }
 
-        std::optional<camera_reference::Vector3d> yprFromRotation(const QJsonValue& value)
+        ProjectCameras projectCameras(const QJsonObject& metadata)
         {
-            const QJsonArray rotation = value.toArray();
-            if (rotation.size() < 9)
-            {
-                return std::nullopt;
-            }
-            camera_reference::Matrix3d matrix{};
-            for (int index = 0; index < 9; ++index)
-            {
-                const QJsonValue entry = rotation.at(index);
-                if (!entry.isDouble() || !std::isfinite(entry.toDouble()))
-                {
-                    return std::nullopt;
-                }
-                matrix[static_cast<std::size_t>(index)] = entry.toDouble();
-            }
-            return yprFromMatrix(matrix);
-        }
-
-        QHash<QString, EstimatedCamera> estimatedCameras(const QJsonObject& metadata)
-        {
-            QHash<QString, EstimatedCamera> result;
+            ProjectCameras result;
             const QJsonObject files = xjw::common::project::projectFilesRootObject(metadata);
+            const auto loaded = xjw::placamera_runtime::loadProjectCameras(files);
+            if (!loaded.ok())
+            {
+                return result;
+            }
             for (const QJsonValue& value : files.value(QStringLiteral("images")).toArray())
             {
                 const QJsonObject image = value.toObject();
-                const QString imageUuid = image.value(QStringLiteral("image_uuid")).toString().trimmed();
-                if (imageUuid.isEmpty())
+                const QString uuid = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+                if (uuid.isEmpty())
                 {
                     continue;
                 }
-                const QJsonObject camera = xjw::common::project::projectCameraModelParameters(metadata, image);
                 EstimatedCamera estimated;
                 estimated.path = image.value(QStringLiteral("path")).toString();
-                estimated.center = vectorFromJson(camera.value(QStringLiteral("C")));
-                estimated.orientationYprDegrees = yprFromRotation(camera.value(QStringLiteral("R")));
-                result.insert(imageUuid, estimated);
+                const auto model = loaded.instances.forImage(placamera::ImageId(uuid.toStdString()));
+                if (model)
+                {
+                    if (const auto frame = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(model.value()))
+                    {
+                        estimated.center = frame->pose().center;
+                        estimated.orientationYprDegrees = yprFromMatrix(frame->pose().cameraToWorldRotation);
+                    }
+                    else if (const auto rpc = std::dynamic_pointer_cast<const placamera::RpcModel>(model.value()))
+                    {
+                        result.rpc.append({uuid, estimated.path, rpc->rpcDefinition().parameters()});
+                    }
+                }
+                result.estimated.insert(uuid, estimated);
             }
             return result;
         }
@@ -289,7 +257,8 @@ namespace xjw::gui::reference
                                                     ReferenceDisplayMode mode)
     {
         clear();
-        const QVector<RpcProjectCamera> rpcCameras = rpcProjectCameras(projectMetadata);
+        const ProjectCameras cameras = projectCameras(projectMetadata);
+        const QVector<RpcProjectCamera>& rpcCameras = cameras.rpc;
         const bool geographicSource =
             mode == ReferenceDisplayMode::Source &&
             (referenceSet.source().sourceCrs.contains(QStringLiteral("4979")) || !rpcCameras.isEmpty());
@@ -309,7 +278,7 @@ namespace xjw::gui::reference
         setNodeData(totalRow, NodeType::TotalError);
         appendRow(totalRow);
 
-        const QHash<QString, EstimatedCamera> estimates = estimatedCameras(projectMetadata);
+        const QHash<QString, EstimatedCamera>& estimates = cameras.estimated;
         ErrorStats positionStats;
         ErrorStats orientationStats;
         for (const camera_reference::CameraReferenceRecord& record : referenceSet.records())
@@ -393,10 +362,9 @@ namespace xjw::gui::reference
                 setNodeData(row, NodeType::RpcModel, rpc.uuid, rpc.path);
                 if (mode == ReferenceDisplayMode::Source)
                 {
-                    row.at(XColumn)->setData(rpc.camera.value(QStringLiteral("long_off")).toDouble(), Qt::DisplayRole);
-                    row.at(YColumn)->setData(rpc.camera.value(QStringLiteral("lat_off")).toDouble(), Qt::DisplayRole);
-                    row.at(ZColumn)->setData(rpc.camera.value(QStringLiteral("height_off")).toDouble(),
-                                             Qt::DisplayRole);
+                    row.at(XColumn)->setData(rpc.parameters.longitudeOffset, Qt::DisplayRole);
+                    row.at(YColumn)->setData(rpc.parameters.latitudeOffset, Qt::DisplayRole);
+                    row.at(ZColumn)->setData(rpc.parameters.heightOffset, Qt::DisplayRole);
                 }
                 row.at(StatusColumn)
                     ->setText(mode == ReferenceDisplayMode::Source

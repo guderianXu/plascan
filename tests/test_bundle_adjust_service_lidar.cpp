@@ -1,10 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustService.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
-#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include "placamera/reference/CameraReferencePosePrior.h"
+#include <placamera/frame_camera.h>
 
 #include <QDir>
 #include <QJsonArray>
@@ -13,118 +11,119 @@
 
 #include <array>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    std::shared_ptr<const placamera::FramePinholeModel>
+    makeCamera(std::optional<placamera::TimeReference> captureTime = std::nullopt)
     {
         static int nextId = 0;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-        camera.setPose({{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}, {{0.0, 0.0, 0.0}});
         const std::string imageId = QStringLiteral("test-image-%1").arg(nextId++).toStdString();
-        EXPECT_TRUE(camera.bindIdentity(xjw::camera_core::CameraInstanceId("test-instance-" + imageId),
-                                        xjw::camera_core::ImageId(imageId),
-                                        xjw::coordinate_system::CoordinateFrameId("world")));
-        return camera;
-}
+        const placamera::FrameId frame("world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("test-definition-" + imageId),
+                                                      {1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("test-instance-" + imageId),
+            placamera::ImageId(imageId),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}),
+            captureTime));
+    }
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeTypedCamera(const char* imageId, const char* frame)
-{
-    const xjw::coordinate_system::CoordinateFrameId frameId(frame);
-    const auto definition = xjw::camera_models::frame_pinhole::FramePinholeDefinition::create(
-        xjw::camera_core::CameraDefinitionId("definition"),
-        xjw::camera_models::frame_pinhole::Intrinsics{1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
-        xjw::camera_models::frame_pinhole::Distortion{},
-        xjw::camera_models::frame_pinhole::PixelConvention::PixelCenter,
-        frameId);
-    const auto instance = xjw::camera_models::frame_pinhole::FramePinholeInstance::create(
-        xjw::camera_core::CameraInstanceId(std::string("instance-") + imageId),
-        xjw::camera_core::ImageId(imageId),
-        definition,
-        xjw::camera_core::ImageSize{1024, 768},
-        xjw::camera_core::Pose::create(
-            frameId,
-            {0.0, 0.0, 0.0},
-            xjw::camera_core::Rotation{{1.0, 0.0, 0.0,
-                                        0.0, 1.0, 0.0,
-                                        0.0, 0.0, 1.0}}));
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState result;
-    EXPECT_TRUE(xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(instance, &result));
-    return result;
-}
+    std::shared_ptr<const placamera::FramePinholeModel>
+    makeTypedCamera(const char* imageId,
+                    const char* frame,
+                    placamera::PixelConvention convention = placamera::PixelConvention::PixelCenter)
+    {
+        const placoordinate::CoordinateFrameId frameId(frame);
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("definition"),
+            placamera::FrameIntrinsics{1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+            placamera::BrownConradyDistortion{},
+            convention,
+            frameId);
+        const auto instance = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId(std::string("instance-") + imageId),
+            placamera::ImageId(imageId),
+            definition,
+            placamera::ImageSize{1024, 768},
+            placamera::Pose::create(
+                frameId, {0.0, 0.0, 0.0}, placamera::RotationMatrix{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}));
+        return std::make_shared<const placamera::FramePinholeModel>(instance);
+    }
 
-xjw::camera_reference::ResolvedCameraPosePrior makePosePrior(const char *imageId, const char *frame)
-{
-    using namespace xjw::camera_reference;
-    const xjw::coordinate_system::CoordinateFrameId frameId(frame);
-    CameraReferenceObservation observation{
-        xjw::camera_core::ImageId(imageId),
-        xjw::camera_core::ReferenceSourceId("gnss"),
-        frameId};
-    ResolvedCameraReference resolved;
-    resolved.status = ReferenceResolutionStatus::Resolved;
-    resolved.targetFrame = frameId;
-    resolved.pose = xjw::camera_core::Pose::create(
-        frameId,
-        {0.0, 0.0, 0.0},
-        xjw::camera_core::Rotation{{1.0, 0.0, 0.0,
-                                    0.0, 1.0, 0.0,
-                                    0.0, 0.0, 1.0}});
-    resolved.transformProvenanceHash = "test-provenance";
-    resolved.transformHash = "test-transform";
-    const auto result = makeResolvedCameraPosePrior(observation, resolved);
-    EXPECT_TRUE(result.ok()) << result.reason;
-    return *result.prior;
-}
+    placamera::reference::ResolvedCameraPosePrior makePosePrior(const char* imageId, const char* frame)
+    {
+        using namespace placamera::reference;
+        const placoordinate::CoordinateFrameId frameId(frame);
+        CameraReferenceObservation observation{
+            placamera::ImageId(imageId), placamera::reference::ReferenceSourceId("gnss"), frameId};
+        ResolvedCameraReference resolved;
+        resolved.status = ReferenceResolutionStatus::Resolved;
+        resolved.targetFrame = frameId;
+        resolved.pose = placamera::Pose::create(
+            frameId, {0.0, 0.0, 0.0}, placamera::RotationMatrix{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}});
+        resolved.transformProvenanceHash = "test-provenance";
+        resolved.transformHash = "test-transform";
+        const auto result = makeResolvedCameraPosePrior(observation, resolved);
+        EXPECT_TRUE(result) << result.message();
+        return result.value();
+    }
 
-xjw::BATrack makeTrack()
-{
-    xjw::BATrack track;
-    track.initialPoint = {{0.0, 0.0, 12.0}};
-    track.observations.push_back(xjw::BAObservation{0, 512.0, 384.0});
-    track.observations.push_back(xjw::BAObservation{1, 512.0, 384.0});
-    return track;
-}
+    plabundle::Track makeTrack()
+    {
+        plabundle::Track track;
+        track.initialPoint = {{0.0, 0.0, 12.0}};
+        track.observations.push_back(plabundle::Observation{0, 512.0, 384.0});
+        track.observations.push_back(plabundle::Observation{1, 512.0, 384.0});
+        return track;
+    }
 
-QString writeLaserPlanePly(const QString &dir)
-{
-    const QString path = QDir(dir).filePath(QStringLiteral("laser_plane.ply"));
-    std::ofstream out(path.toStdString(), std::ios::binary | std::ios::trunc);
-    EXPECT_TRUE(out.good());
-    out << "ply\n"
-        << "format ascii 1.0\n"
-        << "element vertex 1\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "property float normal_x\n"
-        << "property float normal_y\n"
-        << "property float normal_z\n"
-        << "property float curvature\n"
-        << "end_header\n"
-        << "0 0 10 0 0 1 0.02\n";
-    return path;
-}
+    QString writeLaserPlanePly(const QString& dir)
+    {
+        const QString path = QDir(dir).filePath(QStringLiteral("laser_plane.ply"));
+        std::ofstream out(path.toStdString(), std::ios::binary | std::ios::trunc);
+        EXPECT_TRUE(out.good());
+        out << "ply\n"
+            << "format ascii 1.0\n"
+            << "element vertex 1\n"
+            << "property float x\n"
+            << "property float y\n"
+            << "property float z\n"
+            << "property float normal_x\n"
+            << "property float normal_y\n"
+            << "property float normal_z\n"
+            << "property float curvature\n"
+            << "end_header\n"
+            << "0 0 10 0 0 1 0.02\n";
+        return path;
+    }
 
-QString writeLaserHeightPly(const QString &dir)
-{
-    const QString path = QDir(dir).filePath(QStringLiteral("laser_height_xyz.ply"));
-    std::ofstream out(path.toStdString(), std::ios::binary | std::ios::trunc);
-    EXPECT_TRUE(out.good());
-    out << "ply\n"
-        << "format ascii 1.0\n"
-        << "element vertex 1\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "end_header\n"
-        << "0 0 10\n";
-    return path;
-}
+    QString writeLaserHeightPly(const QString& dir)
+    {
+        const QString path = QDir(dir).filePath(QStringLiteral("laser_height_xyz.ply"));
+        std::ofstream out(path.toStdString(), std::ios::binary | std::ios::trunc);
+        EXPECT_TRUE(out.good());
+        out << "ply\n"
+            << "format ascii 1.0\n"
+            << "element vertex 1\n"
+            << "property float x\n"
+            << "property float y\n"
+            << "property float z\n"
+            << "end_header\n"
+            << "0 0 10\n";
+        return path;
+    }
 
 } // namespace
 
@@ -133,9 +132,9 @@ TEST(BundleAdjustServiceCameraReferenceTest, AcceptsResolvedTypedPosePrior)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
-        makeTypedCamera("image-0", "world"), makeTypedCamera("image-1", "world")};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    const std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeTypedCamera("image-0", "world"),
+                                                                                   makeTypedCamera("image-1", "world")};
+    std::vector<plabundle::Track> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
     options.dryRun = true;
@@ -150,9 +149,9 @@ TEST(BundleAdjustServiceCameraReferenceTest, RejectsResolvedPosePriorWithDiffere
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{
-        makeTypedCamera("image-0", "world"), makeTypedCamera("image-1", "world")};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    const std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeTypedCamera("image-0", "world"),
+                                                                                   makeTypedCamera("image-1", "world")};
+    std::vector<plabundle::Track> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
     options.dryRun = true;
@@ -163,13 +162,64 @@ TEST(BundleAdjustServiceCameraReferenceTest, RejectsResolvedPosePriorWithDiffere
     EXPECT_NE(result.errorMessage.indexOf(QStringLiteral("frame mismatch")), -1);
 }
 
+TEST(BundleAdjustServiceCameraReferenceTest, RejectsMixedGroundFramesBeforeSolve)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeTypedCamera("mixed-0", "world"),
+                                                                                   makeTypedCamera("mixed-1", "ecef")};
+    std::vector<plabundle::Track> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.dryRun = true;
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("ground frame")));
+}
+
+TEST(BundleAdjustServiceCameraReferenceTest, RejectsUnsupportedPixelConvention)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{
+        makeTypedCamera("corner-0", "world", placamera::PixelConvention::PixelCorner),
+        makeTypedCamera("corner-1", "world")};
+    std::vector<plabundle::Track> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.dryRun = true;
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("pixel-center")));
+}
+
+TEST(BundleAdjustServiceCameraReferenceTest, RejectsIncompleteImagePathOrderBeforeWriteback)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeTypedCamera("path-0", "world"),
+                                                                                   makeTypedCamera("path-1", "world")};
+    std::vector<plabundle::Track> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = {QStringLiteral("first.jpg")};
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("拒绝部分写回")));
+    EXPECT_TRUE(result.cameraInstances.empty());
+}
+
 TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    const auto captureTime = placamera::TimeReference::create(placamera::TimeScale::Relative, 123.25);
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(captureTime), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -181,13 +231,27 @@ TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
     options.laserAssociationMaxDistanceMeters = 3.0;
     options.laserWeight = 5.0;
     options.laserHuberDeltaMeters = 10.0;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.maxIterations = 4;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.baOpt.solver.maxIterations = 4;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    EXPECT_EQ(result.cameraInstances.size(), 2U);
+    ASSERT_EQ(result.cameraInstances.values().size(), cameras.size());
+    EXPECT_EQ(result.cameraInstances.values().front()->captureTime(), cameras.front()->captureTime());
+    EXPECT_EQ(result.cameraInstances.values().front()->instanceId(), cameras.front()->instanceId());
+    EXPECT_EQ(result.cameraInstances.values().front()->imageId(), cameras.front()->imageId());
+    EXPECT_EQ(result.cameraAnnotationsByImageId.size(), 2);
+    EXPECT_EQ(result.resultJson.value(QStringLiteral("camera_instances")).toArray().size(), 2);
+    EXPECT_EQ(result.resultJson.value(QStringLiteral("camera_definitions")).toArray().size(), 2);
+    EXPECT_FALSE(result.resultJson.contains(QStringLiteral("camera_instance_updates")));
+    const QJsonArray points = result.resultJson.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(points.size(), 1);
+    const QJsonArray observations = points.at(0).toObject().value(QStringLiteral("observations")).toArray();
+    ASSERT_EQ(observations.size(), 2);
+    EXPECT_FALSE(observations.at(0).toObject().value(QStringLiteral("used_signed_fallback")).toBool());
     ASSERT_TRUE(result.resultJson.contains(QStringLiteral("laser_constraints_summary")));
     const QJsonObject summary = result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
     EXPECT_EQ(summary.value(QStringLiteral("enabled")).toBool(), true);
@@ -202,8 +266,8 @@ TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUser
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -215,9 +279,9 @@ TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUser
     options.laserAssociationMaxDistanceMeters = 3.0;
     options.laserWeight = 7.0;
     options.laserHuberDeltaMeters = 10.0;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.maxIterations = 1;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.baOpt.solver.maxIterations = 1;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
@@ -235,8 +299,8 @@ TEST(BundleAdjustServiceLidarTest, RunDerivesStatisticalWeightFromSigma)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
     options.imagePathByIndex = {QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
@@ -249,17 +313,14 @@ TEST(BundleAdjustServiceLidarTest, RunDerivesStatisticalWeightFromSigma)
     options.laserWeight = 0.0;
     options.laserSigmaMeters = 0.1;
     options.laserHuberDeltaMeters = 10.0;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
 
     const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
-    const QJsonObject resultOptions =
-        result.resultJson.value(QStringLiteral("options")).toObject();
-    EXPECT_NEAR(resultOptions.value(QStringLiteral("laser_effective_weight")).toDouble(),
-                100.0,
-                1.0e-9);
+    const QJsonObject resultOptions = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_NEAR(resultOptions.value(QStringLiteral("laser_effective_weight")).toDouble(), 100.0, 1.0e-9);
     EXPECT_FALSE(resultOptions.value(QStringLiteral("export_observation_details")).toBool());
     const QJsonArray points = result.resultJson.value(QStringLiteral("points")).toArray();
     ASSERT_EQ(points.size(), 1);
@@ -271,8 +332,8 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
     tracks.front().observations[0].u += 1000.0;
     tracks.front().observations[1].u -= 1000.0;
 
@@ -284,19 +345,18 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     options.enableLaserConstraints = true;
     options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
     options.laserAssociationMaxDistanceMeters = 3.0;
-    options.baOpt.backend = xjw::BABackend::PlaMatrixCpu;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.maxInitialTrackRms = 0.0;
-    options.baOpt.filterMaxReprojError = 2.5;
-    options.baOpt.filterSigmaFactor = 0.0;
+    options.baOpt.backend.requested = plabundle::Backend::PlaMatrixCpu;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.maxInitialTrackRms = 0.0;
+    options.baOpt.solver.filterMaxReprojError = 2.5;
+    options.baOpt.solver.filterSigmaFactor = 0.0;
 
     const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     EXPECT_FALSE(result.success);
-    EXPECT_TRUE(result.cameraInstanceUpdates.empty());
+    EXPECT_TRUE(result.cameraInstances.empty());
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR 约束在求解或质量过滤后全部失效")));
-    const QJsonObject summary =
-        result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
+    const QJsonObject summary = result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
     EXPECT_EQ(summary.value(QStringLiteral("associated_tracks")).toInt(), 1);
     EXPECT_EQ(summary.value(QStringLiteral("laser_constraint_count")).toInt(), 0);
 }
@@ -306,8 +366,8 @@ TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplici
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -320,9 +380,9 @@ TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplici
     options.laserUseMissingNormalsAsHeightPlanes = true;
     options.laserWeight = 5.0;
     options.laserHuberDeltaMeters = 10.0;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.maxIterations = 4;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.baOpt.solver.maxIterations = 4;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
@@ -342,10 +402,10 @@ TEST(BundleAdjustServiceLidarTest, RunWritesControlPointConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
 
-    xjw::BAControlPointConstraint constraint;
+    plabundle::ControlPointConstraint constraint;
     constraint.point = {{0.0, 0.0, 10.0}};
     constraint.sigmaMeters = 0.05;
     constraint.weight = 1.0;
@@ -356,18 +416,17 @@ TEST(BundleAdjustServiceLidarTest, RunWritesControlPointConstraintSummary)
     options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
     options.exportTsai = false;
     options.exportEvalPlot = false;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.enableControlPointConstraints = true;
-    options.baOpt.controlPointHuberDeltaMeters = 10.0;
-    options.baOpt.maxIterations = 4;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.enableControlPointConstraints = true;
+    options.baOpt.constraints.controlPointHuberDeltaMeters = 10.0;
+    options.baOpt.solver.maxIterations = 4;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
     ASSERT_TRUE(result.resultJson.contains(QStringLiteral("control_point_constraints_summary")));
-    const QJsonObject summary =
-        result.resultJson.value(QStringLiteral("control_point_constraints_summary")).toObject();
+    const QJsonObject summary = result.resultJson.value(QStringLiteral("control_point_constraints_summary")).toObject();
     EXPECT_TRUE(summary.value(QStringLiteral("enabled")).toBool());
     EXPECT_EQ(summary.value(QStringLiteral("control_point_constraint_count")).toInt(), 1);
     EXPECT_NEAR(summary.value(QStringLiteral("control_point_rms_before_m")).toDouble(), 2.0, 1e-9);
@@ -383,14 +442,14 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{12.0, 0.0, 10.0}};
     tracks[1].observations[0].u = 1712.0;
     tracks[1].observations[1].u = 1712.0;
 
-    xjw::BAScaleBarConstraint constraint;
+    plabundle::ScaleBarConstraint constraint;
     constraint.trackIndexA = 0;
     constraint.trackIndexB = 1;
     constraint.measuredDistanceMeters = 10.0;
@@ -401,20 +460,20 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
     options.exportTsai = false;
     options.exportEvalPlot = false;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.enableScaleBarConstraints = true;
-    options.baOpt.scaleBarWeight = 1000.0;
-    options.baOpt.scaleBarHuberDeltaMeters = 10.0;
-    options.baOpt.scaleBarConstraints.push_back(constraint);
-    options.baOpt.maxIterations = 8;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.baOpt.quality.enabled = false;
+    options.enableScaleBarConstraints = true;
+    options.baOpt.constraints.scaleBarWeight = 1000.0;
+    options.baOpt.constraints.scaleBarHuberDeltaMeters = 10.0;
+    options.scaleBarConstraints.push_back(constraint);
+    options.baOpt.solver.maxIterations = 8;
 
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
     ASSERT_TRUE(result.resultJson.contains(QStringLiteral("scale_bar_constraints_summary")));
-    const QJsonObject summary =
-        result.resultJson.value(QStringLiteral("scale_bar_constraints_summary")).toObject();
+    const QJsonObject summary = result.resultJson.value(QStringLiteral("scale_bar_constraints_summary")).toObject();
     EXPECT_TRUE(summary.value(QStringLiteral("enabled")).toBool());
     EXPECT_EQ(summary.value(QStringLiteral("scale_bar_constraint_count")).toInt(), 1);
     EXPECT_NEAR(summary.value(QStringLiteral("scale_bar_rms_before_m")).toDouble(), 2.0, 1e-9);
@@ -430,11 +489,11 @@ TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{2.0, 0.0, 10.0}};
-    for (xjw::BAObservation &observation : tracks[1].observations)
+    for (plabundle::Observation& observation : tracks[1].observations)
     {
         observation.u = 712.0;
     }
@@ -444,14 +503,22 @@ TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
     options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
     options.exportTsai = false;
     options.exportEvalPlot = false;
-    options.baOpt.refineCameraPose = false;
-    options.baOpt.enablePointFilter = false;
-    options.baOpt.maxIterations = 1;
+    options.baOpt.calibration.refineCameraPose = false;
+    options.baOpt.solver.enablePointFilter = false;
+    options.baOpt.solver.maxIterations = 1;
     options.markerTrackQualityInputs = {
-        {QStringLiteral("C1"), xjw::control_points::MarkerRole::ControlPoint,
-         0, {{0.0, 0.0, 10.0}}, {{0.01, 0.01, 0.01}}, true},
-        {QStringLiteral("K1"), xjw::control_points::MarkerRole::CheckPoint,
-         1, {{3.0, 0.0, 10.0}}, {{0.01, 0.01, 0.01}}, false},
+        {QStringLiteral("C1"),
+         xjw::control_points::MarkerRole::ControlPoint,
+         0,
+         {{0.0, 0.0, 10.0}},
+         {{0.01, 0.01, 0.01}},
+         true},
+        {QStringLiteral("K1"),
+         xjw::control_points::MarkerRole::CheckPoint,
+         1,
+         {{3.0, 0.0, 10.0}},
+         {{0.01, 0.01, 0.01}},
+         false},
     };
     options.markerScaleBarQualityInputs = {
         {QStringLiteral("SB-C"), xjw::control_points::ScaleBarRole::Control, 0, 1, 2.0},
@@ -461,16 +528,14 @@ TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
     const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
-    const QJsonObject report =
-        result.resultJson.value(QStringLiteral("marker_quality_report")).toObject();
-    EXPECT_EQ(report.value(QStringLiteral("controls")).toObject()
-                  .value(QStringLiteral("count")).toInt(), 1);
-    EXPECT_EQ(report.value(QStringLiteral("check_points")).toObject()
-                  .value(QStringLiteral("count")).toInt(), 1);
-    EXPECT_NEAR(report.value(QStringLiteral("check_points")).toObject()
-                    .value(QStringLiteral("rms")).toDouble(), 1.0, 1.0e-6);
-    EXPECT_NEAR(report.value(QStringLiteral("check_scale_bars")).toObject()
-                    .value(QStringLiteral("rms")).toDouble(), 1.0, 1.0e-6);
+    const QJsonObject report = result.resultJson.value(QStringLiteral("marker_quality_report")).toObject();
+    EXPECT_EQ(report.value(QStringLiteral("controls")).toObject().value(QStringLiteral("count")).toInt(), 1);
+    EXPECT_EQ(report.value(QStringLiteral("check_points")).toObject().value(QStringLiteral("count")).toInt(), 1);
+    EXPECT_NEAR(
+        report.value(QStringLiteral("check_points")).toObject().value(QStringLiteral("rms")).toDouble(), 1.0, 1.0e-6);
+    EXPECT_NEAR(report.value(QStringLiteral("check_scale_bars")).toObject().value(QStringLiteral("rms")).toDouble(),
+                1.0,
+                1.0e-6);
 }
 
 TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
@@ -478,8 +543,8 @@ TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -490,18 +555,17 @@ TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
     const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
 
     EXPECT_FALSE(result.success);
-    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR"))
-                || result.errorMessage.contains(QStringLiteral("激光")));
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR")) ||
+                result.errorMessage.contains(QStringLiteral("激光")));
 }
-
 
 TEST(BundleAdjustServiceLidarTest, RunFailsWhenNoTrackCanAssociateWithLaserCloud)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras{makeCamera(), makeCamera()};
-    std::vector<xjw::BATrack> tracks{makeTrack()};
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>> cameras{makeCamera(), makeCamera()};
+    std::vector<plabundle::Track> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
     options.imagePathByIndex = {QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};

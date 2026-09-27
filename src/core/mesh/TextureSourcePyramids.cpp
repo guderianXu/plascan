@@ -76,11 +76,20 @@ namespace xjw::mesh::texture_v4
                     bool valid = true;
                     for (int corner = 0; corner < 3; ++corner)
                     {
-                        double pixel[2]{};
-                        double depth = 0.0;
-                        valid = valid && view.colorCamera.projectWorldPointWithDepth(
-                                             data.geometry[face].vertices[corner].data(), pixel, depth);
-                        triangle[corner] = cv::Point(cvRound(pixel[0]), cvRound(pixel[1]));
+                        if (!view.colorCamera)
+                        {
+                            valid = false;
+                            break;
+                        }
+                        const auto projected = view.colorCamera->groundToImage(
+                            {view.colorCamera->groundFrame(), data.geometry[face].vertices[corner]});
+                        if (!projected || !projected.value().positiveDepth)
+                        {
+                            valid = false;
+                            break;
+                        }
+                        triangle[corner] =
+                            cv::Point(cvRound(projected.value().image.sample), cvRound(projected.value().image.line));
                     }
                     if (valid)
                     {

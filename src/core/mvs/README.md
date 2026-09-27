@@ -145,7 +145,7 @@ MVS camera source. RPC and pushbroom instances therefore fail at this boundary w
 
 - `MvsSourcePlanner` scores candidate source views by shared tracks, geometric inliers, triangulation angle,
   projected coverage, baseline, known overlap, and sequence distance. The angle and physical-front checks are
-  computed through `core/camera/CameraBaseline`, so zero-baseline pairs and points behind either camera do not
+  computed through `placamera::CameraBaseline`, so zero-baseline pairs and points behind either camera do not
   become MVS source evidence.
 - `MvsSceneClassifier` resolves the candidate source pool before image preload and frame-cache preparation.
   High-resolution aerial terrain uses up to eight candidates. Dense orbital rings with at least 16 cameras

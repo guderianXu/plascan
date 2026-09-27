@@ -1,6 +1,5 @@
 #include "DepthTsdfNarrowBandActivation.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthTsdfSurfaceBuilder.h"
 
 #include <opencv2/core/mat.hpp>
@@ -208,7 +207,7 @@ bool DepthTsdfNarrowBandActivation::build(
         {
             return false;
         }
-        if (!frame.camera || !frame.camera->isValid() ||
+        if (!frame.camera ||
             !frame.depth || frame.depth->empty() ||
             frame.depth->type() != CV_32FC1 ||
             !validOptionalMask(frame.depthValidMask, *frame.depth) ||
@@ -243,9 +242,7 @@ bool DepthTsdfNarrowBandActivation::build(
                     continue;
                 }
                 ++statistics.validSourceSamples;
-                const double pixel[2] = {
-                    static_cast<double>(column),
-                    static_cast<double>(row)};
+                const placamera::ImageCoordinate pixel{static_cast<double>(column), static_cast<double>(row)};
                 for (int interval = -half_band_intervals;
                      interval <= half_band_intervals;
                      ++interval)
@@ -260,16 +257,16 @@ bool DepthTsdfNarrowBandActivation::build(
                     {
                         continue;
                     }
-                    double world[3]{};
-                    if (!frame.camera->unprojectPixel(
-                            pixel, ray_depth, world))
+                    const auto ground = frame.camera->imageToGroundAtDepth(pixel, ray_depth);
+                    if (!ground)
                     {
                         continue;
                     }
+                    const auto& world = ground.value().position;
                     std::size_t index = 0;
                     if (worldToSampleBlock(
                             layout,
-                            world,
+                            world.data(),
                             options.blockSizeSamples,
                             block_count_x,
                             block_count_y,

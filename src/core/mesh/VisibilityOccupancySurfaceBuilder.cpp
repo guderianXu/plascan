@@ -357,15 +357,16 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                     {
                         continue;
                     }
-                    double pixel[2]{};
-                    double voxel_depth = 0.0;
-                    if (!frame.camera->projectWorldPointWithDepth(
-                            world, pixel, voxel_depth))
+                    const auto projected = frame.camera->groundToImage(
+                        placamera::GroundCoordinate{frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+                    if (!projected || !projected.value().positiveDepth)
                     {
                         continue;
                     }
-                    const int column = static_cast<int>(std::lround(pixel[0]));
-                    const int row = static_cast<int>(std::lround(pixel[1]));
+                    const auto& pixel = projected.value().image;
+                    const double voxel_depth = *projected.value().positiveDepth;
+                    const int column = static_cast<int>(std::lround(pixel.sample));
+                    const int row = static_cast<int>(std::lround(pixel.line));
                     if (row < 0 || row >= height ||
                         column < 0 || column >= width)
                     {
@@ -402,7 +403,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         confidenceAt(frame.confidence, row, column);
                     const DepthRayMetricSample ray = DepthRayMetric::evaluate(
                         *frame.camera,
-                        {pixel[0], pixel[1]},
+                        {pixel.sample, pixel.line},
                         observed_depth);
                     if (!ray.valid || !(confidence > 0.0f))
                     {

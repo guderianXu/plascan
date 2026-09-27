@@ -137,7 +137,7 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
             continue;
         }
 
-        xjw::BATrack track;
+        plabundle::Track track;
         track.initialPoint = controlPoint;
         QSet<int> usedCameras;
         for (const QJsonValue &value : observations)
@@ -200,7 +200,7 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
             continue;
         }
 
-        xjw::BAControlPointConstraint constraint;
+        plabundle::ControlPointConstraint constraint;
         constraint.point = controlPoint;
         constraint.sigmaMeters = sigmaFromSurveyRecord(record);
         constraint.weight = 1.0;
@@ -250,7 +250,7 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
             continue;
         }
 
-        xjw::BAScaleBarConstraint constraint;
+        plabundle::ScaleBarConstraint constraint;
         constraint.trackIndexA = trackIndexByControlId.value(fromId);
         constraint.trackIndexB = trackIndexByControlId.value(toId);
         constraint.measuredDistanceMeters = measuredDistance;

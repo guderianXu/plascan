@@ -15,7 +15,7 @@ namespace xjw
     {
         PnpResult runReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
                                         const std::vector<std::array<double, 2>>& imagePoints,
-                                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                        const placamera::FramePinholeDefinition& camera,
                                         const PnpOptions& options)
         {
             PnpResult result;
@@ -52,47 +52,51 @@ namespace xjw
                                bool depthFlipped,
                                const PnpOptions& options)
     {
-        return solveWithDistortion(worldPoints,
-                                   imagePoints,
-                                   fu,
-                                   fv,
-                                   cu,
-                                   cv,
-                                   uDir,
-                                   vDir,
-                                   depthFlipped,
-                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{},
-                                   options);
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = fu;
+        intrinsics.focalY = fv;
+        intrinsics.principalX = cu;
+        intrinsics.principalY = cv;
+        intrinsics.uAxisSign = uDir;
+        intrinsics.vAxisSign = vDir;
+        return solveCalibrated(worldPoints, imagePoints, intrinsics, placamera::BrownConradyDistortion{},
+                               depthFlipped, options);
     }
 
-    PnpResult PnpSolver::solveWithDistortion(
+    PnpResult PnpSolver::solveCalibrated(
         const std::vector<std::array<double, 3>>& worldPoints,
         const std::vector<std::array<double, 2>>& imagePoints,
-        double fu,
-        double fv,
-        double cu,
-        double cv,
-        int uDir,
-        int vDir,
+        const placamera::FrameIntrinsics& intrinsics,
+        const placamera::BrownConradyDistortion& distortion,
         bool depthFlipped,
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion,
         const PnpOptions& options)
     {
-        if (options.useReferenceResection)
-        {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-            camera.setIntrinsics(fu, fv, cu, cv);
-            camera.setAxisDirections(uDir, vDir);
-            camera.setDepthAxisFlipped(depthFlipped);
-            camera.setDistortion(distortion);
-            return runReferenceResection(worldPoints, imagePoints, camera, options);
-        }
-
         PnpResult result;
         const size_t n = worldPoints.size();
         result.inputCandidateCount = static_cast<int>(n);
+        result.usedReferenceResection = options.useReferenceResection;
         if (n < 4 || n != imagePoints.size())
+        {
             return result;
+        }
+
+        std::shared_ptr<const placamera::FramePinholeDefinition> definition;
+        try
+        {
+            // Raw PnP points use an implicit local frame; this identifier is never persisted.
+            definition = placamera::FramePinholeDefinition::create(
+                placamera::CameraDefinitionId("pnp-calibration"), intrinsics, distortion,
+                placamera::PixelConvention::PixelCenter, placamera::FrameId("pnp-input-frame"), depthFlipped);
+        }
+        catch (const placamera::CameraValidationError&)
+        {
+            return result;
+        }
+
+        if (options.useReferenceResection)
+        {
+            return runReferenceResection(worldPoints, imagePoints, *definition, options);
+        }
 
         // ---- 准备 OpenCV 数据 ----
         std::vector<cv::Point3d> objPts(n);
@@ -106,7 +110,7 @@ namespace xjw
         // 构造内参矩阵
         // TSai 模型：u = uDir * fu * x + cu → OpenCV 等效：fx = uDir * fu
         // 当 depthFlipped 时需额外翻转符号，使归一化坐标处于正深度约定
-        const cv::Mat cameraMatrix = openCvCameraMatrix(fu, fv, cu, cv, uDir, vDir, depthFlipped, true);
+        const cv::Mat cameraMatrix = openCvCameraMatrix(*definition, true);
 
         const std::array<double, 5> distortionCoefficients{{
             distortion.radialK1,
@@ -313,28 +317,6 @@ namespace xjw
         }
 
         return result;
-    }
-
-    PnpResult PnpSolver::solveWithCamera(const std::vector<std::array<double, 3>>& worldPoints,
-                                         const std::vector<std::array<double, 2>>& imagePoints,
-                                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
-                                         const PnpOptions& options)
-    {
-        if (options.useReferenceResection)
-        {
-            return runReferenceResection(worldPoints, imagePoints, cam, options);
-        }
-        return solveWithDistortion(worldPoints,
-                                   imagePoints,
-                                   cam.focalX(),
-                                   cam.focalY(),
-                                   cam.principalX(),
-                                   cam.principalY(),
-                                   cam.uAxisSign(),
-                                   cam.vAxisSign(),
-                                   cam.depthAxisFlipped(),
-                                   cam.distortion(),
-                                   options);
     }
 
 } // namespace xjw

@@ -1,6 +1,7 @@
 // SparseCloudPreprocessor.cpp
+#include <plapoint/geometry_cloud.h>
 #include "SparseCloudPreprocessor.h"
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/point_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/xyz_io.h>
@@ -28,16 +29,15 @@ using common::string_utils::endsWithAsciiIgnoreCase;
 namespace
 {
 
-using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using SparsePlaCloud = plapoint::GeometryCloud<float>;
 
-constexpr std::size_t kMaxMedianSpacingSamples = 65536;
-constexpr std::ptrdiff_t kParallelLinearPassThreshold = 4096;
+    constexpr std::size_t kMaxMedianSpacingSamples = 65536;
+    constexpr std::ptrdiff_t kParallelLinearPassThreshold = 4096;
 
-SparsePlaCloud toPlaCloud(const std::vector<std::array<float,3>> &pts)
-{
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(
-        static_cast<plamatrix::Index>(pts.size()), 3);
-    const auto count = static_cast<std::ptrdiff_t>(pts.size());
+    SparsePlaCloud toPlaCloud(const std::vector<std::array<float, 3>>& pts)
+    {
+        plamatrix::MatrixXf matrix(static_cast<plamatrix::Index>(pts.size()), 3);
+        const auto count = static_cast<std::ptrdiff_t>(pts.size());
 #ifdef HAS_OPENMP
 #pragma omp parallel for schedule(static) if(count > kParallelLinearPassThreshold)
 #endif
@@ -63,9 +63,7 @@ std::vector<std::array<float,3>> fromPlaCloud(const SparsePlaCloud &cloud)
     for (std::ptrdiff_t i = 0; i < count; ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        pts[static_cast<std::size_t>(i)] = {matrix.getValue(row, 0),
-                                            matrix.getValue(row, 1),
-                                            matrix.getValue(row, 2)};
+        pts[static_cast<std::size_t>(i)] = {matrix.coeff(row, 0), matrix.coeff(row, 1), matrix.coeff(row, 2)};
     }
     return pts;
 }
@@ -86,10 +84,16 @@ float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
         return 0.0f;
     }
 
-    auto cloudPtr = std::shared_ptr<const SparsePlaCloud>(&cloud, [](const SparsePlaCloud*) {});
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(cloudPtr);
-    tree.build();
+    auto search_cloud = std::make_shared<plapoint::PointCloud<plapoint::PointXYZ>>();
+    search_cloud->resize(cloud.size());
+    for (std::size_t index = 0; index < cloud.size(); ++index)
+    {
+        const auto row = static_cast<plamatrix::Index>(index);
+        search_cloud->points[index] =
+            plapoint::PointXYZ(cloud.points()(row, 0), cloud.points()(row, 1), cloud.points()(row, 2));
+    }
+    plapoint::search::KdTree<plapoint::PointXYZ> tree;
+    tree.setInputCloud(search_cloud);
 
     const std::size_t sampleCount = std::min(cloud.size(), kMaxMedianSpacingSamples);
     std::vector<float> distances(sampleCount, 0.0f);
@@ -103,19 +107,18 @@ float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
     {
         const auto sampleIndex = static_cast<std::size_t>(sample);
         const std::size_t i = sampledPointIndex(sampleIndex, sampleCount, cloud.size());
-        const auto row = static_cast<plamatrix::Index>(i);
-        plamatrix::Vec3<float> query{matrix.getValue(row, 0),
-                                     matrix.getValue(row, 1),
-                                     matrix.getValue(row, 2)};
-        const auto neighbors = tree.nearestKSearch(query, 2);
+        const plapoint::PointXYZ& query = search_cloud->points[i];
+        std::vector<int> neighbors;
+        std::vector<float> squared_distances;
+        tree.nearestKSearch(query, 2, neighbors, squared_distances);
         if (neighbors.size() < 2)
         {
             continue;
         }
         const int nn = neighbors[0] == static_cast<int>(i) ? neighbors[1] : neighbors[0];
-        const float dx = matrix.getValue(nn, 0) - query.x;
-        const float dy = matrix.getValue(nn, 1) - query.y;
-        const float dz = matrix.getValue(nn, 2) - query.z;
+        const float dx = matrix.coeff(nn, 0) - query.x;
+        const float dy = matrix.coeff(nn, 1) - query.y;
+        const float dz = matrix.coeff(nn, 2) - query.z;
         distances[sampleIndex] = std::sqrt(dx * dx + dy * dy + dz * dz);
         valid[sampleIndex] = 1;
     }
@@ -196,11 +199,7 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
         for (std::ptrdiff_t i = 0; i < count; ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
-            pts[static_cast<std::size_t>(i)] = {
-                matrix.getValue(row, 0),
-                matrix.getValue(row, 1),
-                matrix.getValue(row, 2)
-            };
+            pts[static_cast<std::size_t>(i)] = {matrix.coeff(row, 0), matrix.coeff(row, 1), matrix.coeff(row, 2)};
         }
         return true;
     }

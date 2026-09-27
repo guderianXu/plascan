@@ -68,14 +68,16 @@ namespace
     {
         xjw::mvs::CameraView view;
         view.imagePath = imagePath.toStdString();
-        view.camera.setIntrinsics(100.0, 100.0, 32.0, 24.0);
-        view.camera.setPose({1.0, 0.0, 0.0,
-                             0.0, 1.0, 0.0,
-                             0.0, 0.0, 1.0},
-                            {0.0, 0.0, 0.0});
-        EXPECT_TRUE(view.camera.bindIdentity(xjw::camera_core::CameraInstanceId(instanceId),
-                                             xjw::camera_core::ImageId(imageId),
-                                             xjw::coordinate_system::CoordinateFrameId("local")));
+        const placamera::FrameId frame("local");
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("point-cloud-input-definition"),
+            placamera::FrameIntrinsics{100.0, 100.0, 32.0, 24.0},
+            {}, placamera::PixelConvention::PixelCenter, frame);
+        view.camera = std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId(instanceId), placamera::ImageId(imageId), definition,
+            placamera::ImageSize{64, 48},
+            placamera::Pose::create(frame, {0.0, 0.0, 0.0},
+                                    {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
         return view;
     }
 

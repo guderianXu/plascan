@@ -2,6 +2,8 @@
 
 #include "MvsTypes.h"
 
+#include <placamera/frame_numeric_state.h>
+
 namespace xjw
 {
     namespace mvs
@@ -29,8 +31,8 @@ namespace xjw
                                                 MvsSceneProfile sceneProfile,
                                                 bool epipolarRectified) noexcept;
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState
-        cameraForDepthGrid(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rasterCamera,
+        placamera::FramePinholeNumericState
+        cameraForDepthGrid(const placamera::FramePinholeNumericState& rasterCamera,
                            const cv::Size& rasterSize,
                            const cv::Size& depthGridSize);
 

@@ -17,21 +17,22 @@ class CameraCalibrationDialog final : public QDialog
     Q_OBJECT
 
 public:
-    explicit CameraCalibrationDialog(const QJsonObject &projectMetadata,
-                                     const QString &projectAssetsDir,
-                                     QWidget *parent = nullptr);
+    explicit CameraCalibrationDialog(const QJsonObject& projectMetadata,
+                                     const QString& projectAssetsDir,
+                                     QWidget* parent = nullptr);
+    void setCameraTaskRunning(bool running);
 
 signals:
-    void importCameraForImageRequested(const QString &imagePath);
-    void batchImportRequested();
-    void initializeIntrinsicsRequested(const QJsonObject &settings);
-    void clearCamerasRequested(const QStringList &imagePaths);
+    void importCameraForImageRequested(const QString& imagePath);
+    void importCameraProjectRequested();
+    void initializeIntrinsicsRequested(const QJsonObject& settings);
+    void clearCamerasRequested(const QStringList& imagePaths);
 
 private slots:
     void showSelectedCameraGroup(int row);
     void updateCameraActionAvailability();
     void requestImportForSelectedPhoto();
-    void requestBatchImport();
+    void requestCameraProjectImport();
     void requestInitializeIntrinsics();
     void requestClearSelectedCameras();
 
@@ -44,8 +45,8 @@ private:
 
     void buildInterface();
     void buildGroups();
-    void populateParameterTables(const CameraGroup &group);
-    void populatePhotoTable(const CameraGroup &group);
+    void populateParameterTables(const CameraGroup& group);
+    void populatePhotoTable(const CameraGroup& group);
     void showEmptyState();
     QStringList selectedPhotoPaths() const;
     QStringList selectedConfiguredPhotoPaths() const;
@@ -54,16 +55,17 @@ private:
     QVector<CameraGroup> _groups;
     bool _hasProject = false;
     bool _hasProjectImages = false;
+    bool _cameraTaskRunning = false;
     QString _reportTimestamp;
     QString _reportError;
-    QListWidget *_cameraGroups = nullptr;
-    QTabWidget *_calibrationTabs = nullptr;
-    QTableWidget *_initialParameters = nullptr;
-    QTableWidget *_adjustedParameters = nullptr;
-    QTableWidget *_photoTable = nullptr;
-    QLabel *_summaryLabel = nullptr;
-    QPushButton *_importSelectedButton = nullptr;
-    QPushButton *_batchImportButton = nullptr;
-    QPushButton *_initializeIntrinsicsButton = nullptr;
-    QPushButton *_clearSelectedButton = nullptr;
+    QListWidget* _cameraGroups = nullptr;
+    QTabWidget* _calibrationTabs = nullptr;
+    QTableWidget* _initialParameters = nullptr;
+    QTableWidget* _adjustedParameters = nullptr;
+    QTableWidget* _photoTable = nullptr;
+    QLabel* _summaryLabel = nullptr;
+    QPushButton* _importSelectedButton = nullptr;
+    QPushButton* _importProjectButton = nullptr;
+    QPushButton* _initializeIntrinsicsButton = nullptr;
+    QPushButton* _clearSelectedButton = nullptr;
 };

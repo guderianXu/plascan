@@ -6,6 +6,29 @@
 
 ### 新增
 
+- 新增可独立构建、测试、安装和消费的 PlaCoordinate：按 `types`、`transform`、可选 `gdal`、可选
+  `presets`、可选 `state` 拆分 frame/time、CRS/context、solver 尺度、静态 frame 图、单位换算、GDAL
+  坐标/误差传播、CGCS2000 高斯、WGS84 Mercator、月球 Equirectangular/南北极 Polar Stereographic 预设和
+  JSON 持久化；PlaScan 业务代码直接消费 PlaCoordinate，旧坐标目录及兼容 API 已删除。PlaCamera 公开复用同一
+  `FrameId`、`TimeScale` 和 `TimeReference`，不再逐值复制，也不会把 GDAL/JSON 传给纯相机消费者。
+- PlaCamera 0.2 补齐 definition/instance-set、通用优化布局、frame 数值状态/交会、RPC robust bias/交会、
+  两阶段 factory 与严格 canonical JSON state；PlaScan 新增双向模型适配、canonical project 原子加载/回写，
+  并以两幅跟踪 RPC GeoTIFF 建立真实数据双跑门禁。Tsai、USGSCSM ISD 与 RPC/RPB 栅格文件入口现由
+  PlaCamera 直接提供，生产调用已移除 `xjw::camera_io` 中间层；仍不宣称 csmapi 插件兼容。
+- PlaCamera 新增可由求解器直接拥有的线阵数值状态：逐结点位置/旋转固定与自由块、三轴先验、二阶平滑、
+  场景时间偏移先验、完整 `f/cx/cy/b1/b2/k1..k4/p1..p4` 标定和显式探元掩码均进入参数布局与残差；
+  热路径直接投影数值数组。面阵与线阵均独立保留 `image_center` 和主点 offset，导入、缩放、优化及状态
+  往返不再通过浮点减法重建中心。RPC 改正以判别类型区分
+  归一化影像域和物理经纬高域，参考姿态协方差统一为位置米/旋转弧度 6×6 切空间并支持刚体、Sim(3) 与
+  Metashape YPR 度平方转换。中心投影定义 schema 4、线阵定义 schema 3 及 RPC/线阵实例 schema 2 由
+  PlaScan 规范工程完整往返，旧 schema 可确定迁移。
+- 新增可独立构建、测试、安装和消费的 PlaBundle：覆盖 frame/Brown 联合平差、完整测绘约束、
+  general/online point Schur、自适应相机模型和 CPU/CUDA/OpenCL 后端；提供 Auto 阈值、质量门、
+  可观测 CPU 回退、无部分写回取消和 cold/warm benchmark。Qt-free adapter 已通过固定 synthetic、
+  全约束和设备 parity；SfM、LiDAR、航三、CLI 与 GUI 生产调用已完成 PB5 切换，旧
+  `src/core/bundle_adjust` 重复实现和兼容 adapter 已删除，稳定 CLI/JSON 报告字段保持不变。
+- PlaBundle 新增线阵平差数值入口；PlaScan 的行星推扫入口已改用该求解器，ISD 文件读取与相机构造下沉
+  PlaCamera，ISIS 解析、像素约定和结果身份映射仍留在 PlaScan，旧 LiDAR 内 Schur/LM 数值实现已删除。
 - 新增统一 `auto_sift` 模块：集中维护 SIFT 的 CPU/CUDA/OpenCL/Metal 提取与匹配、RootSIFT、大小影像自适应尺度、
   空间均匀化和基础矩阵引导重匹配，不再把用户算法身份绑定到 CUDA 后端名称。
 - U2Net 蒙版新增 TensorRT FP16/FP32 后端：发布包分发可移植 ONNX，首次使用时在用户本地应用数据目录
@@ -21,6 +44,15 @@
 
 ### 优化
 
+- 外部相机工程改为由 GUI 项目服务直接消费 PlaCamera 的 Middlebury、EPFL、COLMAP text 和展开后的
+  Metashape XML 导入结果；删除 `camera_dataset_import`、`camera_convert_cli` 和格式转换对话框，不再生成
+  中间 Tsai 目录、`image_camera.lis` 或 `summary.json`。COLMAP 标准 Brown 参数无损映射，无法表达的
+  fisheye、thin-prism 和非零有理分母模型明确拒绝。
+- `src/core/camera` 收敛为仅含 CMake `INTERFACE` 兼容 target 和边界说明的两文件模块；Tsai/ISD/RPC
+  文件测试与手工诊断工具迁入 PlaCamera，PlaScan 不再维护相机文件适配实现。
+- PlaScan 内部相机、控制点、SfM、空三、MVS 和地形消费点直连 `placoordinate` 类型、头文件和 CMake 组件；
+  GUI project 公共 target 透传坐标与 SfM 工程头依赖；删除旧坐标目录、转发头、命名空间别名和旧 target，
+  并保留独立的防回退扫描门禁。
 - 删除 `image_matching/tensorrt` 的旧 include 路径转发层；LoMa-R 与匹配任务直接依赖统一的
   `core/inference/tensorrt` 实现，避免重复类型别名和间接命名空间。
 - 空中三角测量默认匹配算法切换为无需外部模型的 `auto_sift`；小分辨率影像使用 2 倍首层和阈值递降，

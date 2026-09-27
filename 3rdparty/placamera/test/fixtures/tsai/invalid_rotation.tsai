@@ -1,0 +1,9 @@
+VERSION_4
+PINHOLE
+fu = 35
+fv = 35
+cu = 0
+cv = 0
+C = 0 0 0
+R = 1 0 0 0 1 0 0 0 -1
+pitch = 0.005

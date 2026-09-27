@@ -479,6 +479,10 @@ std::vector<VertexDepthObservation> collectVertexObservations(
          ++frame_index)
     {
         const DepthTsdfFrame &frame = frames[frame_index];
+        if (!frame.camera)
+        {
+            continue;
+        }
         if (options.primaryFramesOnly && frame.auxiliarySurfaceOnly)
         {
             if (statistics != nullptr)
@@ -487,13 +491,15 @@ std::vector<VertexDepthObservation> collectVertexObservations(
             }
             continue;
         }
-        double pixel[2]{};
-        double projected_depth = 0.0;
-        if (!frame.camera.projectWorldPointWithDepth(
-                world, pixel, projected_depth))
+        const auto projected = frame.camera->groundToImage(
+            {frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+        if (!projected || !projected.value().positiveDepth)
         {
             continue;
         }
+        const auto& image = projected.value().image;
+        const double pixel[2]{image.sample, image.line};
+        const double projected_depth = *projected.value().positiveDepth;
         if (statistics != nullptr)
         {
             ++statistics->projectedObservationCount;
@@ -532,12 +538,12 @@ std::vector<VertexDepthObservation> collectVertexObservations(
         {
             continue;
         }
-        double target_world[3]{};
-        if (!frame.camera.unprojectPixel(
-                pixel, observation.depth, target_world))
+        const auto target_ground = frame.camera->imageToGroundAtDepth(image, observation.depth);
+        if (!target_ground)
         {
             continue;
         }
+        const auto& target_world = target_ground.value().position;
         const float displacement =
             static_cast<float>(target_world[0] - world[0]) * vertex.nx +
             static_cast<float>(target_world[1] - world[1]) * vertex.ny +

@@ -819,8 +819,8 @@ namespace xjw
             }
 
             std::vector<float>
-            sourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
-                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& sources,
+            sourceCameraData(const placamera::FramePinholeModel& reference,
+                             const std::vector<placamera::FramePinholeModel>& sources,
                              int downsampleFactor)
             {
                 std::vector<float> result(sources.size() * 16, 0.0f);
@@ -971,8 +971,8 @@ namespace xjw
         bool PatchMatchDepthEstimator::estimateOpenCL(
             const cv::Mat& refGray,
             const std::vector<cv::Mat>& srcGrays,
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+            const placamera::FramePinholeModel& refCam,
+            const std::vector<placamera::FramePinholeModel>& srcCams,
             float zNear,
             float zFar,
             const PatchMatchConfig& config,
@@ -1173,8 +1173,8 @@ namespace xjw
             const int source_mask_flag = has_source_masks ? 1 : 0;
             const int hint_flag = has_hint ? 1 : 0;
             const int hint_radius_flag = has_hint_radius ? 1 : 0;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics reference_intrinsics =
-                refCam.intrinsics();
+            const placamera::FrameIntrinsics& reference_intrinsics =
+                refCam.pinholeDefinition().intrinsics();
             const float scale = 1.0f / static_cast<float>(downsample_factor);
             const float inv_fx = 1.0f / (static_cast<float>(reference_intrinsics.focalX) * scale);
             const float inv_fy = 1.0f / (static_cast<float>(reference_intrinsics.focalY) * scale);

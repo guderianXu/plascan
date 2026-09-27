@@ -17,14 +17,15 @@
 - `preparation/MatchResultCatalog.*`：读取逐影像 `.pimatch` 分片，在文件内部编目像对及算法变体；
   不扫描 sidecar，也不从文件名推断影像对。
 - `preparation/ReconstructionPrerequisiteReport.*`：生成特征、匹配和图连通性的结构化前置检查结果。
-- `reconstruction/SfmAttemptRunner.*`：解析项目/外部相机和标记点先验，配置 BA，调用标准针孔数值入口。
-- `reconstruction/CameraIntrinsicPriorSanitizer.*`：无外部相机文件且重置对齐时，修正项目中明显偏离主焦距群的旧 SfM 内参，
-  防止错误焦距造成单相机中心坍缩。
+- `reconstruction/SfmAttemptRunner.*`：解析项目/外部 PlaCamera 相机和标记点先验，配置 BA，调用持有原生实例的针孔航三入口。
+- `reconstruction/CameraIntrinsicPriorSanitizer.*`：无外部相机文件且重置对齐时，直接在 PlaCamera
+  面阵实例上修正明显偏离主焦距群的旧 SfM 内参，保留实例身份、位姿与畸变。
 - `reconstruction/MarkerPriorLoader.*`：从项目标记点 sidecar 装载控制点、检查点、比例尺和像点投影先验。
 - `reconstruction/SfmPairPlanner.h`：保留工程路径和 Qt 字符串适配的候选对规划。
 - `reconstruction/SfmMatchDiagnostics.h`：使用 C++ 标准容器和字符串的纯匹配图诊断、引导匹配候选规划。
 - `search/AdaptiveFocalSearch.*`、`SfmSearchPolicy.*`：无完整相机先验时的焦距候选排序和资源预算；候选列表使用 `std::vector`，GUI/CLI 只在边界转换。
-- `reporting/`：写出稀疏点云、相机更新、质量元数据和工作流报告。
+- `reporting/`：写出稀疏点云、质量元数据和工作流报告；原生 PlaCamera 相机实例随结果返回，
+  由 GUI/CLI 在正式写出成功后按 canonical ImageId 原子提交。
   `SparsePlyWriter` 使用标准流编码 little-endian PLY，文件提交由 `common/file` 独占。
 
 ## 数据流
@@ -77,17 +78,24 @@
 
 ## 相机、焦距与先验
 
-`SfmAttemptRunner` 在进入针孔数值入口前会从工程 `camera_instances` 解码 canonical 相机集合。只要所选影像均有
+`SfmAttemptRunner` 在进入针孔航三入口前会从工程 `camera_instances` 解码 canonical 相机集合。`PinholeInput`
+直接持有 PlaCamera 面阵实例；旧数值状态只在尚未迁移的 `IncrementalSfm` 求解器接收相机时构造。只要所选影像均有
 规范实例，就按其 `image_uuid`、实例 ID 和 world frame 自动传播 `SolverCameraBinding`；调用方显式传入的绑定必须与
 canonical 集合一致。工程外部相机或集合不完整时不会从路径、文件名或序号生成身份，若使用外部姿态先验则直接失败并
-要求调用方提供完整绑定。
+要求调用方提供完整绑定。Pipeline 只有在 PlaCamera 面阵实例齐全时才依据工程来源标记判断可信内参或已知位姿；
+旧影像 JSON 即使保留 `intrinsic_source=imported` 或针孔数值字段，也不能绕过实例校验、焦距搜索或位姿重建。
 
-- 完整 `.tsai` 相机列表走已知相机路径；项目元数据相机可作为初值。重置对齐时只复用内参而不复用旧外参；
-  若无外部相机文件且至少 70% 相机形成稳定焦距群，会清洗偏离该群超过 2 倍的历史 SfM 焦距离群值。
+- 完整 `.tsai` 相机列表由 PlaCamera 解析并绑定 canonical 影像/实例身份，再走已知相机路径；规范工程
+  PlaCamera 实例可作为初值。重置对齐时只复用内参而不复用旧外参；
+  若无外部相机文件且至少 70% 相机形成稳定焦距群，会在 PlaCamera 实例上清洗偏离该群超过 2 倍的历史焦距，
+  最后进入当前 SfM 求解器时才生成旧数值状态。
+- 无可信内参时，每幅影像先按显式 canonical `cameraBindings` 构建 PlaCamera 初始面阵实例，再在求解器输入边界
+  生成旧数值状态；缺少实例身份的输入会在读取连接点之前失败，不从路径或 SfM 序号合成身份。
 - 参考预选和 guided matching 使用 `ReferenceCameraGeometryMap`、`ReferenceCameraPositionMap` 两个
   `ImageId` 键控集合。`images`/路径只负责输入顺序和定位；外部 `.tsai` 只有在与 canonical 面阵针孔
-  `CameraInstance` 合并身份、影像尺寸和 world frame 后才可成为投影参考。RPC 空三先通过统一的
-  `CameraOperationPlan(RpcAerialTriangulation)` 校验 canonical 实例能力，再解码专用 RPC 数值相机；RPC/推扫实例不会被伪造为针孔，
+  PlaCamera 实例合并身份、影像尺寸和 world frame 后才可成为投影参考；该路径不再转回旧针孔数值状态。
+  RPC 空三先通过统一的
+  PlaCamera `CameraInstanceSet::requireCapabilities()` 校验 canonical RPC 实例能力，再解码专用 RPC 数值相机；RPC/推扫实例不会被伪造为针孔，
   位置-only 参考也不会被送入极线投影器。
 - 无完整相机先验时，焦距尺度表示 `焦距像素 / 影像最长边像素`。Pipeline 始终评估
   `0.55、0.70、0.85、0.95、1.0、1.05、1.2、1.6、2.0、2.4、2.8、3.2、4.0、5.2、6.4、8.0、9.0、10.0`

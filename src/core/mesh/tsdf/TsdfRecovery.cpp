@@ -23,6 +23,10 @@ namespace xjw::mesh
         for (const DepthTsdfFrame& frame : frames)
         {
             VisualHullView view;
+            if (!frame.camera)
+            {
+                return occupied;
+            }
             view.camera = frame.camera;
             view.silhouetteMask = frame.supportMask;
             views.push_back(std::move(view));

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "MvsTypes.h"
-#include "CameraBaseline.h"
+#include <placamera/camera_baseline.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,7 +28,7 @@ inline int effectiveMvsViewWidth(const CameraView &view)
     {
         return view.imageWidth;
     }
-    return std::max(1, static_cast<int>(std::round(view.camera.principalX() * 2.0)));
+    return view.camera ? view.camera->imageSize().samples : 0;
 }
 
 inline int effectiveMvsViewHeight(const CameraView &view)
@@ -37,7 +37,7 @@ inline int effectiveMvsViewHeight(const CameraView &view)
     {
         return view.imageHeight;
     }
-    return std::max(1, static_cast<int>(std::round(view.camera.principalY() * 2.0)));
+    return view.camera ? view.camera->imageSize().lines : 0;
 }
 
 inline bool isMvsSparsePointVisibleInView(const CameraView &view,
@@ -46,52 +46,33 @@ inline bool isMvsSparsePointVisibleInView(const CameraView &view,
                                           int overrideHeight = -1,
                                           float *depthOut = nullptr)
 {
-    if (!view.camera.isValid())
+    if (!view.camera)
     {
         return false;
     }
 
-    const double world[3] = {point[0], point[1], point[2]};
-    double pixel[2] = {0.0, 0.0};
-    double positive_depth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(world, pixel, positive_depth))
+    const auto projection = view.camera->groundToImage(placamera::GroundCoordinate{
+        view.camera->groundFrame(),
+        {static_cast<double>(point[0]), static_cast<double>(point[1]), static_cast<double>(point[2])}});
+    if (!projection || !projection.value().positiveDepth)
     {
         return false;
     }
 
     const int width = overrideWidth > 0 ? overrideWidth : effectiveMvsViewWidth(view);
     const int height = overrideHeight > 0 ? overrideHeight : effectiveMvsViewHeight(view);
-    if (pixel[0] < 0.0 || pixel[1] < 0.0
-        || pixel[0] >= static_cast<double>(width) || pixel[1] >= static_cast<double>(height))
+    const auto& pixel = projection.value().image;
+    if (pixel.sample < 0.0 || pixel.line < 0.0 ||
+        pixel.sample >= static_cast<double>(width) || pixel.line >= static_cast<double>(height))
     {
         return false;
     }
 
     if (depthOut)
     {
-        *depthOut = static_cast<float>(positive_depth);
+        *depthOut = static_cast<float>(*projection.value().positiveDepth);
     }
     return true;
-}
-
-inline float mvsTriangulationAngleDeg(const CameraView &a,
-                                      const CameraView &b,
-                                      const std::array<float, 3> &point)
-{
-    const CameraBaseline baseline = CameraBaseline::evaluate(
-        a.camera,
-        b.camera,
-        {{static_cast<double>(point[0]),
-          static_cast<double>(point[1]),
-          static_cast<double>(point[2])}});
-    if (!baseline.isValid()
-        || !baseline.hasPointGeometry()
-        || !baseline.isPointInFrontOfBothCameras()
-        || !baseline.triangulationAngleDeg().has_value())
-    {
-        return 0.f;
-    }
-    return static_cast<float>(*baseline.triangulationAngleDeg());
 }
 
 inline std::vector<size_t> collectMvsVisibleSparsePointIndices(const std::vector<CameraView> &views,
@@ -145,6 +126,7 @@ inline std::vector<MvsSourceViewScore> scoreMvsSourceViews(const std::vector<Cam
     {
         return scores;
     }
+    const auto& referenceCamera = views[refIdx].camera;
 
     scores.reserve(views.size() > 0 ? views.size() - 1 : 0);
     for (int viewIdx = 0; viewIdx < static_cast<int>(views.size()); ++viewIdx)
@@ -153,18 +135,32 @@ inline std::vector<MvsSourceViewScore> scoreMvsSourceViews(const std::vector<Cam
         {
             continue;
         }
+        const auto& sourceCamera = views[viewIdx].camera;
 
         std::vector<float> angles;
         int common = 0;
-        for (const auto &point : sparse.points)
+        for (const auto& point : sparse.points)
         {
-            if (!isMvsSparsePointVisibleInView(views[refIdx], point)
-                || !isMvsSparsePointVisibleInView(views[viewIdx], point))
+            if (!isMvsSparsePointVisibleInView(views[refIdx], point) ||
+                !isMvsSparsePointVisibleInView(views[viewIdx], point))
             {
                 continue;
             }
             ++common;
-            angles.push_back(mvsTriangulationAngleDeg(views[refIdx], views[viewIdx], point));
+            float angle = 0.0f;
+            if (referenceCamera && sourceCamera)
+            {
+                const placamera::CameraBaseline baseline = placamera::CameraBaseline::evaluate(
+                    *referenceCamera,
+                    *sourceCamera,
+                    {{static_cast<double>(point[0]), static_cast<double>(point[1]), static_cast<double>(point[2])}});
+                if (baseline.isValid() && baseline.hasPointGeometry() && baseline.isPointInFrontOfBothCameras() &&
+                    baseline.triangulationAngleDeg())
+                {
+                    angle = static_cast<float>(*baseline.triangulationAngleDeg());
+                }
+            }
+            angles.push_back(angle);
         }
 
         float medianAngle = 0.f;
@@ -175,10 +171,7 @@ inline std::vector<MvsSourceViewScore> scoreMvsSourceViews(const std::vector<Cam
             medianAngle = *mid;
         }
 
-        const float angleWeight =
-            medianAngle < 0.2f ? 0.25f :
-            medianAngle > 35.0f ? 0.50f :
-            1.0f;
+        const float angleWeight = medianAngle < 0.2f ? 0.25f : medianAngle > 35.0f ? 0.50f : 1.0f;
         const float proximityPenalty = 0.001f * static_cast<float>(std::abs(viewIdx - refIdx));
 
         MvsSourceViewScore score;
@@ -189,18 +182,20 @@ inline std::vector<MvsSourceViewScore> scoreMvsSourceViews(const std::vector<Cam
         scores.push_back(score);
     }
 
-    std::sort(scores.begin(), scores.end(), [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
-    {
-        if (a.score != b.score)
-        {
-            return a.score > b.score;
-        }
-        if (a.commonVisiblePoints != b.commonVisiblePoints)
-        {
-            return a.commonVisiblePoints > b.commonVisiblePoints;
-        }
-        return a.viewIndex < b.viewIndex;
-    });
+    std::sort(scores.begin(),
+              scores.end(),
+              [](const MvsSourceViewScore& a, const MvsSourceViewScore& b)
+              {
+                  if (a.score != b.score)
+                  {
+                      return a.score > b.score;
+                  }
+                  if (a.commonVisiblePoints != b.commonVisiblePoints)
+                  {
+                      return a.commonVisiblePoints > b.commonVisiblePoints;
+                  }
+                  return a.viewIndex < b.viewIndex;
+              });
     return scores;
 }
 

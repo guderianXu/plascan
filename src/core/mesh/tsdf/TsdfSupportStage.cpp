@@ -1069,6 +1069,8 @@ namespace xjw::mesh
             }
             std::vector<VisibilityOccupancyFrameView> occupancy_frames;
             occupancy_frames.reserve(static_cast<std::size_t>(frames.size()));
+            std::vector<placamera::FramePinholeNumericState> occupancy_cameras;
+            occupancy_cameras.reserve(static_cast<std::size_t>(frames.size()));
             for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
             {
                 const DepthTsdfFrame& frame = frames[frame_index];
@@ -1080,8 +1082,9 @@ namespace xjw::mesh
                 {
                     continue;
                 }
+                occupancy_cameras.push_back(placamera::FramePinholeNumericState::fromModel(*frame.camera));
                 VisibilityOccupancyFrameView view;
-                view.camera = &frame.camera;
+                view.camera = &occupancy_cameras.back();
                 view.depth = &frame.depth;
                 view.confidence = &frame.confidence;
                 view.depthValidMask =

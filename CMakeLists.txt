@@ -27,6 +27,7 @@ option(PLASCAN_ENABLE_CUDA "Build PlaScan CUDA backends when a CUDA compiler is 
 option(PLASCAN_ENABLE_TENSORRT
        "Prefer PlaScan TensorRT inference backends and fall back when the SDK is unavailable" ON)
 option(PLASCAN_ENABLE_OPENCL "Build PlaScan OpenCL GPU backends when OpenCL is available" ON)
+option(PLASCAN_ENABLE_VULKAN "Build PlaScan Vulkan compute backends when Vulkan tools are available" ON)
 if(MSVC)
   add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:/utf-8>

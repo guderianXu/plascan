@@ -7,7 +7,7 @@
 
 namespace xjw::aerial_triangulation::engine
 {
-    camera_models::rpc::ImagePoint rpcImageCoordinate(const TiePointGraph& graph, const RpcObservation& observation)
+    RpcImagePoint rpcImageCoordinate(const TiePointGraph& graph, const RpcObservation& observation)
     {
         const auto& keypoint = graph.keypointsByImage.at(observation.imageId).at(observation.featureIdx);
         return {keypoint.x, keypoint.y};

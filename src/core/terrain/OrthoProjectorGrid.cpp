@@ -1,8 +1,10 @@
 #include "OrthoProjector.h"
 
-#include "camera/project/CameraProjectRuntime.h"
-#include "camera/models/CameraModelFactories.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectMetadata.h"
+
+#include <placamera/capabilities.h>
+#include <placamera/frame_camera.h>
 
 #include <QJsonArray>
 
@@ -185,21 +187,20 @@ namespace xjw
         }
 
         const QJsonObject project_files = xjw::common::project::projectFilesRootObject(projectMeta);
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            project_files, xjw::camera_models::makeBuiltinCameraModelRegistry());
-        if (!runtime.ok())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(project_files);
+        if (!loaded.ok())
         {
             if (errorMsg)
             {
                 *errorMsg =
-                    QStringLiteral("正射投影的规范相机数据无效：%1").arg(runtime.errors.join(QStringLiteral("; ")));
+                    QStringLiteral("正射投影的规范相机数据无效：%1").arg(loaded.errors.join(QStringLiteral("; ")));
             }
             return false;
         }
 
         const QJsonArray entries = xjw::common::project::projectImageEntries(project_files);
         std::vector<QJsonObject> selected_entries;
-        std::vector<camera_core::ImageId> image_ids;
+        std::vector<placamera::ImageId> image_ids;
         selected_entries.reserve(static_cast<std::size_t>(selectedImages.size()));
         image_ids.reserve(static_cast<std::size_t>(selectedImages.size()));
         for (const QString& selected_path : selectedImages)
@@ -227,34 +228,42 @@ namespace xjw
             image_ids.emplace_back(image_id.toStdString());
         }
 
-        const camera_core::CameraOperationPlan plan =
-            runtime.planOperationForImages(image_ids, camera_core::CameraOperation::OrthoProjection);
-        if (!plan.ok())
+        placamera::CameraInstanceSet selected;
+        std::vector<std::shared_ptr<const placamera::FramePinholeModel>> pinhole_models;
+        pinhole_models.reserve(image_ids.size());
+        for (const auto& image_id : image_ids)
         {
-            if (errorMsg)
+            const auto lookup = loaded.instances.forImage(image_id);
+            if (!lookup.ok())
             {
-                *errorMsg =
-                    QStringLiteral("正射投影相机能力校验失败：%1").arg(QString::fromStdString(plan.failureMessage()));
+                if (errorMsg)
+                {
+                    *errorMsg = QStringLiteral("正射投影找不到 PlaCamera 实例：%1")
+                                    .arg(QString::fromStdString(image_id.value()));
+                }
+                return false;
             }
-            return false;
-        }
-
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
-        std::string state_error;
-        if (!runtime.framePinholeStatesForImages(image_ids, &states, &state_error))
-        {
-            if (errorMsg)
+            const auto pinhole = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(lookup.value());
+            if (!pinhole)
             {
-                *errorMsg =
-                    QStringLiteral("正射投影面阵针孔数值状态解析失败：%1").arg(QString::fromStdString(state_error));
+                if (errorMsg)
+                {
+                    *errorMsg = QStringLiteral("正射投影要求面阵针孔 PlaCamera 实例：%1")
+                                    .arg(QString::fromStdString(image_id.value()));
+                }
+                return false;
             }
-            return false;
+            selected.add(lookup.value());
+            pinhole_models.push_back(std::move(pinhole));
         }
-        if (states.size() != selected_entries.size())
+        const auto capability_check = selected.requireCapabilities(
+            {placamera::CapabilityKind::Projection, placamera::CapabilityKind::StaticPose});
+        const auto frame_check = selected.requireCommonGroundFrame();
+        if (!capability_check.ok() || !frame_check.ok())
         {
             if (errorMsg)
             {
-                *errorMsg = QStringLiteral("正射投影相机状态与所选影像数量不一致");
+                *errorMsg = QStringLiteral("正射投影相机能力或地面坐标系校验失败");
             }
             return false;
         }
@@ -267,7 +276,7 @@ namespace xjw
             input.imagePath = selectedImages.at(static_cast<qsizetype>(index));
             input.imageId = QString::fromStdString(image_ids[index].value());
             input.exclusionMaskPath = entry.value(QStringLiteral("mask_path")).toString();
-            input.camera = std::move(states[index]);
+            input.camera = std::move(pinhole_models[index]);
             inputs->push_back(std::move(input));
         }
         return true;

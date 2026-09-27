@@ -41,8 +41,8 @@ void PatchMatchDepthEstimator::cleanupOpenClResources()
 bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat&,
     const std::vector<cv::Mat>&,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>&,
+    const placamera::FramePinholeModel&,
+    const std::vector<placamera::FramePinholeModel>&,
     float,
     float,
     const PatchMatchConfig&,

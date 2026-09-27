@@ -7,12 +7,13 @@
 #include "widgets/ReferenceMarkerModels.h"
 
 #include "project/ProjectSessionModel.h"
-#include "camera/reference/io/CameraReferenceSetStore.h"
+#include "project/camera_reference/CameraReferenceSetStore.h"
 #include "io/MarkerSetJson.h"
 #include "project/ProjectIO.h"
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
+#include <placamera/rpc_camera.h>
 
 #include <gtest/gtest.h>
 
@@ -23,6 +24,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <memory>
 
 namespace camera_reference = xjw::camera_reference;
 namespace control_points = xjw::control_points;
@@ -73,14 +75,27 @@ namespace
         QJsonObject files{{QStringLiteral("images"), QJsonArray{image}},
                           {QStringLiteral("camera_definitions"), QJsonArray{}},
                           {QStringLiteral("camera_instances"), QJsonArray{}}};
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {101.0, 202.0, 303.0});
-        camera.setImageSize(xjw::camera_core::ImageSize{1024, 768});
-        const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-            &files,
-            QMap<QString, QJsonObject>{{QStringLiteral("project/images/IMG_0001.JPG"),
-                                        xjw::common::project::serializeFramePinholeNumericState(camera)}});
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("reference-frame-definition"),
+                                                      {1000.0, 1000.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        if (!cameras
+                 .add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                     placamera::CameraInstanceId("reference-frame-instance"),
+                     placamera::ImageId("image-uuid-1"),
+                     definition,
+                     {1024, 768},
+                     placamera::Pose::create(
+                         frame, {101.0, 202.0, 303.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))))
+                 .ok())
+        {
+            return {};
+        }
+        const auto update = xjw::placamera_runtime::upsertProjectCameras(&files, cameras);
         if (!update.ok())
         {
             return {};
@@ -240,18 +255,28 @@ TEST(CameraReferenceTreeModelTest, DisabledCameraDoesNotAffectTotalError)
     EXPECT_FALSE(model.index(0, Model::XColumn).data().isValid());
 }
 
+TEST(CameraReferenceTreeModelTest, RejectsEmbeddedCameraInsteadOfUsingFlattenedPose)
+{
+    using Model = reference::CameraReferenceTreeModel;
+    QJsonObject metadata = makeProjectMetadata();
+    QJsonObject files = metadata.value(QStringLiteral("project_files")).toObject();
+    QJsonArray images = files.value(QStringLiteral("images")).toArray();
+    QJsonObject image = images.at(0).toObject();
+    image.insert(QStringLiteral("camera"), QJsonObject{{QStringLiteral("C"), QJsonArray{101.0, 202.0, 303.0}}});
+    images.replace(0, image);
+    files.insert(QStringLiteral("images"), images);
+    metadata.insert(QStringLiteral("project_files"), files);
+
+    Model model;
+    model.setReferenceData(makeCameraReferenceSet(), metadata, reference::ReferenceDisplayMode::Estimated);
+
+    EXPECT_FALSE(model.index(1, Model::XColumn).data().isValid());
+    EXPECT_EQ(model.index(1, Model::StatusColumn).data().toString(), QStringLiteral("未解算"));
+}
+
 TEST(CameraReferenceTreeModelTest, ShowsCanonicalRpcModelAsGeographicReference)
 {
     using Model = reference::CameraReferenceTreeModel;
-    const auto coefficients = [](double first)
-    {
-        QJsonArray values;
-        for (int index = 0; index < 20; ++index)
-        {
-            values.append(index == 0 ? first : 0.0);
-        }
-        return values;
-    };
     const QString imagePath = QStringLiteral("D:/images/rpc.tif");
     QJsonObject files{{QStringLiteral("images"),
                        QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("rpc-1")},
@@ -260,30 +285,30 @@ TEST(CameraReferenceTreeModelTest, ShowsCanonicalRpcModelAsGeographicReference)
                                               {QStringLiteral("lines"), 768}}}},
                       {QStringLiteral("camera_definitions"), QJsonArray{}},
                       {QStringLiteral("camera_instances"), QJsonArray{}}};
-    const QJsonObject camera{{QStringLiteral("model"), QStringLiteral("rpc00b")},
-                             {QStringLiteral("rpc_spec"), QStringLiteral("RPC00B")},
-                             {QStringLiteral("world_frame"), QStringLiteral("EPSG:4978")},
-                             {QStringLiteral("ground_crs"), QStringLiteral("EPSG:4979")},
-                             {QStringLiteral("height_datum"), QStringLiteral("WGS84_ellipsoidal")},
-                             {QStringLiteral("pixel_convention"), QStringLiteral("opencv_zero_based_center")},
-                             {QStringLiteral("image_samples"), 1024},
-                             {QStringLiteral("image_lines"), 768},
-                             {QStringLiteral("line_off"), 383.5},
-                             {QStringLiteral("samp_off"), 511.5},
-                             {QStringLiteral("lat_off"), 34.5},
-                             {QStringLiteral("long_off"), 113.5},
-                             {QStringLiteral("height_off"), 120.0},
-                             {QStringLiteral("line_scale"), 384.0},
-                             {QStringLiteral("samp_scale"), 512.0},
-                             {QStringLiteral("lat_scale"), 0.1},
-                             {QStringLiteral("long_scale"), 0.1},
-                             {QStringLiteral("height_scale"), 500.0},
-                             {QStringLiteral("line_num_coeff"), coefficients(0.0)},
-                             {QStringLiteral("line_den_coeff"), coefficients(1.0)},
-                             {QStringLiteral("samp_num_coeff"), coefficients(0.0)},
-                             {QStringLiteral("samp_den_coeff"), coefficients(1.0)}};
-    const auto update = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-        &files, QMap<QString, QJsonObject>{{imagePath, camera}});
+    placamera::RpcParameters parameters;
+    parameters.lineOffset = 383.5;
+    parameters.sampleOffset = 511.5;
+    parameters.latitudeOffset = 34.5;
+    parameters.longitudeOffset = 113.5;
+    parameters.heightOffset = 120.0;
+    parameters.lineScale = 384.0;
+    parameters.sampleScale = 512.0;
+    parameters.latitudeScale = 0.1;
+    parameters.longitudeScale = 0.1;
+    parameters.heightScale = 500.0;
+    parameters.lineDenominator[0] = 1.0;
+    parameters.sampleDenominator[0] = 1.0;
+    const auto definition = placamera::RpcDefinition::create(
+        placamera::CameraDefinitionId("reference-rpc-definition"), placamera::FrameId("EPSG:4978"), parameters);
+    placamera::CameraInstanceSet cameras;
+    ASSERT_TRUE(cameras
+                    .add(std::make_shared<const placamera::RpcModel>(
+                        placamera::RpcModel::create(placamera::CameraInstanceId("reference-rpc-instance"),
+                                                    placamera::ImageId("rpc-1"),
+                                                    definition,
+                                                    {1024, 768})))
+                    .ok());
+    const auto update = xjw::placamera_runtime::upsertProjectCameras(&files, cameras);
     ASSERT_TRUE(update.ok()) << update.errors.join(';').toStdString();
     const QJsonObject metadata{{QStringLiteral("project_files"), files}};
     Model model;

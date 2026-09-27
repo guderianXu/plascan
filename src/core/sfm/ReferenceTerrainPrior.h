@@ -8,7 +8,8 @@
  * 不负责坐标参考系转换。调用方必须保证稀疏点和 DEM 已位于同一平面/高程坐标系。
  */
 
-#include "BundleAdjustSolver.h"
+#include <plabundle/options.h>
+#include <plabundle/problem.h>
 
 #include <vector>
 
@@ -56,12 +57,12 @@ public:
                                bool *ok = nullptr);
 
     /// 对满足距离门控的 track 追加水平高程平面约束，并返回关联统计。
-    static ReferenceTerrainPriorStats attachHeightPlaneConstraints(const ReferenceTerrainGrid &grid,
-                                                                   std::vector<BATrack> *tracks,
-                                                                   const ReferenceTerrainPriorOptions &options);
+    static ReferenceTerrainPriorStats attachHeightPlaneConstraints(const ReferenceTerrainGrid& grid,
+                                                                   std::vector<plabundle::Track>* tracks,
+                                                                   const ReferenceTerrainPriorOptions& options);
 
-    /// 生成启用激光/点到面约束所需的 BAOptions 片段。
-    static BAOptions makeBundleAdjustOptions(const ReferenceTerrainPriorOptions &options);
+    /// 生成点到面约束所需的 PlaBundle 数值选项片段。
+    static plabundle::SolveOptions makeBundleAdjustOptions(const ReferenceTerrainPriorOptions& options);
 };
 
 } // namespace xjw

@@ -46,12 +46,12 @@ std::array<double, 3> transformPoint(const std::array<double, 3> &point,
 
 } // namespace
 
-SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& referenceCameras,
-    int anchorCameraIndex,
-    int scaleCameraIndex,
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* refinedCameras,
-    std::vector<BARefinedPoint>* refinedPoints)
+SimilarityGaugeNormalizationResult
+normalizeSimilarityGauge(const std::vector<placamera::FramePinholeNumericState>& referenceCameras,
+                         int anchorCameraIndex,
+                         int scaleCameraIndex,
+                         std::vector<placamera::FramePinholeNumericState>* refinedCameras,
+                         std::vector<plabundle::RefinedPoint>* refinedPoints)
 {
     SimilarityGaugeNormalizationResult result;
     if (!refinedCameras || !refinedPoints)
@@ -74,14 +74,10 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
         return result;
     }
 
-    const auto referenceAnchor =
-        referenceCameras[static_cast<std::size_t>(anchorCameraIndex)].cameraCenter();
-    const auto referenceScaleCamera =
-        referenceCameras[static_cast<std::size_t>(scaleCameraIndex)].cameraCenter();
-    const auto refinedAnchor =
-        (*refinedCameras)[static_cast<std::size_t>(anchorCameraIndex)].cameraCenter();
-    const auto refinedScaleCamera =
-        (*refinedCameras)[static_cast<std::size_t>(scaleCameraIndex)].cameraCenter();
+    const auto referenceAnchor = referenceCameras[static_cast<std::size_t>(anchorCameraIndex)].pose().center;
+    const auto referenceScaleCamera = referenceCameras[static_cast<std::size_t>(scaleCameraIndex)].pose().center;
+    const auto refinedAnchor = (*refinedCameras)[static_cast<std::size_t>(anchorCameraIndex)].pose().center;
+    const auto refinedScaleCamera = (*refinedCameras)[static_cast<std::size_t>(scaleCameraIndex)].pose().center;
     if (!finitePoint(referenceAnchor) ||
         !finitePoint(referenceScaleCamera) ||
         !finitePoint(refinedAnchor) ||
@@ -111,20 +107,22 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
     }
 
     // 先在副本中完成全部变换，失败路径不会部分修改 BA 输出。
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> normalizedCameras = *refinedCameras;
-    for (xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : normalizedCameras)
+    std::vector<placamera::FramePinholeNumericState> normalizedCameras = *refinedCameras;
+    for (placamera::FramePinholeNumericState& camera : normalizedCameras)
     {
-        const auto center = camera.cameraCenter();
+        placamera::Pose pose = camera.pose();
+        const auto center = pose.center;
         if (!finitePoint(center))
         {
             result.reason = "non_finite_refined_camera";
             return result;
         }
-        camera.setCameraCenter(transformPoint(center, refinedAnchor, referenceAnchor, scale));
+        pose.center = transformPoint(center, refinedAnchor, referenceAnchor, scale);
+        camera.setPose(pose);
     }
 
-    std::vector<BARefinedPoint> normalizedPoints = *refinedPoints;
-    for (BARefinedPoint &point : normalizedPoints)
+    std::vector<plabundle::RefinedPoint> normalizedPoints = *refinedPoints;
+    for (plabundle::RefinedPoint& point : normalizedPoints)
     {
         if (finitePoint(point.point))
         {

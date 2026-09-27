@@ -189,10 +189,7 @@ ProjectManager::ProjectManager(ProjectData* projectData, QWidget* parent)
             &ProjectManager::orthoPipelineFinished);
 }
 
-ProjectManager::~ProjectManager()
-{
-    waitForResourceCleanup();
-}
+ProjectManager::~ProjectManager() = default;
 
 xjw::gui::project::ProjectServiceContainer& ProjectManager::services() const
 {
@@ -222,9 +219,4 @@ xjw::gui::project::ProjectResourceCleanupCoordinator& ProjectManager::cleanup() 
 ProjectLifecycleService& ProjectManager::lifecycle() const
 {
     return _serviceContainer->lifecycle();
-}
-
-void ProjectManager::waitForResourceCleanup()
-{
-    _serviceContainer->cleanup().waitForFinished();
 }

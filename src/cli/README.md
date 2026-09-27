@@ -9,7 +9,6 @@ CLI 源码按业务领域组织，并继续生成独立可执行文件。影像�
 
 | 目录 | 职责 | 可执行文件 |
 | --- | --- | --- |
-| `camera/` | 相机格式导入与转换 | `camera_convert_cli` |
 | `control_points/` | 标靶检测与打印 | `marker_detect_cli`, `marker_print_cli` |
 | `features/` | CUDA SIFT + TensorRT LightGlue 双影像匹配与连接点生成 | `feature_match_cli`, `match_photos_cli` |
 | `dense/` | 极线校正、密集匹配、三角化与点云细化 | `rectify_cli`, `dense_match_cli`, `triangulate_cli`, `dense_cloud_refine_cli` |
@@ -20,15 +19,21 @@ CLI 源码按业务领域组织，并继续生成独立可执行文件。影像�
 | `common/` | CLI 共享路径、token、UTF-8 控制台、JSON、输出目录策略与摄影测量列表解析 | 内部静态库，不生成可执行文件 |
 | `third_party/` | CLI11 单头文件依赖 | 不生成可执行文件 |
 
+`model_quality_cli --image-camera-list` 读取外部 Tsai 时必须同时指定 `--world-frame <ID>`，
+明确声明相机与待验收网格共用的坐标系；`--mvs-workspace` 从清单中的相机身份读取 frame。
+
 每个领域目录维护自己的 `CMakeLists.txt`、直接依赖和 `tests/`。顶层 `CMakeLists.txt` 只提供统一目标
 与测试目标创建函数、输出目录和公共 include 路径。摄影测量列表解析由
 `plascan_cli_support` 和 `plascan_cli_photogrammetry_common` 分别编译一次并复用，不再把路径、
 JSON、控制台输出、覆盖保护和摄影测量列表解析复制到多个入口。
+列表解析只返回影像与相机文件路径；需要相机几何的入口在明确 ImageId、尺寸和坐标系后直接加载 PlaCamera，
+不再通过列表项携带旧数值相机状态。
 
 `workflows/` 的一键重建入口保持很薄：`ReconstructionCliOptions` 负责参数和默认值，
 `ReconstructionPipelineRunner` 负责编排，`ReconstructionCliProgress` 与
 `ReconstructionCliReport` 负责输出协议。密集点云细化、流式深度融合和点云 PLY 产物写出属于
-`src/core/mvs`，CLI 只做参数/工作区适配。
+`src/core/mvs`，CLI 只做参数/工作区适配。SfM 写回后的 MVS 阶段直接复用工程中的 PlaCamera
+面阵实例；影像无法读取或文件尺寸与相机绑定尺寸不一致时明确报错，不隐式改写相机尺寸。
 深度重放时可用 `mvs_depth_reprocess_cli --source-max-angle-deg N` 做可复现的 PatchMatch 源视图角度 A/B；
 `0` 保持默认场景策略，正值只会收紧而不会放宽场景推导上限，报告和单帧产物会保留实际生效值。
 启用 cap 时不会用没有实测三角化角的序列回填绕过该上限，源视图不足会显式留在诊断中。
@@ -87,12 +92,12 @@ confidence、源数、基线方向数和动作，便于在固定 GT 域中复核
 降低亚像素三角面退化为单个中心补色 texel 的比例；专家可用 `atlasUpscaleLimit` 将上限设为 1–4。
 锐化默认关闭，避免把 chart 边界和三角面边缘放大；仍可通过 `sharpeningStrength` 显式启用。
 
-`camera_convert_cli --pre-undistort-colmap-images` 是复杂 COLMAP 相机的推荐导入边界。它生成全有效
-无畸变 PNG、valid mask、零畸变 Tsai 和逐帧 manifest，支持 `THIN_PRISM_FISHEYE`，不会把复杂参数
-传播到 BA、PnP、MVS 或纹理核心。该选项仅接受 `colmap-text`（显式或自动识别）输入。
+外部相机工程由 GUI 项目服务直接调用 PlaCamera 导入，不再提供生成 Tsai 目录的转换 CLI。
+COLMAP fisheye、thin-prism 和非零有理分母等无法无损表示为当前 Brown 面阵模型的记录会明确拒绝。
 
 `aerial_triangulation_cli --export-camera-dir <新目录>` 只在正式 SfM/BA 模型通过质量门并成功
-写出后导出最终相机。目标目录可以不存在或已存在但为空，非空目录仍拒绝覆盖；成功后包含与输入影像一一对应的
+写出后从 PlaCamera 原生帧相机导出最终相机，不从扁平 JSON 元数据重建几何。目标目录可以不存在或已存在但为空，
+非空目录仍拒绝覆盖；成功后包含与输入影像一一对应的
 `cameras/*.tsai` 和可直接传给 `reconstruct_pipeline_cli` 的 `image_camera.lis`。缺失任一最终
 相机时整批拒绝，候选搜索阶段的相机不会落盘。
 工作流本身最高上报 94%，CLI 在相机导出、报告、结果登记、相机写回和工程保存后再推进到 100%。
@@ -108,7 +113,8 @@ confidence、源数、基线方向数和动作，便于在固定 GT 域中复核
   `headless.plascan`，逐影像匹配、连接点、稀疏、稠密、模型和地形产物写入当前 Chunk 数字目录。
 - `bundle_adjust_cli`：只接受已经存在的 4.0 工程，解析 `plascan:///` URI，完成后写回相机和
   `bundle_adjust_results`；默认输出统一位于当前 Chunk 的
-  `bundle_adjust/<yyyyMMdd_HHmmss_zzz>/`。
+  `bundle_adjust/<yyyyMMdd_HHmmss_zzz>/`。BA 服务直接接收 PlaCamera 面阵实例；混合 ground frame
+  或非 pixel-center 标定会在求解前拒绝。
 - 所有工程型 CLI 支持 `--chunk-id` 或 `--chunk-name`；两者不能同时使用。显式选择后
   该 Chunk 成为工程默认 Chunk。
 - 输入影像立即复制到 `.files/shared/images/<sha256>/`。相同内容只保存一次，所有 Chunk

@@ -55,11 +55,19 @@ namespace
             static_cast<std::uint8_t>(xjw::mvs::DepthGeometryHypothesisAction::Refine));
         result.depthMap->at<float>(0, 0) = 0.0f;
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(800.0, 810.0, 3.5, 1.5);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
-        result.cameraModel = camera;
+        const placamera::FrameId ground_frame("snapshot-test-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("snapshot-test-definition"),
+                                                      placamera::FrameIntrinsics{800.0, 810.0, 3.5, 1.5},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      ground_frame);
+        result.cameraModel = std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("snapshot-test-instance"),
+            placamera::ImageId("snapshot-test-image"),
+            definition,
+            {width, height},
+            placamera::Pose::create(ground_frame, {2.0, 3.0, 4.0}, {0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0})));
         result.qualityMetrics.width = width;
         result.qualityMetrics.height = height;
         result.qualityMetrics.validPixelCount = width * height - 1;
@@ -136,6 +144,20 @@ TEST(MvsStageSnapshotTest, CapturesBoundedTripletAndRecordsMissingStages)
     EXPECT_EQ(captured.value(QStringLiteral("status")).toString(), QStringLiteral("captured"));
     EXPECT_EQ(captured.value(QStringLiteral("snapshot_width")).toInt(), 4);
     EXPECT_EQ(captured.value(QStringLiteral("snapshot_height")).toInt(), 2);
+    const QJsonObject snapshot_camera = captured.value(QStringLiteral("camera_model")).toObject();
+    EXPECT_DOUBLE_EQ(snapshot_camera.value(QStringLiteral("fx")).toDouble(), 400.0);
+    EXPECT_DOUBLE_EQ(snapshot_camera.value(QStringLiteral("cx")).toDouble(), 1.5);
+    EXPECT_EQ(snapshot_camera.value(QStringLiteral("instance_id")).toString(),
+              QStringLiteral("snapshot-test-instance"));
+    EXPECT_EQ(snapshot_camera.value(QStringLiteral("world_frame")).toString(), QStringLiteral("snapshot-test-world"));
+    const QJsonArray rotation = snapshot_camera.value(QStringLiteral("rotation_world_to_camera")).toArray();
+    ASSERT_EQ(rotation.size(), 9);
+    EXPECT_DOUBLE_EQ(rotation.at(1).toDouble(), 1.0);
+    const QJsonArray translation = snapshot_camera.value(QStringLiteral("translation_world_to_camera")).toArray();
+    ASSERT_EQ(translation.size(), 3);
+    EXPECT_DOUBLE_EQ(translation.at(0).toDouble(), -3.0);
+    EXPECT_DOUBLE_EQ(translation.at(1).toDouble(), 2.0);
+    EXPECT_DOUBLE_EQ(translation.at(2).toDouble(), -4.0);
 
     const QString depth_path =
         captured.value(QStringLiteral("depth")).toObject().value(QStringLiteral("path")).toString();

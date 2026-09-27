@@ -3,15 +3,11 @@
 
 #include "reconstruction/SfmAttemptRunner.h"
 
-#include "ProjectCameraIO.h"
-#include "RpcRasterIO.h"
+#include <placamera/rpc_raster.h>
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 #include "log/Logger.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/models/rpc/RpcInstance.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/project/CameraProjectRuntime.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
@@ -26,6 +22,8 @@
 #include "reporting/SparsePlyWriter.h"
 #include "file/FileIO.h"
 #include <QSet>
+
+#include <placamera/rpc_camera.h>
 
 #include <algorithm>
 #include <array>
@@ -45,8 +43,7 @@ namespace xjw::aerial_triangulation
         using CameraResidualAccumulator = engine::CameraResidualAccumulator;
 
         bool resolveRpcCameraBindings(const PreparedAerialTriangulationInput& input,
-                                      const std::map<ImageId, std::shared_ptr<const camera_models::rpc::RpcInstance>>&
-                                          cameras,
+                                      const std::map<ImageId, std::shared_ptr<const placamera::RpcModel>>& cameras,
                                       std::vector<SolverCameraBinding>* bindings,
                                       QString* errorMessage)
         {
@@ -76,8 +73,8 @@ namespace xjw::aerial_triangulation
             for (const QJsonValue& value : projectFiles.value(QStringLiteral("images")).toArray())
             {
                 const QJsonObject image = value.toObject();
-                const QString path = xjw::common::project::normalizePath(
-                    image.value(QStringLiteral("path")).toString());
+                const QString path =
+                    xjw::common::project::normalizePath(image.value(QStringLiteral("path")).toString());
                 if (path.isEmpty())
                 {
                     continue;
@@ -106,14 +103,13 @@ namespace xjw::aerial_triangulation
                 (!projectFiles.value(QStringLiteral("camera_instances")).toArray().isEmpty() ||
                  !projectFiles.value(QStringLiteral("camera_definitions")).toArray().isEmpty()))
             {
-                const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-                    projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-                if (!runtime.ok())
+                const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+                if (!loaded.ok())
                 {
                     if (errorMessage)
                     {
                         *errorMessage = QStringLiteral("RPC 空三 canonical 相机集合无效: %1")
-                                             .arg(runtime.errors.join(QStringLiteral("; ")));
+                                            .arg(loaded.errors.join(QStringLiteral("; ")));
                     }
                     return false;
                 }
@@ -127,34 +123,36 @@ namespace xjw::aerial_triangulation
                         if (errorMessage)
                         {
                             *errorMessage = QStringLiteral("RPC 空三的 canonical image entry 缺失: %1")
-                                                 .arg(input.images.at(static_cast<int>(index)));
+                                                .arg(input.images.at(static_cast<int>(index)));
                         }
                         return false;
                     }
-                    const QString declaredImageId = imageIt.value().value(QStringLiteral("image_uuid")).toString().trimmed();
+                    const QString declaredImageId =
+                        imageIt.value().value(QStringLiteral("image_uuid")).toString().trimmed();
                     if (declaredImageId != QString::fromStdString(input.imageIds.at(index).value()))
                     {
                         if (errorMessage)
                         {
                             *errorMessage = QStringLiteral("RPC 空三影像路径与 ImageId 不一致: %1")
-                                                 .arg(input.images.at(static_cast<int>(index)));
+                                                .arg(input.images.at(static_cast<int>(index)));
                         }
                         return false;
                     }
-                    const auto lookup = runtime.instances.forImage(input.imageIds.at(index));
+                    const auto lookup = loaded.instances.forImage(input.imageIds.at(index));
                     if (!lookup.ok())
                     {
                         if (errorMessage)
                         {
                             *errorMessage = QStringLiteral("RPC 空三无法解析影像 %1 的 canonical 相机: %2")
-                                                 .arg(input.images.at(static_cast<int>(index)),
-                                                      QString::fromStdString(lookup.error));
+                                                .arg(input.images.at(static_cast<int>(index)),
+                                                     QString::fromStdString(lookup.message()));
                         }
                         return false;
                     }
-                    canonicalBindings.push_back({lookup.instance->instanceId(),
-                                                 lookup.instance->imageId(),
-                                                 lookup.instance->definition().worldFrame()});
+                    canonicalBindings.push_back(
+                        {lookup.value()->instanceId(),
+                         lookup.value()->imageId(),
+                         placoordinate::CoordinateFrameId(lookup.value()->groundFrame().value())});
                 }
                 hasCanonicalBindings = canonicalBindings.size() == static_cast<std::size_t>(input.images.size());
             }
@@ -165,8 +163,8 @@ namespace xjw::aerial_triangulation
                 {
                     if (errorMessage)
                     {
-                        *errorMessage = QStringLiteral(
-                            "RPC 空三缺少 canonical cameraBindings；请传入工程相机快照或显式绑定");
+                        *errorMessage =
+                            QStringLiteral("RPC 空三缺少 canonical cameraBindings；请传入工程相机快照或显式绑定");
                     }
                     return false;
                 }
@@ -194,9 +192,10 @@ namespace xjw::aerial_triangulation
                         {
                             if (errorMessage)
                             {
-                                *errorMessage = QStringLiteral(
-                                    "RPC 空三显式 cameraBindings 与 canonical 工程相机快照不一致（影像 %1）")
-                                                     .arg(input.images.at(static_cast<int>(index)));
+                                *errorMessage =
+                                    QStringLiteral(
+                                        "RPC 空三显式 cameraBindings 与 canonical 工程相机快照不一致（影像 %1）")
+                                        .arg(input.images.at(static_cast<int>(index)));
                             }
                             return false;
                         }
@@ -216,7 +215,8 @@ namespace xjw::aerial_triangulation
                 {
                     if (errorMessage)
                     {
-                        *errorMessage = QStringLiteral("RPC 空三 cameraBindings 不能包含空的 instance/image/frame identity");
+                        *errorMessage =
+                            QStringLiteral("RPC 空三 cameraBindings 不能包含空的 instance/image/frame identity");
                     }
                     return false;
                 }
@@ -225,7 +225,7 @@ namespace xjw::aerial_triangulation
                     if (errorMessage)
                     {
                         *errorMessage = QStringLiteral("RPC 空三相机绑定与 ImageId 顺序不一致（影像 %1）")
-                                             .arg(input.images.at(static_cast<int>(index)));
+                                            .arg(input.images.at(static_cast<int>(index)));
                     }
                     return false;
                 }
@@ -243,8 +243,8 @@ namespace xjw::aerial_triangulation
                     if (errorMessage)
                     {
                         *errorMessage = QStringLiteral("RPC 空三要求 WGS84 ECEF world frame EPSG:4978，影像 %1 使用 %2")
-                                             .arg(input.images.at(static_cast<int>(index)),
-                                                  QString::fromStdString(binding.worldFrame.value()));
+                                            .arg(input.images.at(static_cast<int>(index)),
+                                                 QString::fromStdString(binding.worldFrame.value()));
                     }
                     return false;
                 }
@@ -257,13 +257,13 @@ namespace xjw::aerial_triangulation
                     }
                     return false;
                 }
-                const QString cameraFrame = QString::fromStdString(camera->second->rpcDefinition().worldFrame().value());
+                const QString cameraFrame = QString::fromStdString(camera->second->groundFrame().value());
                 if (cameraFrame != QString::fromStdString(binding.worldFrame.value()))
                 {
                     if (errorMessage)
                     {
                         *errorMessage = QStringLiteral("RPC 数值相机 frame 与 canonical binding 不一致（影像 %1）")
-                                             .arg(input.images.at(static_cast<int>(index)));
+                                            .arg(input.images.at(static_cast<int>(index)));
                     }
                     return false;
                 }
@@ -332,7 +332,7 @@ namespace xjw::aerial_triangulation
                 {
                     continue;
                 }
-                const camera_models::rpc::ImagePoint coordinate = engine::rpcImageCoordinate(graph, observation);
+                const engine::RpcImagePoint coordinate = engine::rpcImageCoordinate(graph, observation);
                 const int x = std::clamp(qRound(coordinate.sample), 0, image.cols - 1);
                 const int y = std::clamp(qRound(coordinate.line), 0, image.rows - 1);
                 const cv::Vec3b color = image.at<cv::Vec3b>(y, x);
@@ -357,7 +357,7 @@ namespace xjw::aerial_triangulation
         }
 
         bool pointJson(const RpcPoint& point,
-                       const std::vector<camera_core::ImageId>& imageIds,
+                       const std::vector<placamera::ImageId>& imageIds,
                        QJsonObject* output,
                        QString* errorMessage)
         {
@@ -404,14 +404,14 @@ namespace xjw::aerial_triangulation
         RpcCameraInput result;
         const QJsonObject projectFiles = xjw::common::project::projectFilesRootObject(input.projectMeta);
         const bool hasCanonicalCameraKeys = projectFiles.contains(QStringLiteral("camera_instances")) ||
-                                             projectFiles.contains(QStringLiteral("camera_definitions"));
+                                            projectFiles.contains(QStringLiteral("camera_definitions"));
         for (const QJsonValue& value : projectFiles.value(QStringLiteral("images")).toArray())
         {
             const QJsonObject image = value.toObject();
             if (image.contains(QStringLiteral("camera")) || image.contains(QStringLiteral("camera_file")))
             {
-                result.errorMessage = QStringLiteral(
-                    "工程影像包含已废弃的嵌入式相机字段；请先写入 canonical camera_instances。");
+                result.errorMessage =
+                    QStringLiteral("工程影像包含已废弃的嵌入式相机字段；请先写入 canonical camera_instances。");
                 return result;
             }
         }
@@ -432,29 +432,35 @@ namespace xjw::aerial_triangulation
                 return result;
             }
 
-            const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-                projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-            if (!runtime.ok())
+            const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+            if (!loaded.ok())
             {
-                result.errorMessage = QStringLiteral("RPC 空三 canonical 相机集合无效: %1")
-                                           .arg(runtime.errors.join(QStringLiteral("; ")));
+                result.errorMessage =
+                    QStringLiteral("RPC 空三 canonical 相机集合无效: %1").arg(loaded.errors.join(QStringLiteral("; ")));
                 return result;
             }
-            std::vector<xjw::camera_core::ImageId> imageIds(input.imageIds.begin(), input.imageIds.end());
+            std::vector<placamera::ImageId> imageIds(input.imageIds.begin(), input.imageIds.end());
+            placamera::CameraInstanceSet selected;
             bool hasRpcInstance = false;
             bool hasNonRpcInstance = false;
-            for (const xjw::camera_core::ImageId& imageId : imageIds)
+            for (const placamera::ImageId& imageId : imageIds)
             {
-                const auto lookup = runtime.instances.forImage(imageId);
+                const auto lookup = loaded.instances.forImage(imageId);
                 if (!lookup.ok())
                 {
-                    result.errorMessage = QStringLiteral("RPC 空三无法解析影像 %1 的 canonical 相机: %2")
-                                               .arg(QString::fromStdString(imageId.value()),
-                                                    QString::fromStdString(lookup.error));
+                    result.errorMessage =
+                        QStringLiteral("RPC 空三无法解析影像 %1 的 canonical 相机: %2")
+                            .arg(QString::fromStdString(imageId.value()), QString::fromStdString(lookup.message()));
                     result.status = RpcCameraInputStatus::Mixed;
                     return result;
                 }
-                if (std::dynamic_pointer_cast<const xjw::camera_models::rpc::RpcInstance>(lookup.instance))
+                if (!selected.add(lookup.value()).ok())
+                {
+                    result.errorMessage = QStringLiteral("RPC 空三 canonical 相机身份重复");
+                    result.status = RpcCameraInputStatus::Mixed;
+                    return result;
+                }
+                if (std::dynamic_pointer_cast<const placamera::RpcModel>(lookup.value()))
                 {
                     hasRpcInstance = true;
                 }
@@ -477,12 +483,13 @@ namespace xjw::aerial_triangulation
                 result.errorMessage = QStringLiteral("RPC 空三不能混用 RPC 与非 RPC canonical 相机");
                 return result;
             }
-            const auto plan = runtime.planOperationForImages(
-                imageIds, xjw::camera_core::CameraOperation::RpcAerialTriangulation);
-            if (!plan.ok())
+            const auto capabilityCheck = selected.requireCapabilities({placamera::CapabilityKind::Projection,
+                                                                       placamera::CapabilityKind::InverseProjection,
+                                                                       placamera::CapabilityKind::ImagingLocus});
+            const auto frameCheck = selected.requireCommonGroundFrame();
+            if (!capabilityCheck.ok() || !frameCheck.ok())
             {
-                result.errorMessage = QStringLiteral("RPC 空三相机能力校验失败：%1")
-                                           .arg(QString::fromStdString(plan.failureMessage()));
+                result.errorMessage = QStringLiteral("RPC 空三相机能力或地面坐标系校验失败");
                 result.status = RpcCameraInputStatus::Mixed;
                 return result;
             }
@@ -490,16 +497,14 @@ namespace xjw::aerial_triangulation
             result.cameras.clear();
             for (std::size_t index = 0; index < imageIds.size(); ++index)
             {
-                const auto lookup = runtime.instances.forImage(imageIds.at(index));
-                const auto rpcInstance = lookup.ok()
-                                              ? std::dynamic_pointer_cast<const xjw::camera_models::rpc::RpcInstance>(
-                                                    lookup.instance)
-                                              : nullptr;
+                const auto lookup = loaded.instances.forImage(imageIds.at(index));
+                const auto rpcInstance =
+                    lookup.ok() ? std::dynamic_pointer_cast<const placamera::RpcModel>(lookup.value()) : nullptr;
                 if (!rpcInstance)
                 {
                     result.cameras.clear();
                     result.errorMessage = QStringLiteral("RPC 空三无法解析影像 %1 的 canonical RPC 相机")
-                                               .arg(input.images.at(static_cast<int>(index)));
+                                              .arg(input.images.at(static_cast<int>(index)));
                     result.status = RpcCameraInputStatus::Mixed;
                     return result;
                 }
@@ -518,21 +523,33 @@ namespace xjw::aerial_triangulation
         {
             const QString& imagePath = input.images.at(index);
             const std::string suffix = std::to_string(index);
-            const camera_core::ImageId imageId = input.imageIds.size() == static_cast<std::size_t>(input.images.size())
-                                                     ? input.imageIds.at(static_cast<std::size_t>(index))
-                                                     : camera_core::ImageId("rpc-import-image-" + suffix);
-            std::string importError;
-            auto camera = camera_models::rpc::importRpcRasterInstance(
-                common::io::toUtf8Path(imagePath),
-                camera_core::CameraDefinitionId("rpc-import-definition-" + suffix),
-                camera_core::CameraInstanceId("rpc-import-instance-" + suffix),
-                imageId,
-                xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
-                &importError);
+            const placamera::ImageId imageId = input.imageIds.size() == static_cast<std::size_t>(input.images.size())
+                                                   ? input.imageIds.at(static_cast<std::size_t>(index))
+                                                   : placamera::ImageId("rpc-import-image-" + suffix);
+            const bool has_explicit_binding =
+                input.cameraBindings.size() == static_cast<std::size_t>(input.images.size());
+            if (has_explicit_binding && input.cameraBindings.at(static_cast<std::size_t>(index)).imageId != imageId)
+            {
+                result.status = RpcCameraInputStatus::Mixed;
+                result.errorMessage = QStringLiteral("RPC 显式相机绑定与输入 ImageId 不一致: %1").arg(imagePath);
+                return result;
+            }
+            const placamera::CameraInstanceId instance_id(
+                has_explicit_binding ? input.cameraBindings.at(static_cast<std::size_t>(index)).instanceId.value()
+                                     : "rpc-import-instance-" + suffix);
+            const placamera::FrameId frame(
+                has_explicit_binding ? input.cameraBindings.at(static_cast<std::size_t>(index)).worldFrame.value()
+                                     : "EPSG:4978");
+            const auto camera =
+                placamera::importRpcRasterModel(common::io::toUtf8Path(imagePath),
+                                                placamera::CameraDefinitionId("rpc-import-definition-" + suffix),
+                                                instance_id,
+                                                imageId,
+                                                frame);
 
             if (camera)
             {
-                result.cameras.emplace(static_cast<ImageId>(index), std::move(camera));
+                result.cameras.emplace(static_cast<ImageId>(index), camera.value());
             }
             else
             {
@@ -557,11 +574,9 @@ namespace xjw::aerial_triangulation
         return result;
     }
 
-    AerialTriangulationReconstructionResult
-    RpcAerialTriangulationRunner::run(const PreparedAerialTriangulationInput& input,
-                                      const std::map<
-                                          ImageId,
-                                          std::shared_ptr<const camera_models::rpc::RpcInstance>>& cameras) const
+    AerialTriangulationReconstructionResult RpcAerialTriangulationRunner::run(
+        const PreparedAerialTriangulationInput& input,
+        const std::map<ImageId, std::shared_ptr<const placamera::RpcModel>>& cameras) const
     {
         AerialTriangulationReconstructionResult result;
         if (input.images.size() < 2 || cameras.size() != input.images.size())
@@ -709,14 +724,15 @@ namespace xjw::aerial_triangulation
             const double rms = accumulator.observationCount > 0
                                    ? std::sqrt(accumulator.squaredErrorSum / accumulator.observationCount)
                                    : 0.0;
-            perCamera.append(QJsonObject{{QStringLiteral("camera_index"), static_cast<qint64>(imageId)},
-                                         {QStringLiteral("image_id"),
-                                          QString::fromStdString(input.imageIds.at(static_cast<std::size_t>(imageId)).value())},
-                                         {QStringLiteral("image_path"), input.images.value(static_cast<int>(imageId))},
-                                         {QStringLiteral("camera_model"), QStringLiteral("rpc00b")},
-                                         {QStringLiteral("observation_count"), accumulator.observationCount},
-                                         {QStringLiteral("rms_reproj_px"), rms},
-                                         {QStringLiteral("maximum_reproj_px"), accumulator.maximumResidual}});
+            perCamera.append(
+                QJsonObject{{QStringLiteral("camera_index"), static_cast<qint64>(imageId)},
+                            {QStringLiteral("image_id"),
+                             QString::fromStdString(input.imageIds.at(static_cast<std::size_t>(imageId)).value())},
+                            {QStringLiteral("image_path"), input.images.value(static_cast<int>(imageId))},
+                            {QStringLiteral("camera_model"), QStringLiteral("rpc00b")},
+                            {QStringLiteral("observation_count"), accumulator.observationCount},
+                            {QStringLiteral("rms_reproj_px"), rms},
+                            {QStringLiteral("maximum_reproj_px"), accumulator.maximumResidual}});
 
             const auto camera = cameras.find(imageId);
             if (camera == cameras.cend() || !camera->second)
@@ -725,16 +741,32 @@ namespace xjw::aerial_triangulation
                 result.summary = result.errorMessage;
                 return result;
             }
-            QJsonObject cameraObject = xjw::common::project::serializeRpcInstance(*camera->second);
-            cameraObject.insert(QStringLiteral("intrinsic_source"), QStringLiteral("embedded_rpc00b"));
-            cameraObject.insert(QStringLiteral("pose_source"), QStringLiteral("rpc00b"));
-            cameraObject.insert(QStringLiteral("adjustment_status"), QStringLiteral("rpc_fixed_model"));
-            cameraObject.insert(QStringLiteral("rpc_adjustment_mode"), QStringLiteral("fixed_sensor_point_only"));
-            result.cameraInstanceUpdates.push_back(
-                {input.imageIds.at(static_cast<std::size_t>(imageId)),
-                 updateBindings.at(static_cast<std::size_t>(imageId)).instanceId,
-                 updateBindings.at(static_cast<std::size_t>(imageId)).worldFrame,
-                 cameraObject});
+            const auto& binding = updateBindings.at(static_cast<std::size_t>(imageId));
+            if (camera->second->imageId().value() != binding.imageId.value() ||
+                camera->second->instanceId().value() != binding.instanceId.value() ||
+                camera->second->groundFrame().value() != binding.worldFrame.value())
+            {
+                result.errorMessage = QStringLiteral("RPC 原生相机与 canonical 绑定不一致");
+                result.summary = result.errorMessage;
+                return result;
+            }
+            const auto added = result.cameraInstances.add(camera->second);
+            if (!added.ok())
+            {
+                result.errorMessage =
+                    QStringLiteral("RPC 原生相机集合无效: %1").arg(QString::fromStdString(added.message()));
+                result.summary = result.errorMessage;
+                return result;
+            }
+            result.cameraAnnotationsByImageId.insert(
+                QString::fromStdString(camera->second->imageId().value()),
+                QJsonObject{
+                    {QStringLiteral("source"), QStringLiteral("rpc00b")},
+                    {QStringLiteral("metadata"),
+                     QJsonObject{{QStringLiteral("intrinsic_source"), QStringLiteral("embedded_rpc00b")},
+                                 {QStringLiteral("pose_source"), QStringLiteral("rpc00b")},
+                                 {QStringLiteral("adjustment_status"), QStringLiteral("rpc_fixed_model")},
+                                 {QStringLiteral("rpc_adjustment_mode"), QStringLiteral("fixed_sensor_point_only")}}}});
         }
 
         const QJsonObject originJson{{QStringLiteral("longitude_deg"), origin[0]},

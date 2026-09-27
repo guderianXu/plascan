@@ -162,7 +162,6 @@ namespace xjw
     {
         ImageId id = kInvalidImageId; ///< 图像 ID
         std::string imagePath;        ///< 图像文件路径
-        std::string cameraPath;       ///< 相机文件路径（.tsai）
         std::string sensorKey;        ///< 共享同一标定块的稳定传感器标识；空值归入默认组。
 
         /// 检测到的特征点坐标列表

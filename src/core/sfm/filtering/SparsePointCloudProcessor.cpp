@@ -2,7 +2,7 @@
 
 #include "SparsePointCloudWorkspace.h"
 
-#include <plamatrix/ops/vector.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <algorithm>
 #include <array>
@@ -22,6 +22,11 @@ using NeighborList = SparsePointCloudNeighborList;
 std::array<double, 3> pointToArray(const SparsePointCloudPoint &point)
 {
     return {point.x, point.y, point.z};
+}
+
+plamatrix::Vector3d vectorFromArray(const std::array<double, 3> &values)
+{
+    return plamatrix::Vector3d(values[0], values[1], values[2]);
 }
 
 double medianValue(std::vector<double> values)
@@ -136,20 +141,21 @@ std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoin
     }
 
     const SparsePointCloudPoint &center = points.at(index);
-    const plamatrix::Vec3<double> center_vector(pointToArray(center));
+    const plamatrix::Vector3d center_vector = vectorFromArray(pointToArray(center));
     for (int fi = 0; fi < static_cast<int>(neighbors.size()); ++fi)
     {
         for (int si = fi + 1; si < static_cast<int>(neighbors.size()); ++si)
         {
-            const plamatrix::Vec3<double> vector_a =
-                plamatrix::Vec3<double>(pointToArray(points.at(neighbors.at(fi).index))) - center_vector;
-            const plamatrix::Vec3<double> vector_b =
-                plamatrix::Vec3<double>(pointToArray(points.at(neighbors.at(si).index))) - center_vector;
-            const plamatrix::Vec3<double> normal = plamatrix::cross(vector_a, vector_b);
-            const double length = plamatrix::norm(normal);
+            const plamatrix::Vector3d vector_a =
+                vectorFromArray(pointToArray(points.at(neighbors.at(fi).index))) - center_vector;
+            const plamatrix::Vector3d vector_b =
+                vectorFromArray(pointToArray(points.at(neighbors.at(si).index))) - center_vector;
+            const plamatrix::Vector3d normal = vector_a.cross(vector_b);
+            const double length = normal.norm();
             if (length > 1e-8)
             {
-                return (normal / length).toArray();
+                const plamatrix::Vector3d unit = normal / length;
+                return {unit(0), unit(1), unit(2)};
             }
         }
     }
@@ -268,7 +274,7 @@ std::vector<bool> computeNormalConsistencyKeepMask(const std::vector<SparsePoint
 
     for (size_t i = 0; i < points.size(); ++i)
     {
-        if (plamatrix::norm(plamatrix::Vec3<double>(normals[i])) <= 1e-8)
+        if (vectorFromArray(normals[i]).norm() <= 1e-8)
         {
             continue;
         }
@@ -280,14 +286,12 @@ std::vector<bool> computeNormalConsistencyKeepMask(const std::vector<SparsePoint
         for (size_t ni = 0; ni < usedNeighbors; ++ni)
         {
             const auto &nb = neighbors[ni];
-            if (plamatrix::norm(
-                    plamatrix::Vec3<double>(normals[static_cast<size_t>(nb.index)])) <= 1e-8)
+            if (vectorFromArray(normals[static_cast<size_t>(nb.index)]).norm() <= 1e-8)
             {
                 continue;
             }
-            sumAbsDot += std::abs(plamatrix::dot(
-                plamatrix::Vec3<double>(normals[i]),
-                plamatrix::Vec3<double>(normals[static_cast<size_t>(nb.index)])));
+            sumAbsDot += std::abs(vectorFromArray(normals[i]).dot(
+                vectorFromArray(normals[static_cast<size_t>(nb.index)])));
             ++validCount;
         }
 

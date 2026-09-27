@@ -4,8 +4,8 @@
 #include "TextureMapper.h"
 #include "TextureNaturalBlender.h"
 
-#include <plapoint/core/point_cloud.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plapoint/geometry_cloud.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <QPointF>
 #include <QRect>
@@ -16,36 +16,37 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace xjw::mesh::texture_v4
 {
 
-using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using PlaPointCloud = plapoint::GeometryCloud<float>;
 
-// The left atlas strip stores the constant emergency sample and compact
-// per-face vertex-colour tiles for geometry with no valid camera observation.
-inline constexpr int kFallbackAtlasWidth = 130;
-inline constexpr int kFallbackTileSize = 4;
+    // The left atlas strip stores the constant emergency sample and compact
+    // per-face vertex-colour tiles for geometry with no valid camera observation.
+    inline constexpr int kFallbackAtlasWidth = 130;
+    inline constexpr int kFallbackTileSize = 4;
 
-struct PreparedView
-{
-    int sourceIndex = -1;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState evidenceCamera;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState colorCamera;
-    cv::Mat colorBgr;
-    cv::Mat gray;
-    cv::Mat focusQuality;
-    TextureSourcePyramid blendPyramid;
-    cv::Mat supportDistance;
-    cv::Mat finalMeshFaceIds;
-    std::vector<std::uint8_t> finalMeshVisibleFaces;
-    float qualityWeight = 1.0f;
-    float exposureGain = 1.0f;
-    const cv::Mat *depth = nullptr;
-    const cv::Mat *confidence = nullptr;
-    const cv::Mat *depthValidMask = nullptr;
-    const cv::Mat *supportMask = nullptr;
+    struct PreparedView
+    {
+        int sourceIndex = -1;
+        std::optional<placamera::FramePinholeNumericState> evidenceCamera;
+        std::optional<placamera::FramePinholeNumericState> colorCamera;
+        cv::Mat colorBgr;
+        cv::Mat gray;
+        cv::Mat focusQuality;
+        TextureSourcePyramid blendPyramid;
+        cv::Mat supportDistance;
+        cv::Mat finalMeshFaceIds;
+        std::vector<std::uint8_t> finalMeshVisibleFaces;
+        float qualityWeight = 1.0f;
+        float exposureGain = 1.0f;
+        const cv::Mat* depth = nullptr;
+        const cv::Mat* confidence = nullptr;
+        const cv::Mat* depthValidMask = nullptr;
+        const cv::Mat* supportMask = nullptr;
 };
 
 struct FaceGeometry

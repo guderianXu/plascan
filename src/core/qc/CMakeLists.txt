@@ -15,7 +15,7 @@ target_include_directories(qc PUBLIC
 
 target_link_libraries(qc PUBLIC
     plapoint::plapoint
-    camera_models_frame_pinhole
+    placamera::placamera
     meshing_algorithms
     Qt6::Core
     ${OpenCV_LIBS}

@@ -121,7 +121,7 @@ bool intersectNearPlane(const ClippedVertex &start,
 
 int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh& mesh,
                                 const xjw::mesh::Triangle& face,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                const placamera::FramePinholeModel& camera,
                                 std::array<ClippedVertex, 4>* polygon)
 {
     if (!polygon)
@@ -136,14 +136,15 @@ int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh& mesh,
             mesh.vertices[static_cast<std::size_t>(face.v[corner])];
         ClippedVertex &target = source_vertices[static_cast<std::size_t>(corner)];
         target.world = {source.x, source.y, source.z};
-        target.positiveDepth = camera.positiveDepth(target.world.data());
-        if (!std::isfinite(target.positiveDepth) ||
+        const auto depth = camera.signedDepth({camera.groundFrame(), target.world});
+        if (!depth ||
             !std::all_of(target.world.begin(), target.world.end(), [](double value) {
                 return std::isfinite(value);
             }))
         {
             return 0;
         }
+        target.positiveDepth = depth.value();
         target.red = static_cast<double>(source.r);
         target.green = static_cast<double>(source.g);
         target.blue = static_cast<double>(source.b);
@@ -183,7 +184,7 @@ int clipTriangleToPositiveDepth(const xjw::mesh::TriMesh& mesh,
 }
 
 bool projectTriangle(const std::array<ClippedVertex, 3>& source_vertices,
-                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                     const placamera::FramePinholeModel& camera,
                      const cv::Size& image_size,
                      ProjectedTriangle* projected)
 {
@@ -196,17 +197,14 @@ bool projectTriangle(const std::array<ClippedVertex, 3>& source_vertices,
     {
         const ClippedVertex &source = source_vertices[static_cast<std::size_t>(corner)];
         ProjectedVertex &target = projected->vertices[static_cast<std::size_t>(corner)];
-        double pixel[2] = {};
-        double positiveDepth = 0.0;
-        if (!camera.projectWorldPointWithDepth(source.world.data(), pixel, positiveDepth) ||
-            !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-            !std::isfinite(positiveDepth) || positiveDepth <= 0.0)
+        const auto projection = camera.groundToImage({camera.groundFrame(), source.world});
+        if (!projection || !projection.value().positiveDepth)
         {
             return false;
         }
-        target.x = pixel[0];
-        target.y = pixel[1];
-        target.depth = positiveDepth;
+        target.x = projection.value().image.sample;
+        target.y = projection.value().image.line;
+        target.depth = *projection.value().positiveDepth;
         if (!std::isfinite(target.x) || !std::isfinite(target.y) ||
             !std::isfinite(target.depth) || target.depth <= 0.0)
         {
@@ -275,7 +273,7 @@ std::uint8_t colorByte(double value)
 } // namespace
 
 ModelRenderResult ModelMeshRenderer::render(const xjw::mesh::TriMesh& mesh,
-                                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                            const placamera::FramePinholeModel& camera,
                                             const cv::Size& imageSize) const
 {
     ModelRenderResult result;
@@ -285,16 +283,14 @@ ModelRenderResult ModelMeshRenderer::render(const xjw::mesh::TriMesh& mesh,
         result.error = QStringLiteral("模型没有可渲染三角面");
         return result;
     }
-    std::string camera_error;
-    if (!camera.validateNumericalState(&camera_error))
-    {
-        result.error = QStringLiteral("数值相机状态无效: %1")
-                           .arg(QString::fromStdString(camera_error));
-        return result;
-    }
     if (imageSize.width <= 0 || imageSize.height <= 0)
     {
         result.error = QStringLiteral("渲染尺寸无效");
+        return result;
+    }
+    if (camera.imageSize().samples != imageSize.width || camera.imageSize().lines != imageSize.height)
+    {
+        result.error = QStringLiteral("PlaCamera 影像尺寸与渲染尺寸不一致");
         return result;
     }
 

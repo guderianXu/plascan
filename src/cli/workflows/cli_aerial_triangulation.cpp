@@ -15,6 +15,8 @@
 #include "workflow/AerialTriangulationWorkflow.h"
 #include "project/ProjectSession.h"
 
+#include <placamera/state_codec.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -22,6 +24,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
 
@@ -132,16 +135,47 @@ namespace
         object[QStringLiteral("duration_seconds")] = result.durationSeconds;
         object[QStringLiteral("per_camera_residuals")] = result.perCameraResiduals;
 
-        QJsonArray cameraUpdates;
-        for (const auto& update : result.cameraInstanceUpdates)
+        QJsonArray cameraInstances;
+        QJsonArray cameraDefinitions;
+        QJsonArray cameraEncodingErrors;
+        QSet<QString> encodedDefinitionIds;
+        for (const auto& camera : result.cameraInstances.values())
         {
-            cameraUpdates.append(QJsonObject{
-                {QStringLiteral("image_id"), QString::fromStdString(update.imageId.value())},
-                {QStringLiteral("instance_id"), QString::fromStdString(update.instanceId.value())},
-                {QStringLiteral("world_frame"), QString::fromStdString(update.worldFrame.value())},
-                {QStringLiteral("metadata"), update.modelMetadata}});
+            const QString definitionId = QString::fromStdString(camera->definitionId().value());
+            if (!encodedDefinitionIds.contains(definitionId))
+            {
+                const auto definition = placamera::encodeCameraDefinitionJson(camera->definition());
+                if (definition.ok())
+                {
+                    cameraDefinitions.append(
+                        QJsonDocument::fromJson(QByteArray::fromStdString(definition.value())).object());
+                    encodedDefinitionIds.insert(definitionId);
+                }
+                else
+                {
+                    cameraEncodingErrors.append(QStringLiteral("definition %1: %2")
+                                                    .arg(definitionId,
+                                                         QString::fromStdString(definition.message())));
+                }
+            }
+            const auto instance = placamera::encodeCameraInstanceJson(*camera);
+            if (instance.ok())
+            {
+                cameraInstances.append(QJsonDocument::fromJson(QByteArray::fromStdString(instance.value())).object());
+            }
+            else
+            {
+                cameraEncodingErrors.append(QStringLiteral("instance %1: %2")
+                                                .arg(QString::fromStdString(camera->instanceId().value()),
+                                                     QString::fromStdString(instance.message())));
+            }
         }
-        object[QStringLiteral("camera_instance_updates")] = cameraUpdates;
+        object[QStringLiteral("camera_definitions")] = cameraDefinitions;
+        object[QStringLiteral("camera_instances")] = cameraInstances;
+        if (!cameraEncodingErrors.isEmpty())
+        {
+            object[QStringLiteral("camera_encoding_errors")] = cameraEncodingErrors;
+        }
         return object;
     }
 
@@ -476,7 +510,6 @@ int main(int argc, char* argv[])
     xjw::cli::PhotogrammetryListOptions listOptions;
     listOptions.allowImageOnlyRows = true;
     listOptions.requireExistingCameras = true;
-    listOptions.loadCameras = referencePreselection;
     std::vector<xjw::cli::PhotogrammetryInputItem> items;
     if (!xjw::cli::readPhotogrammetryImageList(inputList, listOptions, &items, &errorMessage))
     {
@@ -656,6 +689,7 @@ int main(int argc, char* argv[])
                                                   items,
                                                   options.images,
                                                   options.imageIds,
+                                                  referencePreselection,
                                                   &options.referenceCameraGeometries,
                                                   &errorMessage))
     {
@@ -689,21 +723,15 @@ int main(int argc, char* argv[])
     bool cameraExportPerformed = false;
     if (result.reconstructionResult.success && !requestedCameraExportDir.isEmpty())
     {
-        QMap<QString, QJsonObject> exportMetadata;
+        std::vector<placamera::ImageId> exportImageIds;
+        exportImageIds.reserve(options.imageIds.size());
         for (std::size_t index = 0; index < options.imageIds.size(); ++index)
         {
-            const auto updateIt = std::find_if(
-                result.reconstructionResult.cameraInstanceUpdates.cbegin(),
-                result.reconstructionResult.cameraInstanceUpdates.cend(),
-                [&options, index](const auto& update)
-                { return update.imageId == options.imageIds.at(index); });
-            if (updateIt != result.reconstructionResult.cameraInstanceUpdates.cend())
-            {
-                exportMetadata.insert(options.images.at(static_cast<int>(index)), updateIt->modelMetadata);
-            }
+            exportImageIds.emplace_back(options.imageIds.at(index).value());
         }
         cameraExportPerformed = xjw::cli::exportFinalBaCameras(options.images,
-                                                               exportMetadata,
+                                                               exportImageIds,
+                                                               result.reconstructionResult.cameraInstances,
                                                                requestedCameraExportDir,
                                                                &cameraExport,
                                                                &cameraExportError);
@@ -764,9 +792,10 @@ int main(int argc, char* argv[])
     }
     options.progressFn(QStringLiteral("空三产物已登记"), 97);
     int updatedCameraCount = 0;
-    if (reconstruction.success &&
-        !projectSession.updateCameraInstancesById(
-            reconstruction.cameraInstanceUpdates, &updatedCameraCount, &errorMessage))
+    if (reconstruction.success && !projectSession.upsertNativeCameraInstances(reconstruction.cameraInstances,
+                                                                              reconstruction.cameraAnnotationsByImageId,
+                                                                              &updatedCameraCount,
+                                                                              &errorMessage))
     {
         std::fprintf(stderr, "空三已完成，但相机写回失败: %s\n", qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;

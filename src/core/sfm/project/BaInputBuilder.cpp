@@ -14,7 +14,6 @@ namespace
 
 void resetBuildResult(BaInputBuildResult *result)
 {
-    result->cameras.clear();
     result->cameraInstances.clear();
     result->imageIdByIndex.clear();
     result->imagePathByIndex.clear();
@@ -65,53 +64,48 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
         return BaInputBuildStatus::NoTracks;
     }
     result->matchDiagnostics = matchInput.diagnostics;
-    if (matchInput.cameras.size() < 2)
+    if (matchInput.cameraInstances.size() < 2)
     {
         return BaInputBuildStatus::NotEnoughCameras;
     }
 
     // 第二阶段先生成自动连接点轨迹，再移动相机和工程快照。appendBaTracks
-    // 需要读取 matchInput.cameras，移动顺序不可提前。
-    appendBaTracks(matchInput, result);
-    result->indexedObservationCount = matchInput.indexedObservationCount;
-    result->matchDiagnostics = matchInput.diagnostics;
-    result->cameras = std::move(matchInput.cameras);
-    result->cameraInstances = std::move(matchInput.cameraInstances);
-    result->imageIdByIndex = std::move(matchInput.imageIdByIndex);
-    if (result->imageIdByIndex.size() != result->cameras.size()
-        || result->cameraInstances.size() != result->cameras.size())
+    // 直接读取 PlaCamera 实例与 canonical ImageId，移动顺序不可提前。
+    if (!appendBaTracks(matchInput, result))
     {
-        result->matchDiagnostics.firstInputError =
-            QStringLiteral("相机数值状态、实例身份和 ImageId 索引长度不一致");
         return BaInputBuildStatus::NoTracks;
     }
-    for (std::size_t index = 0; index < result->cameras.size(); ++index)
+    result->indexedObservationCount = matchInput.indexedObservationCount;
+    result->matchDiagnostics = matchInput.diagnostics;
+    result->cameraInstances = std::move(matchInput.cameraInstances);
+    result->imageIdByIndex = std::move(matchInput.imageIdByIndex);
+    if (result->imageIdByIndex.size() != result->cameraInstances.size())
     {
-        const auto& camera = result->cameras[index];
-        if (!camera.hasBoundIdentity() || !result->cameraInstances[index]
-            || camera.imageId() != result->imageIdByIndex[index]
-            || result->cameraInstances[index]->imageId() != result->imageIdByIndex[index])
+        result->matchDiagnostics.firstInputError = QStringLiteral("PlaCamera 实例与 ImageId 索引长度不一致");
+        return BaInputBuildStatus::NoTracks;
+    }
+    for (std::size_t index = 0; index < result->cameraInstances.size(); ++index)
+    {
+        const auto& instance = result->cameraInstances[index];
+        if (!instance || instance->imageId() != result->imageIdByIndex[index])
         {
             result->matchDiagnostics.firstInputError =
-                QStringLiteral("相机数值状态与 typed instance/ImageId 身份不一致（索引 %1）")
-                    .arg(static_cast<qulonglong>(index));
+                QStringLiteral("PlaCamera 实例与 ImageId 身份不一致（索引 %1）").arg(static_cast<qulonglong>(index));
             return BaInputBuildStatus::NoTracks;
         }
     }
     result->imagePathByIndex = std::move(matchInput.imagePathByIndex);
     result->beforeCamMeta = std::move(matchInput.beforeCamMeta);
 
-    // 第三阶段追加物方约束。人工标记可能先估计控制网 Sim(3) 并同时变换已有
-    // 自动轨迹与相机，因此必须在全部自动轨迹完成后执行。
+    // 第三阶段追加物方约束。人工标记可能先估计控制网 Sim(3) 并变换原生相机
+    // 与自动轨迹，因此必须在全部自动轨迹完成后执行。
     appendSurveyControlBaInput(meta, matchInput.cameraIndexByImageId, result);
     appendMarkerBaInput(markerInput, matchInput.cameraIndexByImageId, result);
     if (!result->firstControlInputError.isEmpty())
     {
         return BaInputBuildStatus::InvalidInput;
     }
-    return result->tracks.empty()
-        ? BaInputBuildStatus::NoTracks
-        : BaInputBuildStatus::Ok;
+    return result->tracks.empty() ? BaInputBuildStatus::NoTracks : BaInputBuildStatus::Ok;
 }
 
 } // namespace xjw::core::project

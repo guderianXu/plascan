@@ -75,48 +75,55 @@ bool isBilinearMaskSampleValid(const cv::Mat &mask, double x, double y)
            mask.at<std::uint8_t>(y1, x1) != 0;
 }
 
-bool projectColorPoint(const MeshColorView &view,
-                       const double world[3],
-                       double pixel[2])
+bool projectColorPoint(const MeshColorView& view, const double world[3], double pixel[2])
 {
-    double depth = 0.0;
-    return view.colorCamera.projectWorldPointWithDepth(world, pixel, depth) &&
-           pixel[0] >= 0.0 && pixel[1] >= 0.0 &&
-           pixel[0] <= view.colorBgr.cols - 1.0 &&
+    if (!view.colorCamera)
+    {
+        return false;
+    }
+    const auto projected =
+        view.colorCamera->groundToImage({view.colorCamera->groundFrame(), {world[0], world[1], world[2]}});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return false;
+    }
+    pixel[0] = projected.value().image.sample;
+    pixel[1] = projected.value().image.line;
+    return pixel[0] >= 0.0 && pixel[1] >= 0.0 && pixel[0] <= view.colorBgr.cols - 1.0 &&
            pixel[1] <= view.colorBgr.rows - 1.0 &&
            isBilinearMaskSampleValid(view.colorForegroundMask, pixel[0], pixel[1]);
 }
 
-float scoreFaceView(const TriMesh &mesh,
-                    const Triangle &face,
-                    const MeshColorView &view,
-                    const MeshColorOptions &options)
+float scoreFaceView(const TriMesh& mesh,
+                    const Triangle& face,
+                    const MeshColorView& view,
+                    const MeshColorOptions& options)
 {
-    if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1 ||
+    if (!view.camera || !view.colorCamera || view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1 ||
         view.confidence.type() != CV_32FC1 || view.depthValidMask.type() != CV_8UC1 ||
         view.supportMask.type() != CV_8UC1)
     {
         return -1.0f;
     }
-    const MeshVertex &first = mesh.vertices[static_cast<std::size_t>(face.v[0])];
-    const MeshVertex &second = mesh.vertices[static_cast<std::size_t>(face.v[1])];
-    const MeshVertex &third = mesh.vertices[static_cast<std::size_t>(face.v[2])];
+    const MeshVertex& first = mesh.vertices[static_cast<std::size_t>(face.v[0])];
+    const MeshVertex& second = mesh.vertices[static_cast<std::size_t>(face.v[1])];
+    const MeshVertex& third = mesh.vertices[static_cast<std::size_t>(face.v[2])];
     const FacePoint centroid{(first.x + second.x + third.x) / 3.0f,
                              (first.y + second.y + third.y) / 3.0f,
                              (first.z + second.z + third.z) / 3.0f};
     const FacePoint normal = normalizedCross(subtract(second, first), subtract(third, first));
     const double world[3] = {centroid.x, centroid.y, centroid.z};
-    double pixel[2]{};
-    double camera_depth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+    const auto projected = view.camera->groundToImage({view.camera->groundFrame(), {world[0], world[1], world[2]}});
+    if (!projected || !projected.value().positiveDepth)
     {
         return -1.0f;
     }
-    const int column = static_cast<int>(std::lround(pixel[0]));
-    const int row = static_cast<int>(std::lround(pixel[1]));
+    const auto& pixel = projected.value().image;
+    const double camera_depth = *projected.value().positiveDepth;
+    const int column = static_cast<int>(std::lround(pixel.sample));
+    const int row = static_cast<int>(std::lround(pixel.line));
     if (row < 0 || column < 0 || row >= view.depth.rows || column >= view.depth.cols ||
-        view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-        view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+        view.supportMask.at<std::uint8_t>(row, column) == 0 || view.depthValidMask.at<std::uint8_t>(row, column) == 0)
     {
         return -1.0f;
     }
@@ -127,26 +134,25 @@ float scoreFaceView(const TriMesh &mesh,
     }
     const float observedDepth = view.depth.at<float>(row, column);
     const float confidence = view.confidence.at<float>(row, column);
-    if (!std::isfinite(observedDepth) || observedDepth <= 0.0f ||
-        !std::isfinite(confidence) || confidence < options.minimumConfidence)
+    if (!std::isfinite(observedDepth) || observedDepth <= 0.0f || !std::isfinite(confidence) ||
+        confidence < options.minimumConfidence)
     {
         return -1.0f;
     }
     const float voxelSize = std::max(options.maximumVoxelSize, 1.0e-8f);
-    const float tolerance = std::max(
-        options.depthToleranceVoxels * voxelSize,
-        options.relativeDepthTolerance * std::fabs(static_cast<float>(camera_depth)));
+    const float tolerance = std::max(options.depthToleranceVoxels * voxelSize,
+                                     options.relativeDepthTolerance * std::fabs(static_cast<float>(camera_depth)));
     const float residual = std::fabs(observedDepth - static_cast<float>(camera_depth));
     if (residual > tolerance)
     {
         return -1.0f;
     }
-    const std::array<double, 3> center = view.camera.cameraCenter();
+    const std::array<double, 3> center = view.camera->pose().center;
     FacePoint direction{static_cast<float>(center[0]) - centroid.x,
                         static_cast<float>(center[1]) - centroid.y,
                         static_cast<float>(center[2]) - centroid.z};
-    const float direction_length = std::sqrt(
-        direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    const float direction_length =
+        std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
     if (direction_length <= 1.0e-8f)
     {
         return -1.0f;
@@ -154,42 +160,42 @@ float scoreFaceView(const TriMesh &mesh,
     direction.x /= direction_length;
     direction.y /= direction_length;
     direction.z /= direction_length;
-    const float view_cosine = std::fabs(
-        normal.x * direction.x + normal.y * direction.y + normal.z * direction.z);
+    const float view_cosine = std::fabs(normal.x * direction.x + normal.y * direction.y + normal.z * direction.z);
     if (view_cosine < options.minimumViewCosine)
     {
         return -1.0f;
     }
-    const float residual_score = 1.0f /
-        std::pow(1.0f + residual / std::max(tolerance, 1.0e-8f), 2.0f);
-    return confidence * std::max(0.0f, view.qualityWeight)
-        * std::pow(view_cosine, 4.0f) * residual_score;
+    const float residual_score = 1.0f / std::pow(1.0f + residual / std::max(tolerance, 1.0e-8f), 2.0f);
+    return confidence * std::max(0.0f, view.qualityWeight) * std::pow(view_cosine, 4.0f) * residual_score;
 }
 
-bool sampleVertex(const MeshVertex &vertex,
-                  const MeshColorView &view,
-                  const MeshColorOptions &options,
-                  cv::Vec3f *color)
+bool sampleVertex(const MeshVertex& vertex,
+                  const MeshColorView& view,
+                  const MeshColorOptions& options,
+                  cv::Vec3f* color)
 {
-    const double world[3] = {vertex.x, vertex.y, vertex.z};
-    double pixel[2]{};
-    double camera_depth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+    if (!view.camera || !view.colorCamera)
     {
         return false;
     }
-    const int column = static_cast<int>(std::lround(pixel[0]));
-    const int row = static_cast<int>(std::lround(pixel[1]));
+    const double world[3] = {vertex.x, vertex.y, vertex.z};
+    const auto projected = view.camera->groundToImage({view.camera->groundFrame(), {world[0], world[1], world[2]}});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return false;
+    }
+    const auto& pixel = projected.value().image;
+    const double camera_depth = *projected.value().positiveDepth;
+    const int column = static_cast<int>(std::lround(pixel.sample));
+    const int row = static_cast<int>(std::lround(pixel.line));
     if (row < 0 || column < 0 || row >= view.depth.rows || column >= view.depth.cols ||
-        view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-        view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+        view.supportMask.at<std::uint8_t>(row, column) == 0 || view.depthValidMask.at<std::uint8_t>(row, column) == 0)
     {
         return false;
     }
     const float observedDepth = view.depth.at<float>(row, column);
     const float voxel_size = std::max(options.maximumVoxelSize, 1.0e-8f);
-    const float tolerance = std::max(7.5f * voxel_size,
-        0.008f * std::fabs(static_cast<float>(camera_depth)));
+    const float tolerance = std::max(7.5f * voxel_size, 0.008f * std::fabs(static_cast<float>(camera_depth)));
     if (!std::isfinite(observedDepth) || observedDepth <= 0.0f ||
         std::fabs(observedDepth - static_cast<float>(camera_depth)) > tolerance)
     {

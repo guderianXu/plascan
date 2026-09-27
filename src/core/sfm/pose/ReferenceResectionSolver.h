@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 
 #include <array>
 #include <vector>
@@ -22,7 +22,7 @@ namespace xjw
     ReferenceResectionResult
     solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
                             const std::vector<std::array<double, 2>>& imagePoints,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                            const placamera::FramePinholeDefinition& camera,
                             double resectionThresholdPixels);
 
 } // namespace xjw

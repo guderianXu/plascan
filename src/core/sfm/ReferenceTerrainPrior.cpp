@@ -116,7 +116,7 @@ double ReferenceTerrainPrior::sampleHeight(const ReferenceTerrainGrid &grid,
 
 ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
     const ReferenceTerrainGrid &grid,
-    std::vector<BATrack> *tracks,
+    std::vector<plabundle::Track> *tracks,
     const ReferenceTerrainPriorOptions &options)
 {
     ReferenceTerrainPriorStats stats;
@@ -134,7 +134,7 @@ ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
     std::vector<double> absoluteDistances;
     double sum2 = 0.0;
     // 关联只使用 BA 初始点。距离门控防止错误稀疏点被地形先验强行吸附。
-    for (BATrack &track : *tracks)
+    for (plabundle::Track &track : *tracks)
     {
         const auto &point = track.initialPoint;
         bool ok = false;
@@ -161,7 +161,7 @@ ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
         }
 
         // 当前地形近似为采样点处水平切平面；未来支持坡度时可替换 normal。
-        BALaserPlaneConstraint constraint;
+        plabundle::LaserPlaneConstraint constraint;
         constraint.point = {{point[0], point[1], height}};
         constraint.normal = {{0.0, 0.0, 1.0}};
         constraint.weight = 1.0 / options.sigmaMeters;
@@ -181,13 +181,14 @@ ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
     return stats;
 }
 
-BAOptions ReferenceTerrainPrior::makeBundleAdjustOptions(const ReferenceTerrainPriorOptions &options)
+plabundle::SolveOptions ReferenceTerrainPrior::makeBundleAdjustOptions(const ReferenceTerrainPriorOptions& options)
 {
-    BAOptions baOptions;
-    baOptions.enableLaserPlaneConstraints = options.enabled && options.sigmaMeters > 0.0;
-    baOptions.laserPlaneWeight = baOptions.enableLaserPlaneConstraints ? (1.0 / options.sigmaMeters) : 0.0;
-    baOptions.laserHuberDeltaMeters = options.huberDeltaMeters > 0.0 ? options.huberDeltaMeters : baOptions.laserHuberDeltaMeters;
-    baOptions.refineCameraPose = true;
+    plabundle::SolveOptions baOptions;
+    baOptions.constraints.laserPlaneWeight =
+        options.enabled && options.sigmaMeters > 0.0 ? (1.0 / options.sigmaMeters) : 0.0;
+    baOptions.constraints.laserHuberDeltaMeters =
+        options.huberDeltaMeters > 0.0 ? options.huberDeltaMeters : baOptions.constraints.laserHuberDeltaMeters;
+    baOptions.calibration.refineCameraPose = true;
     return baOptions;
 }
 

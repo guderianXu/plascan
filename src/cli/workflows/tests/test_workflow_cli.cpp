@@ -904,21 +904,22 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         R"(QStringLiteral("point_cloud_processing"))",
         R"(QStringLiteral("mvs_backend_actual"))",
     });
-    expectContainsAll(mesh_workflow, {
-        "poisson.setProcessingDevice(config.poissonSolverDevice)",
-        "plapoint::opencl::hasUsableOpenClDevice()",
-        "plapoint::opencl::buildHeightGrid(cloud, options)",
-    });
+    expectContainsAll(mesh_workflow,
+                      {
+                          "poisson.setProcessingDevice(config.poissonSolverDevice)",
+                      });
     expectNotContainsAll(mesh_workflow, {
         "poisson.setProcessingDevice(config.preprocessingDevice)",
     });
-    const qsizetype cuda_route = height_grid_workflow.indexOf(
-        QStringLiteral("processingDevice == plapoint::ProcessingDevice::CUDA"));
-    const qsizetype opencl_route = height_grid_workflow.indexOf(
-        QStringLiteral("processingDevice == plapoint::ProcessingDevice::OpenCL"));
-    ASSERT_GE(cuda_route, 0);
-    ASSERT_GE(opencl_route, 0);
-    EXPECT_LT(cuda_route, opencl_route);
+    expectContainsAll(height_grid_workflow,
+                      {
+                          "plapoint::mesh::buildHeightGrid(cloud,",
+                          "config.preprocessingDevice",
+                      });
+    expectNotContainsAll(height_grid_workflow,
+                         {
+                             ".toGpu(",
+                         });
 }
 
 TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
@@ -1449,15 +1450,15 @@ TEST(ThreeDReconstructionCliContractTest, StreamsFusionAndUsesRegisteredCameras)
     });
     expectContainsAll(source, {
         "registeredImagePaths",
-        "sfmResult.cameraInstanceUpdates",
+        "sfmResult.cameraInstances",
     });
     expectNotContainsAll(source, {
         "cameraByImage.insert(item.imagePath, item.camera);",
     });
     expectContainsAll(gui, {
         "registeredImages",
-        "result.cameraInstanceUpdates",
-        "pmGuard->replaceTiePointResult(",
+        "result.cameraInstances",
+        "session_guard->replaceTiePointResult(",
         "result.sparseCloudPath",
     });
 }
@@ -1467,19 +1468,24 @@ TEST(ThreeDReconstructionCliContractTest, MvsUsesCanonicalPinholeRuntimeAfterSfm
     const QString source = readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
 
     expectContainsAll(source, {
-        "CameraProjectRuntime::load",
-        "planOperationForImages",
-        "CameraOperation::DenseMvs",
-        "framePinholeStatesForImages",
+        "loadProjectCameras",
+        "requireCapabilities",
+        "CapabilityKind::ImagingLocus",
+        "CapabilityKind::StaticPose",
+        "CapabilityKind::Optimization",
+        "requireCommonGroundFrame",
+        "FramePinholeModel",
         "canonicalMvsCameras",
-        "states.size() != imagePaths.size()",
         "updatedCameraCount",
         "resolveCanonicalMvsImagePaths",
-        "cameraInstanceUpdates.size()",
+        "cameraInstances.size()",
+        "view.camera = camera",
+        "MVS 影像尺寸与 PlaCamera 绑定尺寸不一致",
     });
     expectNotContainsAll(source, {
-        "decodeFramePinholeNumericState(it.value(), &camera)",
-        "cameraByImage.insert(imagePath, camera)",
+        "FramePinholeNumericState",
+        "camera_state.toModel()",
+        "camera_state.setImageSize",
     });
 }
 

@@ -5,7 +5,7 @@
  * @brief 读取工程 JSON 中的测量控制点和比例尺约束。
  *
  * 该适配器处理旧 `survey_control` 数据格式；新标记系统由 MarkerBaAdapter 处理。
- * 两者最终都转换为相同的 BATrack/BAControlPointConstraint/BAScaleBarConstraint。
+ * 两者最终都转换为相同的 PlaBundle Track/ControlPointConstraint/ScaleBarConstraint。
  */
 
 #include "project/BaInputBuilder.h"

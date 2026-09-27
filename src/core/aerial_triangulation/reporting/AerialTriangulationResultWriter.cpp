@@ -3,7 +3,7 @@
  * @brief 胜出 SfM 模型的稀疏点云、质量 sidecar 和工程记录构建实现。
  *
  * PLY 使用标准文件模块原子提交；质量 JSON 使用通用原子 IO。相机更新仍保留在
- * cameraInstanceUpdates，由工程服务在本函数完全成功后统一应用。
+ * cameraInstances，由工程服务在本函数完全成功后统一应用。
  */
 
 #include "reporting/AerialTriangulationResultWriter.h"
@@ -64,7 +64,7 @@ namespace xjw::aerial_triangulation
 
             std::unordered_set<std::string> imageIds;
             imageIds.reserve(input.imageIds.size());
-            for (const camera_core::ImageId& imageId : input.imageIds)
+            for (const placamera::ImageId& imageId : input.imageIds)
             {
                 if (imageId.value().empty() || !imageIds.insert(imageId.value()).second)
                 {
@@ -78,9 +78,8 @@ namespace xjw::aerial_triangulation
                 {
                     return fail(QStringLiteral("SfM 注册相机超出 canonical ImageId 输入范围"), errorMessage);
                 }
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera =
-                    reconstruction.camera(imageIndex);
-                if (!camera.hasBoundIdentity() || camera.imageId() != input.imageIds.at(imageIndex))
+                const placamera::FramePinholeNumericState& camera = reconstruction.camera(imageIndex);
+                if (camera.imageId() != input.imageIds.at(imageIndex))
                 {
                     return fail(QStringLiteral("SfM 注册相机缺少与输入一致的 canonical ImageId，拒绝写出 sidecar"),
                                 errorMessage);

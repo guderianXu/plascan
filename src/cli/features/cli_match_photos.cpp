@@ -439,7 +439,6 @@ int main(int argc, char* argv[])
 
     xjw::cli::PhotogrammetryListOptions listOptions;
     listOptions.allowImageOnlyRows = true;
-    listOptions.loadCameras = referencePreselection;
     listOptions.requireExistingCameras = false;
     std::vector<xjw::cli::PhotogrammetryInputItem> items;
     if (!xjw::cli::readPhotogrammetryImageList(inputList, listOptions, &items, &errorMessage))
@@ -548,6 +547,7 @@ int main(int argc, char* argv[])
                                                   items,
                                                   context.pairInput.images,
                                                   context.imageIds,
+                                                  referencePreselection,
                                                   &context.referenceCameraGeometries,
                                                   &errorMessage))
     {

@@ -5,41 +5,40 @@
 #include <atomic>
 #include <memory>
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 namespace xjw::gui::point_cloud
 {
 
-using SnapshotCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using SnapshotCloud = plapoint::GeometryCloud<float>;
 
-struct PointCloudSnapshotStageResult;
+    struct PointCloudSnapshotStageResult;
 
-class PointCloudSnapshotGuard final
-{
-public:
-    ~PointCloudSnapshotGuard();
+    class PointCloudSnapshotGuard final
+    {
+    public:
+        ~PointCloudSnapshotGuard();
 
-    PointCloudSnapshotGuard(const PointCloudSnapshotGuard &) = delete;
-    PointCloudSnapshotGuard &operator=(const PointCloudSnapshotGuard &) = delete;
+        PointCloudSnapshotGuard(const PointCloudSnapshotGuard&) = delete;
+        PointCloudSnapshotGuard& operator=(const PointCloudSnapshotGuard&) = delete;
 
-    QString finalPath() const;
-    QString temporaryPath() const;
-    bool isPending() const;
+        QString finalPath() const;
+        QString temporaryPath() const;
+        bool isPending() const;
 
-    bool commit(QString *errorMessage = nullptr);
-    bool discard(QString *errorMessage = nullptr);
+        bool commit(QString* errorMessage = nullptr);
+        bool discard(QString* errorMessage = nullptr);
 
-private:
-    friend struct PointCloudSnapshotStageResult;
-    friend PointCloudSnapshotStageResult stagePointCloudSnapshot(
-        const QString &finalPath,
-        const SnapshotCloud &cloud,
-        const std::atomic_bool *cancellationFlag);
+    private:
+        friend struct PointCloudSnapshotStageResult;
+        friend PointCloudSnapshotStageResult stagePointCloudSnapshot(const QString& finalPath,
+                                                                     const SnapshotCloud& cloud,
+                                                                     const std::atomic_bool* cancellationFlag);
 
-    PointCloudSnapshotGuard(QString finalPath, QString temporaryPath);
+        PointCloudSnapshotGuard(QString finalPath, QString temporaryPath);
 
-    struct State;
-    std::unique_ptr<State> _state;
+        struct State;
+        std::unique_ptr<State> _state;
 };
 
 struct PointCloudSnapshotStageResult

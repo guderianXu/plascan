@@ -89,9 +89,9 @@ namespace xjw::aerial_triangulation
             return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
         }
 
-        const camera_reference::ReferenceCameraGeometry* referenceCameraForImage(
-            const std::vector<camera_core::ImageId>& imageIds,
-            const camera_reference::ReferenceCameraGeometryMap& cameras,
+        const placamera::reference::ReferenceCameraGeometry* referenceCameraForImage(
+            const std::vector<placamera::ImageId>& imageIds,
+            const placamera::reference::ReferenceCameraGeometryMap& cameras,
             std::size_t imageIndex)
         {
             if (imageIndex >= imageIds.size())
@@ -103,8 +103,8 @@ namespace xjw::aerial_triangulation
         }
 
         ClosedSequenceEvidence detectEstimatedClosedSequence(const QStringList& images,
-                                                             const std::vector<camera_core::ImageId>& imageIds,
-                                                             const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries)
+                                                             const std::vector<placamera::ImageId>& imageIds,
+                                                             const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries)
         {
             ClosedSequenceEvidence evidence;
             if (images.size() < 6 || images.size() != static_cast<qsizetype>(imageIds.size()) ||
@@ -121,15 +121,18 @@ namespace xjw::aerial_triangulation
             std::array<double, 3> meanAxis{};
             for (std::size_t imageIndex = 0; imageIndex < static_cast<std::size_t>(images.size()); ++imageIndex)
             {
-                const camera_reference::ReferenceCameraGeometry* referenceCamera =
+                const placamera::reference::ReferenceCameraGeometry* referenceCamera =
                     referenceCameraForImage(imageIds, referenceCameraGeometries, imageIndex);
                 if (!referenceCamera)
                 {
                     return evidence;
                 }
-                const auto camera = referenceCamera->numericState().normalizedForPositiveDepth();
-                const auto center = camera.cameraCenter();
-                const auto rotation = camera.cameraToWorldRotation();
+                const auto& source = referenceCamera->model();
+                const auto camera = source.normalizedForPositiveDepth(
+                    placamera::CameraDefinitionId(source.definitionId().value() + ":closed-sequence"),
+                    placamera::CameraInstanceId(source.instanceId().value() + ":closed-sequence"));
+                const auto& center = camera.pose().center;
+                const auto& rotation = camera.pose().cameraToWorldRotation;
                 const std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};
                 centers.push_back(center);
                 axes.push_back(axis);
@@ -613,24 +616,25 @@ namespace xjw::aerial_triangulation
                                                                const TiePointRunner& tiePointRunner)
     {
         AerialTriangulationResult result;
-        std::string referenceError;
-        if (!camera_reference::validateReferenceCameraInputs(options.imageIds,
-                                                             static_cast<std::size_t>(options.images.size()),
-                                                             options.referenceCameraGeometries,
-                                                             options.referencePositions,
-                                                             &referenceError))
+        const auto referenceValidation = placamera::reference::validateReferenceCameraInputs(
+            options.imageIds,
+            static_cast<std::size_t>(options.images.size()),
+            options.referenceCameraGeometries,
+            options.referencePositions);
+        if (!referenceValidation)
         {
             result.reconstructionResult.errorMessage =
-                QStringLiteral("参考相机输入无效：%1").arg(QString::fromStdString(referenceError));
+                QStringLiteral("参考相机输入无效：%1")
+                    .arg(QString::fromStdString(referenceValidation.message()));
             result.reconstructionResult.summary = result.reconstructionResult.errorMessage;
             return result;
         }
-        if (!camera_reference::commonReferenceWorldFrame(
-                options.referenceCameraGeometries, options.referencePositions, &referenceError) &&
-            (!options.referenceCameraGeometries.empty() || !options.referencePositions.empty()))
+        const auto commonFrame = placamera::reference::commonReferenceWorldFrame(
+            options.referenceCameraGeometries, options.referencePositions);
+        if (!commonFrame)
         {
             result.reconstructionResult.errorMessage =
-                QStringLiteral("参考相机坐标系不一致：%1").arg(QString::fromStdString(referenceError));
+                QStringLiteral("参考相机坐标系不一致：%1").arg(QString::fromStdString(commonFrame.message()));
             result.reconstructionResult.summary = result.reconstructionResult.errorMessage;
             return result;
         }

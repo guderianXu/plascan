@@ -8,7 +8,7 @@
 #include "model/AerialTriangulationOptions.h"
 #include "model/AerialTriangulationResult.h"
 
-#include "camera/models/rpc/RpcInstance.h"
+#include <placamera/rpc_camera.h>
 
 #include <map>
 #include <memory>
@@ -26,7 +26,7 @@ namespace xjw::aerial_triangulation
     struct RpcCameraInput
     {
         RpcCameraInputStatus status = RpcCameraInputStatus::None;
-        std::map<ImageId, std::shared_ptr<const camera_models::rpc::RpcInstance>> cameras;
+        std::map<ImageId, std::shared_ptr<const placamera::RpcModel>> cameras;
         QString errorMessage;
     };
 
@@ -43,9 +43,8 @@ namespace xjw::aerial_triangulation
         static RpcCameraInput inspectInput(const PreparedAerialTriangulationInput& input);
 
         AerialTriangulationReconstructionResult run(const PreparedAerialTriangulationInput& input,
-                                                    const std::map<
-                                                        ImageId,
-                                                        std::shared_ptr<const camera_models::rpc::RpcInstance>>& cameras)
+                                                    const std::map<ImageId,
+                                                                   std::shared_ptr<const placamera::RpcModel>>& cameras)
             const;
     };
 

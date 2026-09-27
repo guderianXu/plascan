@@ -23,9 +23,20 @@ add_aerial_triangulation_test(test_tie_point_preparation test_tie_point_preparat
 add_aerial_triangulation_test(test_sfm_attempt_runner test_sfm_attempt_runner.cpp)
 add_aerial_triangulation_test(test_camera_intrinsic_prior_sanitizer
                               test_camera_intrinsic_prior_sanitizer.cpp)
+add_executable(test_camera_intrinsic_prior
+    test_camera_intrinsic_prior.cpp
+    ../preparation/CameraIntrinsicPrior.cpp
+)
+target_include_directories(test_camera_intrinsic_prior PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+)
+target_link_libraries(test_camera_intrinsic_prior PRIVATE Qt6::Core GTest::gtest_main)
+gtest_discover_tests(test_camera_intrinsic_prior DISCOVERY_MODE PRE_TEST)
 add_aerial_triangulation_test(test_adaptive_focal_search test_adaptive_focal_search.cpp)
 add_aerial_triangulation_test(test_aerial_triangulation_pipeline
                               test_aerial_triangulation_pipeline.cpp)
+target_link_libraries(test_aerial_triangulation_pipeline PRIVATE plascan::placamera_runtime)
 add_aerial_triangulation_test(test_aerial_triangulation_result_writer
                               test_aerial_triangulation_result_writer.cpp)
 add_aerial_triangulation_test(test_rpc_aerial_triangulation_runner

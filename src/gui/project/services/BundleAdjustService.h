@@ -4,22 +4,24 @@
 //
 //         本服务负责将光束法平差的纯算法逻辑与 GUI 层（ProjectManager）解耦。
 //         调用方（ProjectManager）负责：
-//           1. 从项目元数据中加载相机参数 → FramePinholeNumericState 列表
-//           2. 从 sidecar JSON 匹配文件构建 BA 轨迹 → xjw::BATrack 列表
+//           1. 从项目元数据中加载 PlaCamera 帧相机实例
+//           2. 从 sidecar JSON 匹配文件构建 BA 轨迹 → plabundle::Track 列表
 //           3. 调用 BundleAdjustService::run() 执行平差
-//           4. 将返回的 cameraInstanceUpdates 通过 ProjectData 写回项目
+//           4. 将返回的 PlaCamera 实例通过 ProjectData 写回项目
 //
 //         BundleAdjustService::run() 本身不依赖 QWidget / QMessageBox，
 //         便于未来在无头（headless）环境中复用。
 // =============================================================================
 #pragma once
 
-#include "BundleAdjustSolver.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/project/CameraInstanceUpdate.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include "placamera/reference/CameraReferencePosePrior.h"
 #include "PlanetaryLaserJson.h"
 #include "quality/MarkerQualityReport.h"
+
+#include <plabundle/options.h>
+#include <plabundle/problem.h>
+#include <placamera/frame_camera.h>
+#include <placamera/instance_set.h>
 
 #include <QJsonObject>
 #include <QMap>
@@ -28,6 +30,7 @@
 #include <QVector>
 
 #include <array>
+#include <memory>
 #include <vector>
 
 namespace xjw
@@ -58,11 +61,15 @@ struct BaServiceOptions
         double measuredDistance = 0.0;
     };
     // ── 匹配 BA 求解器参数 ─────────────────────────────────────────────────
-    xjw::BAOptions      baOpt;              ///< BA 求解器配置（迭代次数、鲁棒核、收敛阈值等）
+    plabundle::SolveOptions baOpt;              ///< BA 求解器结构化配置。
+    bool enableControlPointConstraints = false; ///< 是否使用 track 中的控制点约束。
+    bool enableScaleBarConstraints = false;     ///< 是否使用 scaleBarConstraints。
+    bool enableLaserPlaneConstraints = false; ///< 是否使用调用方预先附加的点到面约束。
+    std::vector<plabundle::ScaleBarConstraint> scaleBarConstraints; ///< 跨 track 尺度约束。
 
     // ── 输入数据 ───────────────────────────────────────────────────────────
     QStringList         imagePathByIndex;   ///< 与 cameras 列表一一对应的影像绝对路径
-    xjw::camera_project::CameraImageIds imageIdByIndex; ///< 与 cameras 列表一一对应的 canonical ImageId
+    std::vector<placamera::ImageId> imageIdByIndex; ///< 与 cameras 列表一一对应的 canonical ImageId
     QStringList         selectedImages;     ///< 用户选中的全部影像路径（用于输出 JSON）
     QMap<QString, QJsonObject> beforeCamMeta; ///< 平差前各影像的相机 JSON，用于度量位移
     QVector<MarkerTrackQualityInput> markerTrackQualityInputs;
@@ -70,8 +77,8 @@ struct BaServiceOptions
 
     // ── 外部相机姿态参考 ───────────────────────────────────────────────────
     // 仅接受已通过 camera_reference resolver 的 typed prior；匹配到当前
-    // 数值相机后由 SfM adapter 按 image_uuid/frame 对齐为 BA 数值先验。
-    std::vector<xjw::camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
+    // 由 SfM adapter 按原生相机的 image_uuid/frame 对齐为 BA 数值先验。
+    std::vector<placamera::reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
 
     // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
     bool                enableLaserConstraints = false; ///< 是否从 LiDAR 点云生成 BA 点到面约束
@@ -138,9 +145,9 @@ struct BaServiceResult
     bool    success  = false;               ///< 是否成功完成平差
     QString errorMessage;                   ///< 失败时的错误描述
 
-    // 平差后相机 JSON 更新，按 canonical ImageId 定位。
-    // 由调用方决定是否通过 ProjectData::setCameraInstancesById() 提交到项目。
-    xjw::camera_project::CameraInstanceUpdates cameraInstanceUpdates;
+    // 平差后原生相机模型，按 canonical ImageId 定位；由调用方确认后事务提交。
+    placamera::CameraInstanceSet cameraInstances;
+    QMap<QString, QJsonObject> cameraAnnotationsByImageId;
 
     // 完整的 BA 运行结果 JSON（含统计信息、文件路径列表等），
     // 可直接作为预览数据发给 GUI 展示。
@@ -155,17 +162,17 @@ class BundleAdjustService
 public:
     // 执行完整的光束法平差流程：
     //   1. 若 dryRun=true，只统计轨迹数量并直接返回
-    //   2. 调用 xjw::BundleAdjust::optimizePoints 执行非线性最小二乘
+    //   2. 调用 PlaBundle Solver 执行非线性最小二乘
     //   3. 生成各类输出文件（tsai / csv / txt / json / png 评估图）
-    //   4. 将平差后相机 JSON 写入 result.cameraInstanceUpdates
+    //   4. 将平差后原生帧相机写入 result.cameraInstances
     //      （不直接写回项目数据，由调用方决定是否应用）
     //
-    // @param cameras   预先从项目 JSON 加载的相机列表（与 opts.imagePathByIndex 一一对应）
+    // @param cameras   已验证的 PlaCamera 帧相机实例（与 opts.imagePathByIndex 一一对应）
     // @param tracks    预先构建的 BA 轨迹列表（含初始三角化点 + 观测）
     // @param opts      平差选项（见 BaServiceOptions 各字段说明）
     // @return          BaServiceResult（含平差结果 JSON 与待提交相机参数）
-    static BaServiceResult run(const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-                               std::vector<xjw::BATrack>& tracks,
+    static BaServiceResult run(const std::vector<std::shared_ptr<const placamera::FramePinholeModel>>& cameras,
+                               std::vector<plabundle::Track>& tracks,
                                const BaServiceOptions& opts);
 };
 

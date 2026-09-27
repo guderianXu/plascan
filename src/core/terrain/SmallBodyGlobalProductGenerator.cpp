@@ -261,9 +261,9 @@ cv::Vec3d estimateCenter(const PlaPointCloud &mesh,
         {
             return {};
         }
-        center[0] += points.getValue(row, 0);
-        center[1] += points.getValue(row, 1);
-        center[2] += points.getValue(row, 2);
+        center[0] += points.coeff(row, 0);
+        center[1] += points.coeff(row, 1);
+        center[2] += points.coeff(row, 2);
     }
     return center / static_cast<double>(std::max<plamatrix::Index>(1, points.rows()));
 }
@@ -281,9 +281,7 @@ double estimateReferenceRadius(const PlaPointCloud &mesh,
         {
             return 0.0;
         }
-        const cv::Vec3d position(points.getValue(row, 0),
-                                 points.getValue(row, 1),
-                                 points.getValue(row, 2));
+        const cv::Vec3d position(points.coeff(row, 0), points.coeff(row, 1), points.coeff(row, 2));
         const double radius = cv::norm(position - center);
         if (std::isfinite(radius) && radius > 0.0)
         {

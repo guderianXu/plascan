@@ -32,20 +32,24 @@ bool cancelled(const TextureMappingConfig &config)
     return config.isCancelled && config.isCancelled();
 }
 
-bool projectColorTriangle(const PreparedView &view,
-                          const FaceGeometry &face,
-                          std::array<QPointF, 3> *pixels)
+bool projectColorTriangle(const PreparedView& view, const FaceGeometry& face, std::array<QPointF, 3>* pixels)
 {
     for (int corner = 0; corner < 3; ++corner)
     {
-        double pixel[2]{};
-        double depth = 0.0;
-        if (!view.colorCamera.projectWorldPointWithDepth(
-                face.vertices[corner].data(), pixel, depth) ||
-            !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-            !std::isfinite(depth) || depth <= 1.0e-8 ||
-            pixel[0] < 0.0 || pixel[1] < 0.0 ||
-            pixel[0] > view.colorBgr.cols - 1.0 ||
+        if (!view.colorCamera)
+        {
+            return false;
+        }
+        const auto projected =
+            view.colorCamera->groundToImage({view.colorCamera->groundFrame(), face.vertices[corner]});
+        if (!projected || !projected.value().positiveDepth)
+        {
+            return false;
+        }
+        const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+        const double depth = *projected.value().positiveDepth;
+        if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(depth) || depth <= 1.0e-8 ||
+            pixel[0] < 0.0 || pixel[1] < 0.0 || pixel[0] > view.colorBgr.cols - 1.0 ||
             pixel[1] > view.colorBgr.rows - 1.0)
         {
             return false;
@@ -64,7 +68,7 @@ double projectedArea(const std::array<QPointF, 3> &pixels)
 
 float viewAngleScore(const PreparedView &view, const FaceGeometry &face)
 {
-    const std::array<double, 3> center = view.colorCamera.cameraCenter();
+    const std::array<double, 3> center = view.colorCamera->pose().center;
     float direction[3]{
         static_cast<float>(center[0] - face.centroid[0]),
         static_cast<float>(center[1] - face.centroid[1]),
@@ -97,27 +101,31 @@ bool evaluateEvidence(const PreparedView &view,
 {
     int valid_depth_samples = 0;
     float accumulated_score = 0.0f;
-    for (int sample_index = 0;
-         sample_index < static_cast<int>(kSampleWeights.size());
-         ++sample_index)
+    for (int sample_index = 0; sample_index < static_cast<int>(kSampleWeights.size()); ++sample_index)
     {
-        const auto &weights = kSampleWeights[static_cast<std::size_t>(sample_index)];
+        const auto& weights = kSampleWeights[static_cast<std::size_t>(sample_index)];
         double world[3]{};
         for (int axis = 0; axis < 3; ++axis)
         {
-            world[axis] =
-                weights[0] * face.vertices[0][axis] +
-                weights[1] * face.vertices[1][axis] +
-                weights[2] * face.vertices[2][axis];
+            world[axis] = weights[0] * face.vertices[0][axis] + weights[1] * face.vertices[1][axis] +
+                          weights[2] * face.vertices[2][axis];
         }
-        double pixel[2]{};
-        double camera_depth = 0.0;
-        if (!view.evidenceCamera.projectWorldPointWithDepth(
-                world, pixel, camera_depth) ||
-            !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-            !std::isfinite(camera_depth) || camera_depth <= 0.0 ||
-            pixel[0] < 0.0 || pixel[1] < 0.0 ||
-            pixel[0] > view.supportMask->cols - 1.0 ||
+        if (!view.evidenceCamera)
+        {
+            ++result->rejectedProjectionCount;
+            return false;
+        }
+        const auto projected =
+            view.evidenceCamera->groundToImage({view.evidenceCamera->groundFrame(), {world[0], world[1], world[2]}});
+        if (!projected || !projected.value().positiveDepth)
+        {
+            ++result->rejectedProjectionCount;
+            return false;
+        }
+        const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+        const double camera_depth = *projected.value().positiveDepth;
+        if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(camera_depth) ||
+            camera_depth <= 0.0 || pixel[0] < 0.0 || pixel[1] < 0.0 || pixel[0] > view.supportMask->cols - 1.0 ||
             pixel[1] > view.supportMask->rows - 1.0)
         {
             ++result->rejectedProjectionCount;
@@ -125,8 +133,7 @@ bool evaluateEvidence(const PreparedView &view,
         }
         const int column = static_cast<int>(std::lround(pixel[0]));
         const int row = static_cast<int>(std::lround(pixel[1]));
-        if (row < 0 || column < 0 ||
-            row >= view.supportMask->rows || column >= view.supportMask->cols ||
+        if (row < 0 || column < 0 || row >= view.supportMask->rows || column >= view.supportMask->cols ||
             view.supportMask->at<std::uint8_t>(row, column) == 0)
         {
             ++result->rejectedMaskCount;
@@ -291,32 +298,31 @@ const FaceCandidate *candidateForView(const FaceAssignment &assignment, int view
     return nullptr;
 }
 
-bool sampleProjectedColor(const PreparedView &view,
-                          const std::array<double, 3> &world,
-                          cv::Vec3f *color)
+bool sampleProjectedColor(const PreparedView& view, const std::array<double, 3>& world, cv::Vec3f* color)
 {
-    double pixel[2]{};
-    double depth = 0.0;
-    if (!view.colorCamera.projectWorldPointWithDepth(
-            world.data(), pixel, depth) ||
-        !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-        !std::isfinite(depth) || depth <= 0.0 ||
-        pixel[0] < 0.0 || pixel[1] < 0.0 ||
-        pixel[0] > view.colorBgr.cols - 1.0 ||
-        pixel[1] > view.colorBgr.rows - 1.0)
+    if (!view.colorCamera)
+    {
+        return false;
+    }
+    const auto projected = view.colorCamera->groundToImage({view.colorCamera->groundFrame(), world});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return false;
+    }
+    const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+    const double depth = *projected.value().positiveDepth;
+    if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(depth) || depth <= 0.0 ||
+        pixel[0] < 0.0 || pixel[1] < 0.0 || pixel[0] > view.colorBgr.cols - 1.0 || pixel[1] > view.colorBgr.rows - 1.0)
     {
         return false;
     }
     const int column = static_cast<int>(std::lround(pixel[0]));
     const int row = static_cast<int>(std::lround(pixel[1]));
-    if (row < 0 || column < 0 ||
-        row >= view.colorBgr.rows || column >= view.colorBgr.cols)
+    if (row < 0 || column < 0 || row >= view.colorBgr.rows || column >= view.colorBgr.cols)
     {
         return false;
     }
-    *color = applyLinearSrgbExposureGain(
-        cv::Vec3f(view.colorBgr.at<cv::Vec3b>(row, column)),
-        view.exposureGain);
+    *color = applyLinearSrgbExposureGain(cv::Vec3f(view.colorBgr.at<cv::Vec3b>(row, column)), view.exposureGain);
     return true;
 }
 

@@ -1,9 +1,7 @@
 #include "ProjectDepthBatchLineage.h"
 
 #include "ProjectWorkflowOperations.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/project/CameraProjectRuntime.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectMetadata.h"
 
 #include <QCryptographicHash>
@@ -79,22 +77,39 @@ namespace xjw::gui::project
 
         QJsonObject canonicalCameraRecord(const QJsonObject& projectFiles,
                                           const QJsonObject& image,
-                                          const xjw::camera_project::CameraProjectRuntimeResult& runtime)
+                                          const placamera::CameraInstanceSet& instances)
         {
             const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
             if (imageId.isEmpty())
             {
                 return {};
             }
-            const auto lookup = runtime.instances.forImage(xjw::camera_core::ImageId(imageId.toStdString()));
+            const auto lookup = instances.forImage(placamera::ImageId(imageId.toStdString()));
             if (!lookup.ok())
             {
                 return {};
             }
-            const QJsonObject instance = xjw::camera_project::CameraProjectRecords::instanceForImage(
-                projectFiles, imageId);
-            const QJsonObject definition = xjw::camera_project::CameraProjectRecords::definitionForInstance(
-                projectFiles, instance);
+            QJsonObject instance;
+            for (const QJsonValue& value : projectFiles.value(QStringLiteral("camera_instances")).toArray())
+            {
+                const QJsonObject candidate = value.toObject();
+                if (candidate.value(QStringLiteral("image_uuid")).toString() == imageId)
+                {
+                    instance = candidate;
+                    break;
+                }
+            }
+            QJsonObject definition;
+            const QString definitionId = instance.value(QStringLiteral("definition_id")).toString();
+            for (const QJsonValue& value : projectFiles.value(QStringLiteral("camera_definitions")).toArray())
+            {
+                const QJsonObject candidate = value.toObject();
+                if (candidate.value(QStringLiteral("id")).toString() == definitionId)
+                {
+                    definition = candidate;
+                    break;
+                }
+            }
             if (instance.isEmpty() || definition.isEmpty())
             {
                 return {};
@@ -156,9 +171,8 @@ namespace xjw::gui::project
         // A depth cache is only meaningful when the complete canonical camera
         // graph is valid.  In particular, do not derive an identity or
         // geometry from a path, array position, or an embedded legacy camera.
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-        if (!runtime.ok())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+        if (!loaded.ok())
         {
             return QString();
         }
@@ -207,7 +221,7 @@ namespace xjw::gui::project
 
             const QJsonObject image = images.at(imageIndex).toObject();
             const QString identity = canonicalImageIdentity(image);
-            const QJsonObject camera = canonicalCameraRecord(projectFiles, image, runtime);
+            const QJsonObject camera = canonicalCameraRecord(projectFiles, image, loaded.instances);
             if (identity.isEmpty() || camera.isEmpty())
             {
                 return QString();

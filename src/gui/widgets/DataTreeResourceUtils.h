@@ -41,11 +41,10 @@ namespace xjw::gui::widgets::data_tree
     int countObjectsWithPath(const QJsonArray& records, std::initializer_list<const char*> keys);
     QString imagePathFromValue(const QJsonValue& value);
     QString imagePathKey(QString path);
-    bool jsonArrayHasAtLeast(const QJsonValue& value, int size);
     bool objectHasTrueFlag(const QJsonObject& object, std::initializer_list<const char*> keys);
     bool objectHasAlignedStatus(const QJsonObject& object);
-    bool cameraHasPose(const QJsonObject& camera);
-    bool imageObjectHasAlignedPose(const QJsonObject& image);
-    bool
-    imageIsAligned(const QJsonValue& image, const QSet<QString>& alignedImageKeys, const QJsonObject& projectMetadata);
+    QSet<QString> projectCameraAlignedImageIds(const QJsonObject& projectMetadata);
+    bool imageIsAligned(const QJsonValue& image,
+                        const QSet<QString>& alignedImageKeys,
+                        const QSet<QString>& cameraAlignedImageIds);
 } // namespace xjw::gui::widgets::data_tree

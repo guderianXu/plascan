@@ -1,7 +1,8 @@
 #pragma once
 // Private implementation contracts; not an exported include root.
-#include "../MvsPipelineService.h"
+#include <placamera/frame_camera.h>
 
+#include "../MvsPipelineService.h"
 #include "concurrency/SafeWorkerGroup.h"
 #include "DepthComputeScheduler.h"
 #include "DenseCloudBuilder.h"
@@ -17,7 +18,6 @@
 #include "DepthPyramidPolicy.h"
 #include "DepthProvenance.h"
 #include "EpipolarRectifier.h"
-#include "CameraBaseline.h"
 #include "MvsImagePreprocessor.h"
 #include "MvsImageMetadataProbe.h"
 #include "MvsQualityReport.h"
@@ -177,12 +177,9 @@ namespace xjw::mvs::pipeline_detail
 
     QJsonArray doubleArrayToJson(const double* values, int count);
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
-    mvsPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
-
     cv::Mat restoreNativePyramidArtifact(const cv::Mat& artifact, const cv::Size& working_size);
 
-    QJsonObject cameraModelToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera);
+    QJsonObject cameraModelToJson(const placamera::FramePinholeModel& camera);
 
     QJsonObject depthPoseRefinementCandidateToJson(const DepthPoseRefinementCandidate& candidate,
                                                    const DepthPoseRefinementStageResult& stage);
@@ -299,8 +296,8 @@ namespace xjw::mvs::pipeline_detail
         int refIdx,
         const cv::Mat& refGray,
         const std::vector<cv::Mat>& srcGrays,
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+        const placamera::FramePinholeModel& refCam,
+        const std::vector<placamera::FramePinholeModel>& srcCams,
         float zNear,
         float zFar,
         const PatchMatchConfig& config,
@@ -316,8 +313,8 @@ namespace xjw::mvs::pipeline_detail
 
     float sourceGeometryReliabilityWeight(const DepthFrameResult& reference_frame, int source_view_index);
 
-    int cameraBaselineSector(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
-                             const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera);
+    int cameraBaselineSector(const placamera::FramePinholeModel& reference_camera,
+                             const placamera::FramePinholeModel& source_camera);
 
     void updateDepthCompletenessAfterPostprocess(DepthFrameResult& result,
                                                  const cv::Mat& depth,

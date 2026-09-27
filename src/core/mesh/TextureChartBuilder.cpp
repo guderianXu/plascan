@@ -32,14 +32,20 @@ bool projectedBounds(const PreparedView &view,
     projected_vertices.reserve(static_cast<std::size_t>(faces.size()) * 3);
     for (const int face_index : faces)
     {
-        for (const auto &vertex : geometry[face_index].vertices)
+        for (const auto& vertex : geometry[face_index].vertices)
         {
-            double pixel[2]{};
-            double depth = 0.0;
-            if (!view.colorCamera.projectWorldPointWithDepth(
-                    vertex.data(), pixel, depth) ||
-                !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-                !std::isfinite(depth) || depth <= 0.0)
+            if (!view.colorCamera)
+            {
+                return false;
+            }
+            const auto projected = view.colorCamera->groundToImage({view.colorCamera->groundFrame(), vertex});
+            if (!projected || !projected.value().positiveDepth)
+            {
+                return false;
+            }
+            const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+            const double depth = *projected.value().positiveDepth;
+            if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(depth) || depth <= 0.0)
             {
                 return false;
             }

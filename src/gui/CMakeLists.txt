@@ -93,8 +93,6 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}/views
   ${CMAKE_CURRENT_SOURCE_DIR}/widgets
   ${CMAKE_CURRENT_SOURCE_DIR}/dialogs
-  ${CMAKE_SOURCE_DIR}/src/core/intersection
-  ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
   ${CMAKE_SOURCE_DIR}/src/core/camera
   ${CMAKE_SOURCE_DIR}/src/core/lidar
   ${CMAKE_SOURCE_DIR}/src/core/mask
@@ -149,7 +147,13 @@ if(PLASCAN_BUILD_GUI)
   )
 endif()
 
+target_link_libraries(gui_project PUBLIC
+  placoordinate::types
+  sfm_project
+)
+
 target_link_libraries(gui_project PRIVATE
+  placamera::placamera
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
@@ -223,6 +227,7 @@ target_link_libraries(plascan_gui PRIVATE
 
 target_link_libraries(gui_runtime PRIVATE
   gui_project
+  plascan::placamera_runtime
   Qt6::Core
   Qt6::Gui
   Qt6::GuiPrivate

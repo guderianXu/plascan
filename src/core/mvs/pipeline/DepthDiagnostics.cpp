@@ -156,30 +156,38 @@ namespace xjw::mvs::pipeline_detail
         return array;
     }
 
-    QJsonObject cameraModelToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+    QJsonObject cameraModelToJson(const placamera::FramePinholeModel& camera)
     {
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
-        const std::array<double, 9> rotation = camera.worldToCameraRotation();
-        const std::array<double, 3> translation = camera.worldToCameraTranslation();
-        const std::array<double, 3> center = camera.cameraCenter();
-        QJsonObject object{{QStringLiteral("fx"), intrinsics.focalX},
+        const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+        const auto& center = camera.pose().center;
+        const auto& camera_to_world = camera.pose().cameraToWorldRotation;
+        const std::array<double, 9> world_to_camera{camera_to_world[0],
+                                                    camera_to_world[3],
+                                                    camera_to_world[6],
+                                                    camera_to_world[1],
+                                                    camera_to_world[4],
+                                                    camera_to_world[7],
+                                                    camera_to_world[2],
+                                                    camera_to_world[5],
+                                                    camera_to_world[8]};
+        std::array<double, 3> translation{};
+        for (int row = 0; row < 3; ++row)
+        {
+            translation[static_cast<std::size_t>(row)] =
+                -(world_to_camera[static_cast<std::size_t>(row * 3)] * center[0] +
+                  world_to_camera[static_cast<std::size_t>(row * 3 + 1)] * center[1] +
+                  world_to_camera[static_cast<std::size_t>(row * 3 + 2)] * center[2]);
+        }
+        return QJsonObject{{QStringLiteral("fx"), intrinsics.focalX},
                            {QStringLiteral("fy"), intrinsics.focalY},
                            {QStringLiteral("cx"), intrinsics.principalX},
                            {QStringLiteral("cy"), intrinsics.principalY},
-                           {QStringLiteral("rotation_world_to_camera"), doubleArrayToJson(rotation.data(), 9)},
+                           {QStringLiteral("rotation_world_to_camera"), doubleArrayToJson(world_to_camera.data(), 9)},
                            {QStringLiteral("translation_world_to_camera"), doubleArrayToJson(translation.data(), 3)},
-                           {QStringLiteral("camera_center"), doubleArrayToJson(center.data(), 3)}};
-        if (camera.hasBoundIdentity())
-        {
-            // MVS artifacts are replayable only when they retain the typed
-            // camera binding that produced the numeric pose.  The generic
-            // project metadata serializer deliberately has a different
-            // contract and does not infer these fields.
-            object.insert(QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value()));
-            object.insert(QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value()));
-            object.insert(QStringLiteral("world_frame"), QString::fromStdString(camera.worldFrame().value()));
-        }
-        return object;
+                           {QStringLiteral("camera_center"), doubleArrayToJson(center.data(), 3)},
+                           {QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value())},
+                           {QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value())},
+                           {QStringLiteral("world_frame"), QString::fromStdString(camera.groundFrame().value())}};
     }
 
     QJsonObject depthPoseRefinementCandidateToJson(const DepthPoseRefinementCandidate& candidate,

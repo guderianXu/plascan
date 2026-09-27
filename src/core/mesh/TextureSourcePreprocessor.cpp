@@ -104,14 +104,12 @@ bool cancelled(const TextureMappingConfig &config)
     return config.isCancelled && config.isCancelled();
 }
 
-bool hasNonzeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+bool hasNonzeroDistortion(const placamera::FramePinholeNumericState& camera)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion = camera.distortion();
-    return std::fabs(distortion.radialK1) > 1.0e-15 ||
-        std::fabs(distortion.radialK2) > 1.0e-15 ||
-        std::fabs(distortion.radialK3) > 1.0e-15 ||
-        std::fabs(distortion.tangentialP1) > 1.0e-15 ||
-        std::fabs(distortion.tangentialP2) > 1.0e-15;
+    const placamera::BrownConradyDistortion& distortion = camera.distortion();
+    return std::fabs(distortion.radialK1) > 1.0e-15 || std::fabs(distortion.radialK2) > 1.0e-15 ||
+           std::fabs(distortion.radialK3) > 1.0e-15 || std::fabs(distortion.tangentialP1) > 1.0e-15 ||
+           std::fabs(distortion.tangentialP2) > 1.0e-15;
 }
 
 } // namespace
@@ -164,31 +162,37 @@ bool prepareInputs(const std::string &meshPath,
     }
 
     data->views.clear();
+    std::optional<placamera::FrameId> ground_frame;
     for (int index = 0; index < views.size(); ++index)
     {
-        const MeshColorView &source = views[index];
-        if (!source.camera.isValid() || source.colorBgr.type() != CV_8UC3 ||
-            source.depth.type() != CV_32FC1 ||
-            source.confidence.type() != CV_32FC1 ||
-            source.depthValidMask.type() != CV_8UC1 ||
-            source.supportMask.type() != CV_8UC1 ||
-            source.depth.size() != source.confidence.size() ||
-            source.depth.size() != source.depthValidMask.size() ||
-            source.depth.size() != source.supportMask.size())
+        const MeshColorView& source = views[index];
+        if (!source.camera || source.colorBgr.type() != CV_8UC3 || source.depth.type() != CV_32FC1 ||
+            source.confidence.type() != CV_32FC1 || source.depthValidMask.type() != CV_8UC1 ||
+            source.supportMask.type() != CV_8UC1 || source.depth.size() != source.confidence.size() ||
+            source.depth.size() != source.depthValidMask.size() || source.depth.size() != source.supportMask.size())
         {
             continue;
         }
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_color_camera =
-            source.colorCamera.isValid() ? source.colorCamera : source.camera;
-        if (hasNonzeroDistortion(source.camera) ||
-            hasNonzeroDistortion(source_color_camera))
+        if ((ground_frame && source.camera->groundFrame() != *ground_frame) ||
+            (source.colorCamera && source.colorCamera->groundFrame() != source.camera->groundFrame()))
         {
             if (errorMsg)
             {
-                *errorMsg =
-                    "纹理 v4 需要预去畸变的零畸变深度与彩色相机；"
-                    "请重新生成 revision 39 或更新版本的 MVS workspace";
+                *errorMsg = "纹理 v4 输入相机的地面坐标系不一致";
+            }
+            return false;
+        }
+        ground_frame = source.camera->groundFrame();
+
+        const placamera::FramePinholeNumericState& source_color_camera =
+            source.colorCamera ? *source.colorCamera : *source.camera;
+        if (hasNonzeroDistortion(*source.camera) || hasNonzeroDistortion(source_color_camera))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "纹理 v4 需要预去畸变的零畸变深度与彩色相机；"
+                            "请重新生成 revision 39 或更新版本的 MVS workspace";
             }
             return false;
         }
@@ -196,26 +200,20 @@ bool prepareInputs(const std::string &meshPath,
         PreparedView prepared;
         prepared.sourceIndex = index;
         prepared.evidenceCamera = source.camera;
-        prepared.colorCamera = source.colorCamera.isValid()
-            ? source.colorCamera
-            : source.camera.scaledIntrinsics(
-                  static_cast<double>(source.colorBgr.cols) / source.depth.cols,
-                  static_cast<double>(source.colorBgr.rows) / source.depth.rows);
+        prepared.colorCamera =
+            source.colorCamera
+                ? source.colorCamera
+                : source.camera->scaledIntrinsics(static_cast<double>(source.colorBgr.cols) / source.depth.cols,
+                                                  static_cast<double>(source.colorBgr.rows) / source.depth.rows);
         const int downscale = std::clamp(config.imageDownscale, 1, 8);
         if (downscale > 1)
         {
-            const cv::Size work_size(
-                std::max(1, source.colorBgr.cols / downscale),
-                std::max(1, source.colorBgr.rows / downscale));
-            cv::resize(source.colorBgr,
-                       prepared.colorBgr,
-                       work_size,
-                       0.0,
-                       0.0,
-                       cv::INTER_AREA);
-            prepared.colorCamera = prepared.colorCamera.scaledIntrinsics(
-                static_cast<double>(work_size.width) / source.colorBgr.cols,
-                static_cast<double>(work_size.height) / source.colorBgr.rows);
+            const cv::Size work_size(std::max(1, source.colorBgr.cols / downscale),
+                                     std::max(1, source.colorBgr.rows / downscale));
+            cv::resize(source.colorBgr, prepared.colorBgr, work_size, 0.0, 0.0, cv::INTER_AREA);
+            prepared.colorCamera =
+                prepared.colorCamera->scaledIntrinsics(static_cast<double>(work_size.width) / source.colorBgr.cols,
+                                                       static_cast<double>(work_size.height) / source.colorBgr.rows);
         }
         else
         {
@@ -283,7 +281,7 @@ bool prepareInputs(const std::string &meshPath,
         FaceGeometry &face = data->geometry[face_index];
         for (int corner = 0; corner < 3; ++corner)
         {
-            const int vertex_index = faces->getValue(face_index, corner);
+            const int vertex_index = faces->coeff(face_index, corner);
             if (vertex_index < 0 ||
                 static_cast<std::size_t>(vertex_index) >= data->mesh->size())
             {
@@ -294,10 +292,9 @@ bool prepareInputs(const std::string &meshPath,
                 return false;
             }
             face.vertexIndices[corner] = vertex_index;
-            face.vertices[corner] = {
-                data->mesh->points().getValue(vertex_index, 0),
-                data->mesh->points().getValue(vertex_index, 1),
-                data->mesh->points().getValue(vertex_index, 2)};
+            face.vertices[corner] = {data->mesh->points().coeff(vertex_index, 0),
+                                     data->mesh->points().coeff(vertex_index, 1),
+                                     data->mesh->points().coeff(vertex_index, 2)};
         }
         for (int axis = 0; axis < 3; ++axis)
         {

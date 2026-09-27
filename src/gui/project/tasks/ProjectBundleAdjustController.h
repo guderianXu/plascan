@@ -112,7 +112,8 @@ namespace xjw::gui::project
         const PreviewAdmissionPredicate _previewAdmissionPredicate;
         ProjectTaskContext _taskContext;
         QVector<QFuture<void>> _activeFutures;
-        xjw::camera_project::CameraInstanceUpdates _pendingCameraUpdates;
+        placamera::CameraInstanceSet _pendingCameraInstances;
+        QMap<QString, QJsonObject> _pendingCameraAnnotationsByImageId;
         QMap<QString, QJsonObject> _pendingBeforeCameraMeta;
         QJsonObject _pendingResult;
         ProjectTaskContext _previewContext;

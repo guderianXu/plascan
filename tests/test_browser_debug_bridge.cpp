@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -14,9 +15,16 @@
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QWidget>
 
+#include <condition_variable>
+#include <atomic>
+#include <chrono>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace
 {
@@ -86,6 +94,64 @@ namespace
         }
         return false;
     }
+
+    class ReleaseGatedExecutor final : public xjw::task_runtime::ITaskExecutor
+    {
+    public:
+        xjw::task_runtime::TaskExecutionOutcome execute(const xjw::task_runtime::TaskDefinition&,
+                                                        xjw::task_runtime::TaskExecutionContext& context) override
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _entered = true;
+            }
+            _condition.notify_all();
+
+            std::unique_lock<std::mutex> lock(_mutex);
+            _condition.wait(lock, [this] { return _released; });
+            lock.unlock();
+            return {context.control.pollAtSafePoint("release_gate") == xjw::task_runtime::TaskControlDecision::Cancel
+                        ? xjw::task_runtime::TaskExecutionStatus::Cancelled
+                        : xjw::task_runtime::TaskExecutionStatus::Succeeded};
+        }
+
+        bool hasEntered() const
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            return _entered;
+        }
+
+        void release()
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _released = true;
+            }
+            _condition.notify_all();
+        }
+
+    private:
+        mutable std::mutex _mutex;
+        std::condition_variable _condition;
+        bool _entered = false;
+        bool _released = false;
+    };
+
+    class ExecutorReleaseGuard final
+    {
+    public:
+        explicit ExecutorReleaseGuard(std::shared_ptr<ReleaseGatedExecutor> executor) : _executor(std::move(executor))
+        {
+        }
+
+        ~ExecutorReleaseGuard()
+        {
+            _executor->release();
+        }
+
+    private:
+        std::shared_ptr<ReleaseGatedExecutor> _executor;
+    };
 
     class BrowserDebugBridgeTest : public ::testing::Test
     {
@@ -251,6 +317,87 @@ namespace
                       .value(QStringLiteral("state"))
                       .toString(),
                   QStringLiteral("paused"));
+    }
+
+    TEST(TaskRuntimeServiceTest, SessionRolloverIsLatestWinsWithoutBlockingTheGuiEventLoop)
+    {
+        QTemporaryDir temporary_directory;
+        ASSERT_TRUE(temporary_directory.isValid());
+        const QString first_project = temporary_directory.filePath(QStringLiteral("first.plascan"));
+        const QString second_project = temporary_directory.filePath(QStringLiteral("second.plascan"));
+        const QString final_project = temporary_directory.filePath(QStringLiteral("final.plascan"));
+
+        xjw::gui::runtime::TaskRuntimeService service;
+        service.setProjectSession(first_project, QStringLiteral("chunk-a"), 1);
+        ASSERT_TRUE(spinUntil([&service] { return !service.isSessionTransitionInProgress(); }));
+
+        auto executor = std::make_shared<ReleaseGatedExecutor>();
+        ExecutorReleaseGuard release_guard(executor);
+        service.registerExecutor("gated", executor);
+        xjw::task_runtime::TaskDefinition definition;
+        definition.taskId = "gated-rollover";
+        definition.kind = "gated";
+        definition.displayName = "Gated rollover";
+        definition.projectKey = QFileInfo(first_project).absoluteFilePath().toStdString();
+        definition.chunkId = "chunk-a";
+        definition.projectGeneration = 1;
+        const auto submitted = service.submit(std::move(definition));
+        ASSERT_TRUE(submitted.accepted) << submitted.error;
+        ASSERT_TRUE(spinUntil([&executor] { return executor->hasEntered(); }));
+
+        bool heartbeat = false;
+        QTimer::singleShot(0,
+                           [&]
+                           {
+                               heartbeat = true;
+                               executor->release();
+                           });
+        std::atomic_bool watchdog_released_task = false;
+        std::jthread watchdog(
+            [executor, &watchdog_released_task](std::stop_token stop_token)
+            {
+                for (int attempt = 0; attempt < 400 && !stop_token.stop_requested(); ++attempt)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                if (!stop_token.stop_requested())
+                {
+                    watchdog_released_task.store(true);
+                    executor->release();
+                }
+            });
+        service.setProjectSession(second_project, QStringLiteral("chunk-b"), 2);
+        service.setProjectSession(final_project, QStringLiteral("chunk-c"), 3);
+        watchdog.request_stop();
+
+        EXPECT_FALSE(watchdog_released_task.load());
+        ASSERT_TRUE(spinUntil([&heartbeat] { return heartbeat; }));
+        ASSERT_TRUE(spinUntil([&service] { return !service.isSessionTransitionInProgress(); }));
+        EXPECT_TRUE(service.journalPath().contains(QStringLiteral("final.files/task_runtime")));
+
+        service.shutdownAsync();
+        ASSERT_TRUE(spinUntil([&service] { return service.isShutdownComplete(); }));
+    }
+
+    TEST(TaskRuntimeServiceTest, NewGenerationRetiresSchedulerEvenWhenJournalPathIsUnchanged)
+    {
+        QTemporaryDir temporary_directory;
+        ASSERT_TRUE(temporary_directory.isValid());
+        const QString project = temporary_directory.filePath(QStringLiteral("same-project.plascan"));
+
+        xjw::gui::runtime::TaskRuntimeService service;
+        service.setProjectSession(project, QStringLiteral("chunk-a"), 1);
+        ASSERT_TRUE(spinUntil([&service] { return !service.isSessionTransitionInProgress(); }));
+
+        service.setProjectSession(project, QStringLiteral("chunk-a"), 2);
+        EXPECT_TRUE(service.isSessionTransitionInProgress());
+        ASSERT_TRUE(spinUntil([&service] { return !service.isSessionTransitionInProgress(); }));
+
+        service.setProjectSession(project, QStringLiteral("chunk-a"), 2);
+        EXPECT_FALSE(service.isSessionTransitionInProgress());
+
+        service.shutdownAsync();
+        ASSERT_TRUE(spinUntil([&service] { return service.isShutdownComplete(); }));
     }
 } // namespace
 

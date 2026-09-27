@@ -1,4 +1,5 @@
 #include "MeshTypes.h"
+#include "DepthMapMeshBuilder.h"
 #include "ModelMeshRenderer.h"
 #include "ModelImageMetrics.h"
 #include "ModelGeometryComparator.h"
@@ -21,6 +22,29 @@
 
 namespace
 {
+
+placamera::FramePinholeModel makeTestCamera()
+{
+    placamera::FrameIntrinsics intrinsics;
+    intrinsics.focalX = 100.0;
+    intrinsics.focalY = 100.0;
+    intrinsics.principalX = 64.0;
+    intrinsics.principalY = 64.0;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("quality-test-definition"),
+        intrinsics,
+        {},
+        placamera::PixelConvention::PixelCenter,
+        placamera::FrameId("quality-world"));
+    return placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("quality-test-instance"),
+        placamera::ImageId("quality-test-image"),
+        definition,
+        placamera::ImageSize{128, 128},
+        placamera::Pose::create(placamera::FrameId("quality-world"),
+                                {0.0, 0.0, 0.0},
+                                {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+}
 
 TEST(ModelMeshIoTest, RoundTripsVerticesFacesNormalsAndColors)
 {
@@ -62,12 +86,7 @@ TEST(ModelMeshRendererTest, KeepsNearestTriangleInZBuffer)
     };
     mesh.faces = {{{0, 1, 2}}, {{3, 4, 5}}};
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
+    const auto camera = makeTestCamera();
 
     xjw::qc::ModelMeshRenderer renderer;
     const xjw::qc::ModelRenderResult render =
@@ -84,12 +103,7 @@ TEST(ModelMeshRendererTest, KeepsNearestTriangleInZBuffer)
 
 TEST(ModelMeshRendererTest, PerspectiveCorrectsDepthAndVertexColorAcrossSlantedTriangle)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
+    const auto camera = makeTestCamera();
 
     const auto vertex_at_pixel = [&camera](double pixel_x,
                                            double pixel_y,
@@ -98,9 +112,9 @@ TEST(ModelMeshRendererTest, PerspectiveCorrectsDepthAndVertexColorAcrossSlantedT
                                            std::uint8_t green,
                                            std::uint8_t blue)
     {
-        const double pixel[2] = {pixel_x, pixel_y};
-        double world[3] = {};
-        EXPECT_TRUE(camera.unprojectPixel(pixel, depth, world));
+        const auto ground = camera.imageToGroundAtDepth({pixel_x, pixel_y}, depth);
+        EXPECT_TRUE(ground) << ground.message();
+        const auto& world = ground.value().position;
         return xjw::mesh::MeshVertex{
             static_cast<float>(world[0]),
             static_cast<float>(world[1]),
@@ -147,12 +161,7 @@ TEST(ModelMeshRendererTest, ClipsTriangleCrossingCameraPlaneInsteadOfDiscardingI
     };
     mesh.faces = {{{0, 1, 2}}};
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {0.0, 0.0, 0.0});
+    const auto camera = makeTestCamera();
 
     xjw::qc::ModelMeshRenderer renderer;
     const xjw::qc::ModelRenderResult render =
@@ -421,11 +430,7 @@ TEST(ModelImageQualityEvaluatorTest, WritesSyntheticViewDiagnostics)
     xjw::qc::ModelValidationView validation;
     validation.id = QStringLiteral("synthetic");
     validation.imagePath = image_path;
-    validation.camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-    validation.camera.setPose({1.0, 0.0, 0.0,
-                               0.0, 1.0, 0.0,
-                               0.0, 0.0, 1.0},
-                              {0.0, 0.0, 0.0});
+    validation.camera = std::make_shared<const placamera::FramePinholeModel>(makeTestCamera());
 
     xjw::qc::ModelImageQualityOptions options;
     options.meshPath = mesh_path;
@@ -486,6 +491,9 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
         QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     camera[QStringLiteral("translation_world_to_camera")] = QJsonArray{0.0, 0.0, 0.0};
     camera[QStringLiteral("camera_center")] = QJsonArray{0.0, 0.0, 0.0};
+    camera[QStringLiteral("instance_id")] = QStringLiteral("quality-camera-instance");
+    camera[QStringLiteral("image_id")] = QStringLiteral("quality-image");
+    camera[QStringLiteral("world_frame")] = QStringLiteral("quality-world");
 
     QJsonObject frame;
     frame[QStringLiteral("status")] = QStringLiteral("completed");
@@ -526,30 +534,67 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
 
     QString error;
     const QVector<xjw::qc::ModelValidationView> views =
-        xjw::qc::ModelImageQualityEvaluator::validationViewsFromMvsWorkspace(
-            directory.path(), &error);
+        xjw::qc::ModelImageQualityEvaluator::validationViewsFromMvsWorkspace(directory.path(), &error);
 
     ASSERT_TRUE(error.isEmpty()) << error.toStdString();
     ASSERT_EQ(views.size(), 1);
+    const QVector<xjw::mesh::DepthFrameArtifact> depth_frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(directory.path());
+    ASSERT_EQ(depth_frames.size(), 1);
+    ASSERT_TRUE(depth_frames[0].cameraModel);
+    EXPECT_EQ(depth_frames[0].cameraModel->instanceId().value(), "quality-camera-instance");
+    EXPECT_EQ(depth_frames[0].cameraModel->imageId().value(), "quality-image");
+    EXPECT_EQ(depth_frames[0].cameraModel->groundFrame().value(), "quality-world");
     EXPECT_EQ(views[0].id, QStringLiteral("source"));
     EXPECT_EQ(views[0].imagePath, image_path);
     EXPECT_EQ(views[0].cameraWidth, 128);
     EXPECT_EQ(views[0].cameraHeight, 96);
     EXPECT_EQ(views[0].depthPath, frame.value(QStringLiteral("raw_depth_path")).toString());
-    EXPECT_EQ(views[0].geometrySupportPath,
-              frame.value(QStringLiteral("raw_geometry_support_path")).toString());
-    EXPECT_EQ(views[0].geometrySourceMaskPath,
-              frame.value(QStringLiteral("raw_geometry_source_mask_path")).toString());
-    EXPECT_EQ(views[0].inverseDepthMeanPath,
-              frame.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
-    EXPECT_EQ(views[0].inverseDepthSpreadPath,
-              frame.value(QStringLiteral("raw_inverse_depth_spread_path")).toString());
+    EXPECT_EQ(views[0].geometrySupportPath, frame.value(QStringLiteral("raw_geometry_support_path")).toString());
+    EXPECT_EQ(views[0].geometrySourceMaskPath, frame.value(QStringLiteral("raw_geometry_source_mask_path")).toString());
+    EXPECT_EQ(views[0].inverseDepthMeanPath, frame.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
+    EXPECT_EQ(views[0].inverseDepthSpreadPath, frame.value(QStringLiteral("raw_inverse_depth_spread_path")).toString());
     EXPECT_EQ(views[0].crossViewRepairedMaskPath,
               frame.value(QStringLiteral("cross_view_repaired_mask_path")).toString());
     EXPECT_EQ(views[0].frameAcceptance, QStringLiteral("accepted"));
     EXPECT_TRUE(views[0].fusionEligible);
     EXPECT_EQ(views[0].sourceViewCount, 2);
-    EXPECT_DOUBLE_EQ(views[0].camera.focalX(), 400.0);
+    ASSERT_NE(views[0].camera, nullptr);
+    EXPECT_EQ(views[0].camera->instanceId(), depth_frames[0].cameraModel->instanceId());
+    EXPECT_EQ(views[0].camera->imageId(), depth_frames[0].cameraModel->imageId());
+    EXPECT_EQ(views[0].camera->groundFrame(), depth_frames[0].cameraModel->groundFrame());
+    EXPECT_EQ(views[0].camera->imageSize().samples, 128);
+    EXPECT_EQ(views[0].camera->imageSize().lines, 96);
+    EXPECT_DOUBLE_EQ(views[0].camera->pinholeDefinition().intrinsics().focalX, 400.0);
+    const auto projected = views[0].camera->groundToImage({views[0].camera->groundFrame(), {0.5, 0.25, 5.0}});
+    ASSERT_TRUE(projected) << projected.message();
+    EXPECT_NEAR(projected.value().image.sample, 104.0, 1.0e-9);
+    EXPECT_NEAR(projected.value().image.line, 68.5, 1.0e-9);
+    ASSERT_TRUE(projected.value().positiveDepth.has_value());
+    EXPECT_NEAR(*projected.value().positiveDepth, 5.0, 1.0e-12);
+
+    camera.remove(QStringLiteral("image_id"));
+    frame[QStringLiteral("camera_model")] = camera;
+    QSaveFile incomplete_manifest_file(QDir(directory.path()).filePath(QStringLiteral("mvs_manifest.json")));
+    ASSERT_TRUE(incomplete_manifest_file.open(QIODevice::WriteOnly));
+    incomplete_manifest_file.write(QJsonDocument(QJsonObject{{QStringLiteral("frames"), QJsonArray{frame}}}).toJson());
+    ASSERT_TRUE(incomplete_manifest_file.commit());
+    const QVector<xjw::mesh::DepthFrameArtifact> incomplete_frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(directory.path());
+    ASSERT_EQ(incomplete_frames.size(), 1);
+    EXPECT_FALSE(incomplete_frames[0].cameraModel);
+
+    camera.remove(QStringLiteral("instance_id"));
+    camera.remove(QStringLiteral("world_frame"));
+    frame[QStringLiteral("camera_model")] = camera;
+    QSaveFile unbound_manifest_file(QDir(directory.path()).filePath(QStringLiteral("mvs_manifest.json")));
+    ASSERT_TRUE(unbound_manifest_file.open(QIODevice::WriteOnly));
+    unbound_manifest_file.write(QJsonDocument(QJsonObject{{QStringLiteral("frames"), QJsonArray{frame}}}).toJson());
+    ASSERT_TRUE(unbound_manifest_file.commit());
+    error.clear();
+    EXPECT_TRUE(
+        xjw::qc::ModelImageQualityEvaluator::validationViewsFromMvsWorkspace(directory.path(), &error).isEmpty());
+    EXPECT_TRUE(error.contains(QStringLiteral("缺少 instance/image/world frame 身份")));
 }
 
 } // namespace

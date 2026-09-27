@@ -8,7 +8,12 @@
 #include "project/ProjectIO.h"
 #include "project/ProjectWorkspaceStore.h"
 #include "project/support/ProjectSurveyControl.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "io/MarkerCsv.h"
+
+#include <placamera/rpc_camera.h>
+
+#include <gdal_priv.h>
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -16,6 +21,7 @@
 #include <QDirIterator>
 #include <QThread>
 #include <QTemporaryDir>
+#include <QStringList>
 
 #include <gtest/gtest.h>
 
@@ -24,64 +30,126 @@
 namespace
 {
 
-QCoreApplication& qtApplication()
-{
-    static QCoreApplication* application = nullptr;
-    if (!application)
+    QCoreApplication& qtApplication()
     {
-        int argc = 1;
-        auto* argv = new char*[2];
-        argv[0] = const_cast<char*>("test_project_resource_service");
-        argv[1] = nullptr;
-        application = new QCoreApplication(argc, argv);
+        static QCoreApplication* application = nullptr;
+        if (!application)
+        {
+            int argc = 1;
+            auto* argv = new char*[2];
+            argv[0] = const_cast<char*>("test_project_resource_service");
+            argv[1] = nullptr;
+            application = new QCoreApplication(argc, argv);
+        }
+        return *application;
     }
-    return *application;
-}
 
-bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 2000)
-{
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs)
+    bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 2000)
     {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        QThread::msleep(5);
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < timeoutMs)
+        {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(5);
+        }
+        return predicate();
     }
-    return predicate();
-}
 
-class CancelMessages final : public ProjectUiMessageAdapter
-{
-public:
-    void information(QWidget*, const QString&, const QString&) override {}
-    void warning(QWidget*, const QString&, const QString&) override {}
-    void critical(QWidget*, const QString&, const QString&) override {}
-    UiAnswer question(QWidget*, const QString&, const QString&, UiAnswer) override { return UiAnswer::Cancel; }
-    UiDialogResult getText(QWidget*, const QString&, const QString&, const QString&) override { return {}; }
-    UiDialogResult getDouble(QWidget*, const QString&, const QString&, double, double, double, int) override
+    class CancelMessages final : public ProjectUiMessageAdapter
     {
-        return {};
-    }
-    UiDialogResult getItem(QWidget*, const QString&, const QString&, const QStringList&, int) override { return {}; }
-    UiDialogResult selectOpenFile(QWidget*, const QString&, const QString&, const QString&, QDir::Filters) override
+    public:
+        void information(QWidget*, const QString&, const QString&) override
+        {
+        }
+        void warning(QWidget*, const QString&, const QString&) override
+        {
+        }
+        void critical(QWidget*, const QString&, const QString&) override
+        {
+        }
+        UiAnswer question(QWidget*, const QString&, const QString&, UiAnswer) override
+        {
+            return UiAnswer::Cancel;
+        }
+        UiDialogResult getText(QWidget*, const QString&, const QString&, const QString&) override
+        {
+            return {};
+        }
+        UiDialogResult getDouble(QWidget*, const QString&, const QString&, double, double, double, int) override
+        {
+            return {};
+        }
+        UiDialogResult getItem(QWidget*, const QString&, const QString&, const QStringList&, int) override
+        {
+            return {};
+        }
+        UiDialogResult selectOpenFile(QWidget*, const QString&, const QString&, const QString&, QDir::Filters) override
+        {
+            return {};
+        }
+        UiDialogResult selectOpenFiles(QWidget*, const QString&, const QString&, const QString&, QDir::Filters) override
+        {
+            return {};
+        }
+        UiDialogResult selectDirectory(QWidget*, const QString&, const QString&, QDir::Filters) override
+        {
+            return {};
+        }
+        UiDialogResult
+        selectSaveFile(QWidget*, const QString&, const QString&, const QString&, QDir::Filters, const QString&) override
+        {
+            return {};
+        }
+    };
+
+    QString rpcCoefficients(int activeIndex)
     {
-        return {};
+        QStringList values;
+        for (int index = 0; index < 20; ++index)
+        {
+            values.append(index == activeIndex ? QStringLiteral("1") : QStringLiteral("0"));
+        }
+        return values.join(QLatin1Char(' '));
     }
-    UiDialogResult selectOpenFiles(QWidget*, const QString&, const QString&, const QString&, QDir::Filters) override
+
+    bool writeRpcRaster(const QString& path)
     {
-        return {};
+        GDALAllRegister();
+        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+        if (!driver)
+        {
+            return false;
+        }
+        GDALDataset* dataset = driver->Create(QFile::encodeName(path).constData(), 32, 24, 1, GDT_Byte, nullptr);
+        if (!dataset)
+        {
+            return false;
+        }
+        const QMap<QString, QString> metadata{{QStringLiteral("LINE_OFF"), QStringLiteral("12")},
+                                              {QStringLiteral("SAMP_OFF"), QStringLiteral("16")},
+                                              {QStringLiteral("LAT_OFF"), QStringLiteral("20")},
+                                              {QStringLiteral("LONG_OFF"), QStringLiteral("110")},
+                                              {QStringLiteral("HEIGHT_OFF"), QStringLiteral("1000")},
+                                              {QStringLiteral("LINE_SCALE"), QStringLiteral("12")},
+                                              {QStringLiteral("SAMP_SCALE"), QStringLiteral("16")},
+                                              {QStringLiteral("LAT_SCALE"), QStringLiteral("0.1")},
+                                              {QStringLiteral("LONG_SCALE"), QStringLiteral("0.1")},
+                                              {QStringLiteral("HEIGHT_SCALE"), QStringLiteral("1000")},
+                                              {QStringLiteral("LINE_NUM_COEFF"), rpcCoefficients(2)},
+                                              {QStringLiteral("LINE_DEN_COEFF"), rpcCoefficients(0)},
+                                              {QStringLiteral("SAMP_NUM_COEFF"), rpcCoefficients(1)},
+                                              {QStringLiteral("SAMP_DEN_COEFF"), rpcCoefficients(0)}};
+        bool written = true;
+        for (auto it = metadata.constBegin(); it != metadata.constEnd(); ++it)
+        {
+            written = dataset->SetMetadataItem(it.key().toUtf8().constData(), it.value().toUtf8().constData(), "RPC") ==
+                          CE_None &&
+                      written;
+        }
+        GDALClose(dataset);
+        return written;
     }
-    UiDialogResult selectDirectory(QWidget*, const QString&, const QString&, QDir::Filters) override { return {}; }
-    UiDialogResult selectSaveFile(QWidget*,
-                                  const QString&,
-                                  const QString&,
-                                  const QString&,
-                                  QDir::Filters,
-                                  const QString&) override
-    {
-        return {};
-    }
-};
 
 } // namespace
 
@@ -313,9 +381,7 @@ TEST(ProjectResourceServiceTest, FailedPackDoesNotLeavePartiallyStagedResource)
 
     const QString runtimeRoot = ProjectWorkspaceStore(projectPath, data.activeChunkDirectory()).runtimeRoot();
     ASSERT_FALSE(runtimeRoot.isEmpty());
-    QDirIterator iterator(runtimeRoot,
-                          QDir::AllEntries | QDir::NoDotAndDotDot,
-                          QDirIterator::Subdirectories);
+    QDirIterator iterator(runtimeRoot, QDir::AllEntries | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     while (iterator.hasNext())
     {
         const QString path = QDir::fromNativeSeparators(QDir::cleanPath(iterator.next()));
@@ -337,8 +403,8 @@ TEST(ProjectResourceServiceTest, DuplicatePhotoImportDoesNotMutateSavedMetadata)
     image.close();
 
     ProjectData data;
-    ASSERT_TRUE(data.createProject(temporary.filePath(QStringLiteral("duplicate.plascan")),
-                                   QStringLiteral("duplicate")));
+    ASSERT_TRUE(
+        data.createProject(temporary.filePath(QStringLiteral("duplicate.plascan")), QStringLiteral("duplicate")));
     xjw::gui::project::ProjectSession session(&data);
     CancelMessages messages;
     xjw::gui::project::ProjectResourceService service(&session, &messages, nullptr, nullptr);
@@ -362,6 +428,47 @@ TEST(ProjectResourceServiceTest, DuplicatePhotoImportDoesNotMutateSavedMetadata)
     EXPECT_EQ(data.metadata(), before);
     EXPECT_FALSE(data.isDirty());
     EXPECT_EQ(session.allImages(), QStringList{QDir::cleanPath(imagePath)});
+}
+
+TEST(ProjectResourceServiceTest, ImportsRpcRasterAsNativeCamera)
+{
+    qtApplication();
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString imagePath = temporary.filePath(QStringLiteral("rpc.tif"));
+    ASSERT_TRUE(writeRpcRaster(imagePath));
+
+    ProjectData data;
+    ASSERT_TRUE(data.createProject(temporary.filePath(QStringLiteral("rpc.plascan")), QStringLiteral("rpc")));
+    xjw::gui::project::ProjectSession session(&data);
+    CancelMessages messages;
+    xjw::gui::project::ProjectResourceService service(&session, &messages, nullptr, nullptr);
+    bool finished = false;
+    bool succeeded = false;
+    QObject::connect(&service,
+                     &xjw::gui::project::ProjectResourceService::imageImportFinished,
+                     [&finished, &succeeded](bool success, const QString&)
+                     {
+                         finished = true;
+                         succeeded = success;
+                     });
+
+    const auto result = service.addPhotos({imagePath}, QStringLiteral("rpc-test"));
+
+    ASSERT_EQ(result.status, xjw::gui::project::OperationStatus::Success);
+    ASSERT_TRUE(waitUntil([&finished] { return finished; }));
+    ASSERT_TRUE(succeeded);
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(data.coreFilesMeta());
+    ASSERT_TRUE(loaded.ok()) << loaded.errors.join('\n').toStdString();
+    ASSERT_EQ(loaded.instances.size(), 1U);
+    const auto* camera = dynamic_cast<const placamera::RpcModel*>(loaded.instances.values().front().get());
+    ASSERT_NE(camera, nullptr);
+    EXPECT_EQ(camera->imageSize().samples, 32);
+    EXPECT_EQ(camera->imageSize().lines, 24);
+    EXPECT_DOUBLE_EQ(camera->rpcDefinition().parameters().longitudeOffset, 110.0);
+    const QJsonObject record = data.coreFilesMeta().value(QStringLiteral("camera_instances")).toArray().first().toObject();
+    EXPECT_EQ(record.value(QStringLiteral("state")).toObject().value(QStringLiteral("source")),
+              QStringLiteral("rpc_raster"));
 }
 
 TEST(ProjectResourceServiceTest, PortableExportRejectsDuplicateRequest)

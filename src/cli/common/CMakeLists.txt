@@ -31,9 +31,8 @@ if(TARGET camera)
     )
     target_link_libraries(plascan_cli_photogrammetry_common PUBLIC
         camera
-        camera_project
-        camera_reference_geometry
-        camera_models_registry
+        plascan::placamera_runtime
+        placamera::reference
         plascan_common_project
         plascan_cli_support
     )

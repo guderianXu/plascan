@@ -287,18 +287,17 @@ PlaPointCloud pointCloudFromDemGrid(const DemGridData &demGrid)
         }
     }
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(validCells.size(), 3);
-    std::unique_ptr<plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU>> colors;
+    plamatrix::MatrixXf points(validCells.size(), 3);
+    std::unique_ptr<plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic>> colors;
     if (demGrid.hasColor())
     {
-        colors = std::make_unique<plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU>>(
+        colors = std::make_unique<plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic>>(
             validCells.size(), 3);
     }
-    std::unique_ptr<plamatrix::DenseMatrix<float, plamatrix::Device::CPU>> errors;
+    std::unique_ptr<plamatrix::MatrixXf> errors;
     if (demGrid.hasTriangulationError())
     {
-        errors = std::make_unique<plamatrix::DenseMatrix<float, plamatrix::Device::CPU>>(
-            validCells.size(), 1);
+        errors = std::make_unique<plamatrix::MatrixXf>(validCells.size(), 1);
     }
 
     for (std::size_t i = 0; i < validCells.size(); ++i)

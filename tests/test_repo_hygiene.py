@@ -561,7 +561,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("Scalar(DBL_MAX)", knn_source)
         self.assertIn("return {INT_MAX, DBL_MAX};", distance_key_source)
         self.assertIn("return static_cast<Scalar>(maximum);", distance_key_source)
-        self.assertIn("std::numeric_limits<double>::infinity()", icp_source)
+        self.assertIn("return CUDART_INF;", icp_source)
         self.assertIn("markSharedTransformMaybeUnused", icp_source)
         self.assertIn("(void)min_z;", icp_source)
         self.assertIn("(void)max_z;", icp_source)

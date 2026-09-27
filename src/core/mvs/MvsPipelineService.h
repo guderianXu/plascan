@@ -13,7 +13,6 @@
 #include "depth_processing/DepthPostprocessor.h"
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
-#include "DepthPyramidEstimator.h"
 #include "DepthFrameQualityGate.h"
 #include "DepthGeometryHypothesisReranker.h"
 #include "DepthEvidenceConfidence.h"
@@ -169,7 +168,7 @@ namespace xjw
             /// 将同一帧可见稀疏点投影一次，供 hint 与支撑掩码在不同工作分辨率复用
             static std::vector<ProjectedSparseDepthSample> collectProjectedSparseDepthSamples(
                 const SparseCloud& sparse,
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                const placamera::FramePinholeModel& camera,
                 int imageWidth,
                 int imageHeight,
                 const std::vector<size_t>& visiblePointIndices);

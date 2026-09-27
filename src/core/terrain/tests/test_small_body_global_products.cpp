@@ -39,7 +39,7 @@ namespace
 
     xjw::TerrainMeshInput makeOctahedron(float radius = 10.0f, bool withColors = true)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(6, 3);
+        plamatrix::MatrixXf points(6, 3);
         const float coordinates[6][3] = {{radius, 0.0f, 0.0f},
                                          {-radius, 0.0f, 0.0f},
                                          {0.0f, radius, 0.0f},
@@ -54,7 +54,7 @@ namespace
             }
         }
 
-        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(8, 3);
+        plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(8, 3);
         const int indices[8][3] = {
             {4, 0, 2}, {4, 2, 1}, {4, 1, 3}, {4, 3, 0}, {5, 2, 0}, {5, 1, 2}, {5, 3, 1}, {5, 0, 3}};
         for (int row = 0; row < 8; ++row)
@@ -70,7 +70,7 @@ namespace
         input.mesh.setFaces(std::move(faces));
         if (withColors)
         {
-            plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(6, 3);
+            plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(6, 3);
             const std::uint8_t rgb[6][3] = {
                 {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 255, 255}, {0, 0, 0}};
             for (int row = 0; row < 6; ++row)
@@ -134,7 +134,7 @@ TEST(SmallBodyMeshRaycasterTest, ReturnsNearestRadialSurfaceAndVertexColor)
 TEST(SmallBodyMeshRaycasterTest, RejectsUnsupportedRepeatingTextureCoordinates)
 {
     xjw::TerrainMeshInput input = makeOctahedron();
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(6, 2);
+    plamatrix::MatrixXf texture_coordinates(6, 2);
     for (int row = 0; row < 6; ++row)
     {
         texture_coordinates(row, 0) = 0.5f;

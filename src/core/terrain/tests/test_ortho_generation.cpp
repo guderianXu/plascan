@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -56,14 +57,22 @@ namespace
         return grid;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeProjectionCamera(double centerZ = -10.0)
+    std::shared_ptr<const placamera::FramePinholeModel>
+    makeProjectionCamera(double centerZ = -10.0, placamera::BrownConradyDistortion distortion = {}, int u_axis_sign = 1)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(10.0, 10.0, 32.0, 32.0);
-        camera.setImageSize({64, 64});
-        camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                       std::array<double, 3>{2.0, 2.0, centerZ});
-        return camera;
+        const placamera::FrameId frame("terrain-test-frame");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("ortho-test-definition"),
+                                                      {10.0, 10.0, 32.0, 32.0, 0.01, u_axis_sign, 1},
+                                                      distortion,
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return std::make_shared<placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("ortho-test-instance"),
+            placamera::ImageId("ortho-test-image"),
+            definition,
+            {64, 64},
+            placamera::Pose::create(frame, {2.0, 2.0, centerZ}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
     }
 
     QJsonObject projectionProjectMeta(const std::vector<std::pair<QString, double>>& imageCameras)
@@ -236,7 +245,7 @@ namespace
 
     TEST(PointCloudDomGeneratorTest, PlanarModeKeepsHighestPointColor)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+        plamatrix::MatrixXf points(3, 3);
         points(0, 0) = 0.25f;
         points(0, 1) = 0.25f;
         points(0, 2) = 1.0f;
@@ -247,7 +256,7 @@ namespace
         points(2, 1) = 1.25f;
         points(2, 2) = 1.0f;
         xjw::PlaPointCloud cloud(std::move(points));
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(3, 3);
+        plamatrix::Matrix<uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(3, 3);
         colors(0, 0) = 255;
         colors(0, 1) = 0;
         colors(0, 2) = 0;
@@ -275,7 +284,7 @@ namespace
 
     TEST(PointCloudDomGeneratorTest, RejectsCloudWithoutRgbColors)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(2, 3);
+        plamatrix::MatrixXf points(2, 3);
         points(0, 0) = 0.0f;
         points(0, 1) = 0.0f;
         points(0, 2) = 0.0f;
@@ -295,7 +304,7 @@ namespace
 
     TEST(PointCloudDomGeneratorTest, GlobalModeProducesFullBodyProjectedGrid)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+        plamatrix::MatrixXf points(4, 3);
         points(0, 0) = 10.0f;
         points(0, 1) = 0.0f;
         points(0, 2) = 0.0f;
@@ -309,8 +318,8 @@ namespace
         points(3, 1) = -10.0f;
         points(3, 2) = 0.0f;
         xjw::PlaPointCloud cloud(std::move(points));
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(4, 3);
-        colors.fill(128);
+        plamatrix::Matrix<uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(4, 3);
+        colors.setConstant(128);
         cloud.setColors(std::move(colors));
 
         xjw::OrthoGenerationOptions options;
@@ -476,7 +485,8 @@ namespace
         ASSERT_TRUE(xjw::OrthoProjector::buildImageInputs({secondPath}, projectMeta, &inputs, &error))
             << error.toStdString();
         ASSERT_EQ(inputs.size(), 1U);
-        EXPECT_DOUBLE_EQ(inputs.front().camera.cameraCenter()[2], -20.0);
+        ASSERT_TRUE(inputs.front().camera);
+        EXPECT_DOUBLE_EQ(inputs.front().camera->pose().center[2], -20.0);
         EXPECT_EQ(inputs.front().imageId, QStringLiteral("ortho-image-1"));
 
         const QString ambiguousPath = QDir(directory.path()).filePath(QStringLiteral("other/same.png"));
@@ -739,7 +749,7 @@ namespace
         ASSERT_TRUE(directory.isValid());
         xjw::OrthoImageInput invalid =
             writeProjectionInput(&directory, QStringLiteral("missing_camera.png"), cv::Scalar(1, 2, 3));
-        invalid.camera = xjw::camera_models::frame_pinhole::FramePinholeNumericState();
+        invalid.camera.reset();
         const xjw::OrthoImageInput valid =
             writeProjectionInput(&directory, QStringLiteral("valid_camera.png"), cv::Scalar(4, 5, 6));
 
@@ -755,13 +765,26 @@ namespace
         EXPECT_TRUE(error.contains(QStringLiteral("相机参数")));
     }
 
-    TEST(OrthoProjectorTest, RejectsLoadedCameraWithInvalidIntrinsics)
+    TEST(OrthoProjectorTest, RejectsLoadedCameraWithMismatchedImageSize)
     {
         QTemporaryDir directory;
         ASSERT_TRUE(directory.isValid());
         xjw::OrthoImageInput input =
-            writeProjectionInput(&directory, QStringLiteral("invalid_intrinsics.png"), cv::Scalar(5, 6, 7));
-        input.camera.setIntrinsics(0.0, 0.0, 32.0, 32.0);
+            writeProjectionInput(&directory, QStringLiteral("wrong_size.png"), cv::Scalar(5, 6, 7));
+        const auto& original_definition = input.camera->pinholeDefinition();
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("ortho-wrong-size-definition"),
+                                                      original_definition.intrinsics(),
+                                                      original_definition.distortion(),
+                                                      original_definition.pixelConvention(),
+                                                      original_definition.groundFrame(),
+                                                      original_definition.depthAxisFlipped());
+        input.camera = std::make_shared<placamera::FramePinholeModel>(
+            placamera::FramePinholeModel::create(placamera::CameraInstanceId("ortho-wrong-size"),
+                                                 placamera::ImageId("ortho-wrong-size-image"),
+                                                 definition,
+                                                 {32, 32},
+                                                 input.camera->pose()));
 
         xjw::OrthoProjectionResult result;
         QString error;
@@ -771,7 +794,7 @@ namespace
                                                   0.0,
                                                   &result,
                                                   &error));
-        EXPECT_TRUE(error.contains(QStringLiteral("内参")));
+        EXPECT_TRUE(error.contains(QStringLiteral("尺寸")));
     }
 
     TEST(OrthoComputeBackendTest, ParsesAndSerializesBackendSelection)
@@ -878,9 +901,10 @@ namespace
         }
         QTemporaryDir directory;
         ASSERT_TRUE(directory.isValid());
-        const std::vector<xjw::OrthoImageInput> inputs{
+        std::vector<xjw::OrthoImageInput> inputs{
             writeProjectionInput(&directory, QStringLiteral("parity_a.png"), cv::Scalar(20, 40, 80)),
             writeProjectionInput(&directory, QStringLiteral("parity_b.png"), cv::Scalar(100, 60, 10))};
+        inputs[1].camera = makeProjectionCamera(-10.0, {0.02, -0.001, 0.0, 0.0001, -0.0002}, -1);
         xjw::OrthoGenerationOptions cpu_options;
         cpu_options.computeBackend = xjw::TerrainComputeBackend::Cpu;
         cpu_options.colorCorrection = false;

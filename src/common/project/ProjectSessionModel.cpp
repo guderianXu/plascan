@@ -22,9 +22,7 @@
 #include "PlascanArchive.h"
 #include "ProjectChunkStore.h"
 #include "ProjectWorkspaceStore.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/project/CameraProjectRuntime.h"
-#include "camera/models/CameraModelFactories.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "ProjectUiConfigManager.h"
 #include "project/ProjectPackageLayout.h"
 #include "project/ProjectPathBridge.h"
@@ -54,8 +52,6 @@
 #include <QUuid>
 #include <QtConcurrent/QtConcurrent>
 
-using xjw::camera_project::CameraProjectData;
-using xjw::camera_project::CameraProjectStore;
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
 using xjw::common::project::ProjectChunkRecord;
@@ -181,15 +177,14 @@ namespace
 
     bool validRuntimeCameraCollections(const QJsonObject& files, QStringList* errors)
     {
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            files, xjw::camera_models::makeBuiltinCameraModelRegistry());
-        if (runtime.ok())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(files);
+        if (loaded.ok())
         {
             return true;
         }
         if (errors)
         {
-            *errors = runtime.errors;
+            *errors = loaded.errors;
         }
         return false;
     }
@@ -996,14 +991,7 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
         return snapshot;
     }
     {
-        CameraProjectData cameraData;
         QStringList cameraErrors;
-        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
-        {
-            snapshot.errorMessage =
-                QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
-            return snapshot;
-        }
         if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
         {
             snapshot.errorMessage =
@@ -1043,14 +1031,7 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString& plascanP
         return snapshot;
     }
     {
-        CameraProjectData cameraData;
         QStringList cameraErrors;
-        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
-        {
-            snapshot.errorMessage =
-                QStringLiteral("临时 project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
-            return snapshot;
-        }
         if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
         {
             snapshot.errorMessage =
@@ -1185,17 +1166,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot& snapshot, Q
         return false;
     }
     {
-        CameraProjectData cameraData;
         QStringList cameraErrors;
-        if (!CameraProjectStore::load(snapshot.filesMeta, &cameraData, &cameraErrors))
-        {
-            if (errorMsg)
-            {
-                *errorMsg =
-                    QStringLiteral("project_files 相机集合无效: %1").arg(cameraErrors.join(QStringLiteral("; ")));
-            }
-            return false;
-        }
         if (!validRuntimeCameraCollections(snapshot.filesMeta, &cameraErrors))
         {
             if (errorMsg)
@@ -3127,18 +3098,14 @@ bool ProjectData::removeResources(const QStringList& resourcePaths)
     return true;
 }
 
-bool ProjectData::setCameraInstance(const QString& imagePath, const QJsonObject& modelMetadata, QString* errorMsg)
+bool ProjectData::upsertNativeCameraInstances(const placamera::CameraInstanceSet& instances,
+                                              const QMap<QString, QJsonObject>& annotationsByImageId,
+                                              int* writtenCount,
+                                              QString* errorMsg)
 {
-    return setCameraInstances(QMap<QString, QJsonObject>{{imagePath, modelMetadata}}, nullptr, errorMsg);
-}
-
-bool ProjectData::setCameraInstances(const QMap<QString, QJsonObject>& modelMetadataByImage,
-                                     int* updatedCount,
-                                     QString* errorMsg)
-{
-    if (updatedCount)
+    if (writtenCount)
     {
-        *updatedCount = 0;
+        *writtenCount = 0;
     }
     if (_projectPath.isEmpty())
     {
@@ -3148,76 +3115,8 @@ bool ProjectData::setCameraInstances(const QMap<QString, QJsonObject>& modelMeta
         }
         return false;
     }
-    if (modelMetadataByImage.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有可写入的相机实例元数据");
-        }
-        return false;
-    }
-
-    QMap<QString, QJsonObject> normalized;
-    for (auto it = modelMetadataByImage.constBegin(); it != modelMetadataByImage.constEnd(); ++it)
-    {
-        normalized.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
-    }
     QJsonObject core = _filesManager.coreData();
-    const auto result = xjw::camera_project::CameraProjectRecords::upsertByImagePath(&core, normalized);
-    if (!result.ok())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = result.errors.join(QStringLiteral("; "));
-        }
-        return false;
-    }
-    if (result.updatedCount <= 0)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("未找到可匹配的影像记录");
-        }
-        return false;
-    }
-    _filesManager.setCoreData(core);
-    markDirtyIfRequested(true);
-    emitCurrentMetadataChanged();
-    scheduleArchiveSync(true, false, true);
-    if (updatedCount)
-    {
-        *updatedCount = result.updatedCount;
-    }
-    return true;
-}
-
-bool ProjectData::setCameraInstancesById(const xjw::camera_project::CameraInstanceUpdates& updates,
-                                         int* updatedCount,
-                                         QString* errorMsg)
-{
-    if (updatedCount)
-    {
-        *updatedCount = 0;
-    }
-    if (_projectPath.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有打开的项目");
-        }
-        return false;
-    }
-    if (updates.empty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有可写入的相机实例更新");
-        }
-        return false;
-    }
-
-    QJsonObject core = _filesManager.coreData();
-    const auto result = xjw::camera_project::CameraProjectRecords::upsertByImageId(&core, updates);
+    const auto result = xjw::placamera_runtime::upsertProjectCameras(&core, instances, annotationsByImageId);
     if (!result.ok())
     {
         if (errorMsg)
@@ -3230,22 +3129,23 @@ bool ProjectData::setCameraInstancesById(const xjw::camera_project::CameraInstan
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
-    if (updatedCount)
+    if (writtenCount)
     {
-        *updatedCount = result.updatedCount;
+        *writtenCount = result.insertedCount + result.updatedCount;
     }
     return true;
 }
 
-bool ProjectData::replaceCameraInstances(const QStringList& targetImagePaths,
-                                         const QMap<QString, QJsonObject>& modelMetadataByImage,
-                                         int* updatedCount,
-                                         int* clearedCount,
-                                         QString* errorMsg)
+bool ProjectData::replaceNativeCameraInstances(const std::vector<placamera::ImageId>& targetImageIds,
+                                               const placamera::CameraInstanceSet& instances,
+                                               const QMap<QString, QJsonObject>& annotationsByImageId,
+                                               int* writtenCount,
+                                               int* clearedCount,
+                                               QString* errorMsg)
 {
-    if (updatedCount)
+    if (writtenCount)
     {
-        *updatedCount = 0;
+        *writtenCount = 0;
     }
     if (clearedCount)
     {
@@ -3258,24 +3158,10 @@ bool ProjectData::replaceCameraInstances(const QStringList& targetImagePaths,
             *errorMsg = QStringLiteral("没有打开的项目");
         }
         return false;
-    }
-    if (targetImagePaths.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有指定要替换相机实例的影像");
-        }
-        return false;
-    }
-
-    QMap<QString, QJsonObject> normalized;
-    for (auto it = modelMetadataByImage.constBegin(); it != modelMetadataByImage.constEnd(); ++it)
-    {
-        normalized.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
     }
     QJsonObject core = _filesManager.coreData();
     const auto result =
-        xjw::camera_project::CameraProjectRecords::replaceByImagePath(&core, targetImagePaths, normalized);
+        xjw::placamera_runtime::replaceProjectCameras(&core, targetImageIds, instances, annotationsByImageId);
     if (!result.ok())
     {
         if (errorMsg)
@@ -3288,118 +3174,10 @@ bool ProjectData::replaceCameraInstances(const QStringList& targetImagePaths,
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
-    if (updatedCount)
+    if (writtenCount)
     {
-        *updatedCount = result.updatedCount;
+        *writtenCount = result.insertedCount + result.updatedCount;
     }
-    if (clearedCount)
-    {
-        *clearedCount = result.clearedCount;
-    }
-    return true;
-}
-
-bool ProjectData::replaceCameraInstancesById(const xjw::camera_project::CameraImageIds& targetImageIds,
-                                             const xjw::camera_project::CameraInstanceUpdates& updates,
-                                             int* updatedCount,
-                                             int* clearedCount,
-                                             QString* errorMsg)
-{
-    if (updatedCount)
-    {
-        *updatedCount = 0;
-    }
-    if (clearedCount)
-    {
-        *clearedCount = 0;
-    }
-    if (_projectPath.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有打开的项目");
-        }
-        return false;
-    }
-    if (targetImageIds.empty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有指定要替换相机实例的影像");
-        }
-        return false;
-    }
-
-    QJsonObject core = _filesManager.coreData();
-    const auto result =
-        xjw::camera_project::CameraProjectRecords::replaceByImageId(&core, targetImageIds, updates);
-    if (!result.ok())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = result.errors.join(QStringLiteral("; "));
-        }
-        return false;
-    }
-    _filesManager.setCoreData(core);
-    markDirtyIfRequested(true);
-    emitCurrentMetadataChanged();
-    scheduleArchiveSync(true, false, true);
-    if (updatedCount)
-    {
-        *updatedCount = result.updatedCount;
-    }
-    if (clearedCount)
-    {
-        *clearedCount = result.clearedCount;
-    }
-    return true;
-}
-
-bool ProjectData::clearCameraInstances(const QStringList& imagePaths, int* clearedCount, QString* errorMsg)
-{
-    if (clearedCount)
-    {
-        *clearedCount = 0;
-    }
-    if (_projectPath.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有打开的项目");
-        }
-        return false;
-    }
-    if (imagePaths.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有指定要清除的影像");
-        }
-        return false;
-    }
-    QJsonObject core = _filesManager.coreData();
-    const auto result = xjw::camera_project::CameraProjectRecords::clearByImagePath(&core, imagePaths);
-    if (!result.ok())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = result.errors.join(QStringLiteral("; "));
-        }
-        return false;
-    }
-    if (result.clearedCount <= 0)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("未找到可匹配的相机实例");
-        }
-        return false;
-    }
-    _filesManager.setCoreData(core);
-    markDirtyIfRequested(true);
-    emitCurrentMetadataChanged();
-    scheduleArchiveSync(true, false, true);
     if (clearedCount)
     {
         *clearedCount = result.clearedCount;
@@ -3449,7 +3227,8 @@ QJsonArray ProjectData::getBundleAdjustResults() const
     return _filesManager.resultsData().value(QLatin1String("bundle_adjust_results")).toArray();
 }
 
-bool ProjectData::stageBundleAdjustMetadata(const xjw::camera_project::CameraInstanceUpdates& cameraUpdates,
+bool ProjectData::stageBundleAdjustMetadata(const placamera::CameraInstanceSet& cameraInstances,
+                                            const QMap<QString, QJsonObject>& annotationsByImageId,
                                             const QJsonObject& bundleAdjustResult,
                                             ProjectBundleAdjustMetadataStageToken* token,
                                             QString* errorMsg)
@@ -3490,7 +3269,7 @@ bool ProjectData::stageBundleAdjustMetadata(const xjw::camera_project::CameraIns
     {
         return reject(QStringLiteral("资源清理事务提交期间拒绝暂存 BA 元数据"));
     }
-    if (cameraUpdates.empty())
+    if (cameraInstances.empty())
     {
         return reject(QStringLiteral("没有可应用的平差相机结果"));
     }
@@ -3502,7 +3281,8 @@ bool ProjectData::stageBundleAdjustMetadata(const xjw::camera_project::CameraIns
     const QJsonObject beforeCore = _filesManager.coreData();
     const QJsonObject beforeResults = _filesManager.resultsData();
     QJsonObject stagedCore = beforeCore;
-    const auto cameraResult = xjw::camera_project::CameraProjectRecords::upsertByImageId(&stagedCore, cameraUpdates);
+    const auto cameraResult =
+        xjw::placamera_runtime::upsertProjectCameras(&stagedCore, cameraInstances, annotationsByImageId);
     if (!cameraResult.ok())
     {
         return reject(QStringLiteral("写回相机参数失败: %1").arg(cameraResult.errors.join(QStringLiteral("; "))));
@@ -3530,7 +3310,7 @@ bool ProjectData::stageBundleAdjustMetadata(const xjw::camera_project::CameraIns
     stagedToken._beforeResults = beforeResults;
     stagedToken._stagedCore = stagedCore;
     stagedToken._stagedResults = stagedResults;
-    stagedToken._updatedCameraCount = cameraResult.updatedCount;
+    stagedToken._updatedCameraCount = cameraResult.insertedCount + cameraResult.updatedCount;
     stagedToken._persistenceGeneration =
         _persistenceCommitCoordinator ? _persistenceCommitCoordinator->currentGeneration() : 0;
     stagedToken._wasDirty = _isDirty;

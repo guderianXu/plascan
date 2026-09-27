@@ -1,11 +1,13 @@
 #include "TaskRuntimeService.h"
 
+#include "GuiTaskRunner.h"
 #include "project/ProjectPackageLayout.h"
 #include "TaskJournal.h"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QPointer>
 #include <QThread>
 
 #include <algorithm>
@@ -113,6 +115,10 @@ namespace xjw::gui::runtime
         if (_scheduler)
         {
             _scheduler->unsubscribe(_subscriptionId);
+            if (_persistenceFuture.isRunning())
+            {
+                _persistenceFuture.waitForFinished();
+            }
             persistNow();
             _scheduler->shutdown();
         }
@@ -120,12 +126,20 @@ namespace xjw::gui::runtime
 
     xjw::task_runtime::TaskSubmitResult TaskRuntimeService::submit(xjw::task_runtime::TaskDefinition definition)
     {
+        if (!_scheduler)
+        {
+            return {false, _shutdownRequested ? "runtime_shutdown" : "runtime_transitioning", {}};
+        }
         return _scheduler->submit(std::move(definition));
     }
 
     xjw::task_runtime::TaskSubmitResult
     TaskRuntimeService::submitBatch(std::vector<xjw::task_runtime::TaskDefinition> definitions)
     {
+        if (!_scheduler)
+        {
+            return {false, _shutdownRequested ? "runtime_shutdown" : "runtime_transitioning", {}};
+        }
         return _scheduler->submitBatch(std::move(definitions));
     }
 
@@ -137,12 +151,19 @@ namespace xjw::gui::runtime
             return;
         }
         _executors[kind] = executor;
-        _scheduler->registerExecutor(kind, std::move(executor));
+        if (_scheduler)
+        {
+            _scheduler->registerExecutor(kind, std::move(executor));
+        }
     }
 
     QJsonArray TaskRuntimeService::taskSnapshots() const
     {
         QJsonArray result;
+        if (!_scheduler)
+        {
+            return result;
+        }
         for (const xjw::task_runtime::TaskRunSnapshot& snapshot : _scheduler->snapshots())
         {
             result.append(snapshotToJson(snapshot));
@@ -157,6 +178,13 @@ namespace xjw::gui::runtime
                                             qulonglong expectedRevision)
     {
         using xjw::task_runtime::TaskCommandResult;
+        if (!_scheduler)
+        {
+            return {
+                {QStringLiteral("accepted"), false},
+                {QStringLiteral("error"),
+                 _shutdownRequested ? QStringLiteral("runtime_shutdown") : QStringLiteral("runtime_transitioning")}};
+        }
         const std::optional<std::uint64_t> revision =
             expectedRevision > 0 ? std::optional<std::uint64_t>(expectedRevision) : std::nullopt;
         const std::string run_id = runId.toStdString();
@@ -205,54 +233,72 @@ namespace xjw::gui::runtime
         return _journalPath;
     }
 
+    bool TaskRuntimeService::isSessionTransitionInProgress() const noexcept
+    {
+        return _transitionInProgress;
+    }
+
+    bool TaskRuntimeService::isShutdownComplete() const noexcept
+    {
+        return _shutdownComplete;
+    }
+
     void
     TaskRuntimeService::setProjectSession(const QString& projectPath, const QString& chunkId, qulonglong generation)
     {
+        if (_shutdownRequested)
+        {
+            return;
+        }
+
         const QString normalized_path =
             projectPath.trimmed().isEmpty() ? QString() : QFileInfo(projectPath).absoluteFilePath();
-        const QString new_journal =
+        SessionRequest request;
+        request.projectPath = normalized_path;
+        request.chunkId = chunkId;
+        request.generation = generation;
+        request.journalPath =
             normalized_path.isEmpty()
                 ? QString()
                 : QDir(xjw::common::project::ProjectPackageLayout::dataDirectory(normalized_path))
                       .filePath(QStringLiteral("task_runtime/%1.journal").arg(safeJournalName(chunkId)));
-        if (_journalPath == new_journal)
+
+        if (!_transitionInProgress && _scheduler && sameSession(_activeSession, request))
         {
-            _epochGuard->update(normalized_path.toStdString(), chunkId.toStdString(), generation);
             return;
         }
 
-        if (_scheduler)
+        if (_transitionInProgress)
         {
-            _scheduler->unsubscribe(_subscriptionId);
-            persistNow();
-            _scheduler->shutdown();
+            _pendingSession = std::move(request);
+            _hasPendingSession = true;
+            return;
         }
-        _journalPath = new_journal;
-        createScheduler();
-        _epochGuard->update(normalized_path.toStdString(), chunkId.toStdString(), generation);
 
-        if (!_journalPath.isEmpty() && QFileInfo::exists(_journalPath))
+        startSessionTransition(std::move(request));
+    }
+
+    void TaskRuntimeService::shutdownAsync()
+    {
+        if (_shutdownComplete || _shutdownRequested)
         {
-            const xjw::task_runtime::TaskJournalLoadResult loaded =
-                xjw::task_runtime::TaskJournal::load(std::filesystem::path(_journalPath.toStdString()));
-            if (!loaded.succeeded)
-            {
-                emit journalError(tr("无法读取任务恢复记录：%1").arg(QString::fromStdString(loaded.error)));
-            }
-            else
-            {
-                const xjw::task_runtime::TaskSubmitResult restored = _scheduler->restore(loaded.snapshots);
-                if (!restored.accepted)
-                {
-                    emit journalError(tr("无法恢复任务队列：%1").arg(QString::fromStdString(restored.error)));
-                }
-            }
+            return;
         }
-        scheduleRefresh();
+
+        _shutdownRequested = true;
+        _hasPendingSession = false;
+        if (!_transitionInProgress)
+        {
+            startSessionTransition({});
+        }
     }
 
     void TaskRuntimeService::clearHistory()
     {
+        if (!_scheduler)
+        {
+            return;
+        }
         _scheduler->clearTerminalRuns();
         scheduleRefresh();
     }
@@ -268,9 +314,193 @@ namespace xjw::gui::runtime
         {
             _scheduler->registerExecutor(kind, executor);
         }
+        const QPointer<TaskRuntimeService> guarded_this(this);
         _subscriptionId = _scheduler->subscribe(
-            [this](const xjw::task_runtime::TaskEvent&)
-            { QMetaObject::invokeMethod(this, [this] { scheduleRefresh(); }, Qt::QueuedConnection); });
+            [guarded_this](const xjw::task_runtime::TaskEvent&)
+            {
+                if (!guarded_this)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    guarded_this.data(),
+                    [guarded_this]
+                    {
+                        if (guarded_this)
+                        {
+                            guarded_this->scheduleRefresh();
+                        }
+                    },
+                    Qt::QueuedConnection);
+            });
+    }
+
+    void TaskRuntimeService::startSessionTransition(SessionRequest request)
+    {
+        const bool starting_transition = !_transitionInProgress;
+        _transitionInProgress = true;
+        _transitionRequest = request;
+        if (starting_transition)
+        {
+            emit sessionTransitionStarted();
+        }
+
+        TransitionWork work;
+        work.request = request;
+        work.retiringScheduler = std::move(_scheduler);
+        work.retiringJournal = _journalPath;
+        _pendingPersistence.reset();
+        _journalPath.clear();
+        if (work.retiringScheduler)
+        {
+            work.retiringScheduler->unsubscribe(_subscriptionId);
+            work.retiringSnapshots = work.retiringScheduler->snapshots();
+            if (_epochGuard)
+            {
+                _epochGuard->update(
+                    request.projectPath.toStdString(), request.chunkId.toStdString(), request.generation);
+            }
+            work.retiringScheduler->requestShutdown();
+        }
+        _epochGuard.reset();
+        emit taskSnapshotsChanged(QJsonArray{});
+
+        _transitionWork = std::move(work);
+        if (!_persistenceInProgress)
+        {
+            launchSessionTransition();
+        }
+    }
+
+    void TaskRuntimeService::launchSessionTransition()
+    {
+        if (!_transitionWork)
+        {
+            return;
+        }
+
+        TransitionWork work = std::move(*_transitionWork);
+        _transitionWork.reset();
+
+        _transitionFuture = xjw::gui::tasks::runGuardedWithOutcome(
+            this,
+            [work = std::move(work)]() mutable
+            {
+                TransitionResult result;
+                result.request = work.request;
+                if (!work.retiringJournal.isEmpty())
+                {
+                    std::string error;
+                    if (!xjw::task_runtime::TaskJournal::save(
+                            std::filesystem::path(work.retiringJournal.toStdString()), work.retiringSnapshots, &error))
+                    {
+                        result.saveError = QString::fromStdString(error);
+                    }
+                }
+                if (work.retiringScheduler)
+                {
+                    work.retiringScheduler->shutdown();
+                    work.retiringScheduler.reset();
+                }
+                if (!work.request.journalPath.isEmpty() && QFileInfo::exists(work.request.journalPath))
+                {
+                    xjw::task_runtime::TaskJournalLoadResult loaded = xjw::task_runtime::TaskJournal::load(
+                        std::filesystem::path(work.request.journalPath.toStdString()));
+                    if (loaded.succeeded)
+                    {
+                        result.loadedSnapshots = std::move(loaded.snapshots);
+                    }
+                    else
+                    {
+                        result.loadError = QString::fromStdString(loaded.error);
+                    }
+                }
+                return result;
+            },
+            [](TaskRuntimeService* self, xjw::gui::tasks::TaskOutcome<TransitionResult> outcome)
+            {
+                if (outcome.succeeded())
+                {
+                    self->handleTransitionResult(std::move(*outcome.value), {});
+                    return;
+                }
+                TransitionResult result;
+                result.request = self->_transitionRequest;
+                self->handleTransitionResult(std::move(result), outcome.errorMessage);
+            });
+    }
+
+    void TaskRuntimeService::handleTransitionResult(TransitionResult result, const QString& workerError)
+    {
+        bool succeeded = workerError.isEmpty() && result.saveError.isEmpty() && result.loadError.isEmpty();
+        if (!workerError.isEmpty())
+        {
+            emit journalError(tr("任务运行时切换失败：%1").arg(workerError));
+        }
+        if (!result.saveError.isEmpty())
+        {
+            emit journalError(tr("无法保存任务恢复记录：%1").arg(result.saveError));
+        }
+        if (!result.loadError.isEmpty())
+        {
+            emit journalError(tr("无法读取任务恢复记录：%1").arg(result.loadError));
+        }
+
+        if (_shutdownRequested)
+        {
+            finishShutdown();
+            return;
+        }
+
+        SessionRequest effective_request = result.request;
+        if (_hasPendingSession)
+        {
+            SessionRequest pending = std::move(_pendingSession);
+            _hasPendingSession = false;
+            if (pending.journalPath != result.request.journalPath)
+            {
+                startSessionTransition(std::move(pending));
+                return;
+            }
+            effective_request = std::move(pending);
+        }
+
+        _journalPath = effective_request.journalPath;
+        _activeSession = effective_request;
+        createScheduler();
+        _epochGuard->update(effective_request.projectPath.toStdString(),
+                            effective_request.chunkId.toStdString(),
+                            effective_request.generation);
+        if (workerError.isEmpty() && result.loadError.isEmpty() && !result.loadedSnapshots.empty())
+        {
+            const xjw::task_runtime::TaskSubmitResult restored = _scheduler->restore(std::move(result.loadedSnapshots));
+            if (!restored.accepted)
+            {
+                succeeded = false;
+                emit journalError(tr("无法恢复任务队列：%1").arg(QString::fromStdString(restored.error)));
+            }
+        }
+
+        _transitionInProgress = false;
+        _transitionRequest = {};
+        scheduleRefresh();
+        emit sessionTransitionFinished(succeeded);
+    }
+
+    void TaskRuntimeService::finishShutdown()
+    {
+        _scheduler.reset();
+        _epochGuard.reset();
+        _journalPath.clear();
+        _activeSession = {};
+        _transitionRequest = {};
+        _transitionWork.reset();
+        _pendingPersistence.reset();
+        _transitionInProgress = false;
+        _shutdownComplete = true;
+        emit taskSnapshotsChanged(QJsonArray{});
+        emit sessionTransitionFinished(true);
+        emit shutdownFinished();
     }
 
     void TaskRuntimeService::scheduleRefresh()
@@ -292,8 +522,79 @@ namespace xjw::gui::runtime
 
     void TaskRuntimeService::refreshAndPersist()
     {
-        emit taskSnapshotsChanged(taskSnapshots());
-        persistNow();
+        if (!_scheduler)
+        {
+            emit taskSnapshotsChanged(QJsonArray{});
+            return;
+        }
+
+        std::vector<xjw::task_runtime::TaskRunSnapshot> snapshots = _scheduler->snapshots();
+        QJsonArray serialized;
+        for (const xjw::task_runtime::TaskRunSnapshot& snapshot : snapshots)
+        {
+            serialized.append(snapshotToJson(snapshot));
+        }
+        emit taskSnapshotsChanged(serialized);
+
+        if (_journalPath.isEmpty())
+        {
+            return;
+        }
+        PersistRequest request{_journalPath, std::move(snapshots)};
+        if (_persistenceInProgress)
+        {
+            _pendingPersistence = std::move(request);
+            return;
+        }
+        startPersistence(std::move(request));
+    }
+
+    void TaskRuntimeService::startPersistence(PersistRequest request)
+    {
+        _persistenceInProgress = true;
+        _persistenceFuture = xjw::gui::tasks::runGuardedWithOutcome(
+            this,
+            [request = std::move(request)]() mutable
+            {
+                std::string error;
+                if (!xjw::task_runtime::TaskJournal::save(
+                        std::filesystem::path(request.journalPath.toStdString()), request.snapshots, &error) &&
+                    error.empty())
+                {
+                    error = "unknown_journal_save_error";
+                }
+                return QString::fromStdString(error);
+            },
+            [](TaskRuntimeService* self, xjw::gui::tasks::TaskOutcome<QString> outcome)
+            {
+                self->_persistenceInProgress = false;
+                if (!outcome.succeeded())
+                {
+                    emit self->journalError(self->tr("无法保存任务恢复记录：%1").arg(outcome.errorMessage));
+                }
+                else if (!outcome.value->isEmpty())
+                {
+                    emit self->journalError(self->tr("无法保存任务恢复记录：%1").arg(*outcome.value));
+                }
+
+                if (self->_transitionInProgress && self->_transitionWork)
+                {
+                    self->_pendingPersistence.reset();
+                    self->launchSessionTransition();
+                    return;
+                }
+                if (self->_shutdownRequested || self->_transitionInProgress)
+                {
+                    self->_pendingPersistence.reset();
+                    return;
+                }
+                if (self->_pendingPersistence)
+                {
+                    PersistRequest pending = std::move(*self->_pendingPersistence);
+                    self->_pendingPersistence.reset();
+                    self->startPersistence(std::move(pending));
+                }
+            });
     }
 
     void TaskRuntimeService::persistNow()
@@ -308,6 +609,12 @@ namespace xjw::gui::runtime
         {
             emit journalError(tr("无法保存任务恢复记录：%1").arg(QString::fromStdString(error)));
         }
+    }
+
+    bool TaskRuntimeService::sameSession(const SessionRequest& first, const SessionRequest& second)
+    {
+        return first.projectPath == second.projectPath && first.chunkId == second.chunkId &&
+               first.generation == second.generation;
     }
 
     QJsonObject TaskRuntimeService::snapshotToJson(const xjw::task_runtime::TaskRunSnapshot& snapshot)

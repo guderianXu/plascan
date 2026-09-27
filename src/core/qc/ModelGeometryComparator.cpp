@@ -171,9 +171,7 @@ std::vector<Point3D> loadReferencePoints(const QString &path,
     for (std::size_t index = 0; index < cloud->size(); index += stride)
     {
         const auto row = static_cast<plamatrix::Index>(index);
-        points.push_back({cloud->points().getValue(row, 0),
-                          cloud->points().getValue(row, 1),
-                          cloud->points().getValue(row, 2)});
+        points.push_back({cloud->points().coeff(row, 0), cloud->points().coeff(row, 1), cloud->points().coeff(row, 2)});
     }
     return points;
 }

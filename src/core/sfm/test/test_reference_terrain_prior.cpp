@@ -2,7 +2,6 @@
 
 #include <gtest/gtest.h>
 
-using xjw::BATrack;
 using xjw::ReferenceTerrainGrid;
 using xjw::ReferenceTerrainPrior;
 using xjw::ReferenceTerrainPriorOptions;
@@ -39,7 +38,7 @@ TEST(ReferenceTerrainPrior, AttachesHeightPlaneConstraintsToNearbyTracks)
     grid.nodata = -9999.0;
     grid.heights.assign(9, 5.0);
 
-    std::vector<BATrack> tracks(2);
+    std::vector<plabundle::Track> tracks(2);
     tracks[0].initialPoint = {{1.0, 1.0, 5.15}};
     tracks[1].initialPoint = {{1.0, 1.0, 8.0}};
 
@@ -68,8 +67,7 @@ TEST(ReferenceTerrainPrior, ConfiguresBundleAdjustOptionsForSoftHeightPrior)
 
     const auto baOptions = ReferenceTerrainPrior::makeBundleAdjustOptions(priorOptions);
 
-    EXPECT_TRUE(baOptions.enableLaserPlaneConstraints);
-    EXPECT_NEAR(baOptions.laserPlaneWeight, 2.0, 1e-9);
-    EXPECT_NEAR(baOptions.laserHuberDeltaMeters, 0.25, 1e-9);
-    EXPECT_TRUE(baOptions.refineCameraPose);
+    EXPECT_NEAR(baOptions.constraints.laserPlaneWeight, 2.0, 1e-9);
+    EXPECT_NEAR(baOptions.constraints.laserHuberDeltaMeters, 0.25, 1e-9);
+    EXPECT_TRUE(baOptions.calibration.refineCameraPose);
 }

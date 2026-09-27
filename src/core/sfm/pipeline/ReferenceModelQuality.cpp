@@ -69,17 +69,16 @@ namespace xjw
             {
                 return false;
             }
-            double projected[2]{};
-            double depth = 0.0;
-            if (!reconstruction.camera(observation.imageId)
-                     .projectWorldPointWithDepth(point.xyz.data(), projected, depth) ||
-                !(depth > 0.0) || !std::isfinite(projected[0]) || !std::isfinite(projected[1]))
+            const auto& camera = reconstruction.camera(observation.imageId);
+            const auto projected = camera.groundToImage({camera.groundFrame(), point.xyz});
+            if (!projected || !projected.value().positiveDepth || !std::isfinite(projected.value().image.sample) ||
+                !std::isfinite(projected.value().image.line))
             {
                 return false;
             }
             const FeatureKeypoint& keypoint = image.keypoints[observation.featureIdx];
-            const double dx = projected[0] - static_cast<double>(keypoint.x);
-            const double dy = projected[1] - static_cast<double>(keypoint.y);
+            const double dx = projected.value().image.sample - static_cast<double>(keypoint.x);
+            const double dy = projected.value().image.line - static_cast<double>(keypoint.y);
             *normalizedResidual = std::hypot(dx, dy) / observationScale(keypoint);
             return std::isfinite(*normalizedResidual);
         }
@@ -139,20 +138,31 @@ namespace xjw
                 {
                     continue;
                 }
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                const placamera::FramePinholeNumericState camera =
                     reconstruction.camera(observation.imageId).normalizedForPositiveDepth();
-                double local[3]{};
-                camera.worldToCamera(point.xyz.data(), local);
+                const auto& pose = camera.pose();
+                const std::array<double, 3> delta{
+                    {point.xyz[0] - pose.center[0], point.xyz[1] - pose.center[1], point.xyz[2] - pose.center[2]}};
+                std::array<double, 3> local{};
+                std::array<double, 9> rotation{};
+                for (int row = 0; row < 3; ++row)
+                {
+                    for (int column = 0; column < 3; ++column)
+                    {
+                        rotation[static_cast<std::size_t>(row * 3 + column)] =
+                            pose.cameraToWorldRotation[static_cast<std::size_t>(column * 3 + row)];
+                        local[static_cast<std::size_t>(row)] += rotation[static_cast<std::size_t>(row * 3 + column)] *
+                                                                delta[static_cast<std::size_t>(column)];
+                    }
+                }
                 if (!(local[2] > 0.0) || !std::isfinite(local[0]) || !std::isfinite(local[1]) ||
                     !std::isfinite(local[2]))
                 {
                     continue;
                 }
 
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-                    camera.intrinsics();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                    camera.distortion();
+                const auto& intrinsics = camera.intrinsics();
+                const auto& distortion = camera.distortion();
                 const double x = local[0] / local[2];
                 const double y = local[1] / local[2];
                 const double radius_squared = x * x + y * y;
@@ -176,7 +186,6 @@ namespace xjw
                 const std::array<double, 3> local_y{{intrinsics.focalY * inverse_depth * dyx,
                                                      intrinsics.focalY * inverse_depth * dyy,
                                                      -intrinsics.focalY * inverse_depth * (dyx * x + dyy * y)}};
-                const std::array<double, 9> rotation = camera.worldToCameraRotation();
                 std::array<double, 3> world_x{};
                 std::array<double, 3> world_y{};
                 for (int axis = 0; axis < 3; ++axis)
@@ -190,7 +199,7 @@ namespace xjw
                 const double jacobian_norm =
                     std::sqrt(world_x[0] * world_x[0] + world_x[1] * world_x[1] + world_x[2] * world_x[2] +
                               world_y[0] * world_y[0] + world_y[1] * world_y[1] + world_y[2] * world_y[2]);
-                const std::array<double, 3> center = camera.cameraCenter();
+                const std::array<double, 3>& center = camera.pose().center;
                 const double dx = point.xyz[0] - center[0];
                 const double dy = point.xyz[1] - center[1];
                 const double dz = point.xyz[2] - center[2];
@@ -225,10 +234,11 @@ namespace xjw
 
         double sensorResidualThreshold(const SfmReconstruction& reconstruction, ImageId imageId)
         {
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = reconstruction.camera(imageId);
-            if (camera.imageSize() && camera.imageSize()->samples > 0 && camera.imageSize()->lines > 0)
+            const placamera::FramePinholeNumericState& camera = reconstruction.camera(imageId);
+            const auto& image_size = camera.imageSize();
+            if (image_size.isValid())
             {
-                return 0.002 * 0.5 * static_cast<double>(camera.imageSize()->samples + camera.imageSize()->lines);
+                return 0.002 * 0.5 * static_cast<double>(image_size.samples + image_size.lines);
             }
             const ImageData& image = reconstruction.image(imageId);
             double maximum_x = 0.0;

@@ -2,10 +2,10 @@
 
 #include "DepthFrameQualificationPolicy.h"
 #include "depth_processing/DepthPostprocessor.h"
-#include "MvsWorkspaceReplay.h"
 #include "io/PathIO.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
@@ -13,8 +13,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <limits>
-#include <optional>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -53,6 +53,166 @@ namespace xjw::core::project
             }
             *size = cv::Size(width, height);
             return true;
+        }
+
+        bool readPreparedPngSize(const QString& path, cv::Size* size)
+        {
+            if (!size || path.trimmed().isEmpty())
+            {
+                return false;
+            }
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                return false;
+            }
+            const QByteArray header = file.read(24);
+            constexpr std::array<unsigned char, 8> signature{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+            constexpr std::array<unsigned char, 4> ihdr_length{0, 0, 0, 13};
+            if (header.size() != 24 || std::memcmp(header.constData(), signature.data(), signature.size()) != 0 ||
+                std::memcmp(header.constData() + 8, ihdr_length.data(), ihdr_length.size()) != 0 ||
+                std::memcmp(header.constData() + 12, "IHDR", 4) != 0)
+            {
+                return false;
+            }
+            const auto read_dimension = [&header](int offset)
+            {
+                const auto* bytes = reinterpret_cast<const unsigned char*>(header.constData() + offset);
+                return (static_cast<quint32>(bytes[0]) << 24) | (static_cast<quint32>(bytes[1]) << 16) |
+                       (static_cast<quint32>(bytes[2]) << 8) | static_cast<quint32>(bytes[3]);
+            };
+            const quint32 width = read_dimension(16);
+            const quint32 height = read_dimension(20);
+            if (width == 0 || height == 0 || width > static_cast<quint32>(std::numeric_limits<int>::max()) ||
+                height > static_cast<quint32>(std::numeric_limits<int>::max()))
+            {
+                return false;
+            }
+            *size = cv::Size(static_cast<int>(width), static_cast<int>(height));
+            return true;
+        }
+
+        template <std::size_t Size>
+        bool readFiniteArray(const QJsonValue& value, std::array<double, Size>* output)
+        {
+            if (!output || !value.isArray())
+            {
+                return false;
+            }
+            const QJsonArray array = value.toArray();
+            if (array.size() != static_cast<qsizetype>(Size))
+            {
+                return false;
+            }
+            for (std::size_t index = 0; index < Size; ++index)
+            {
+                const QJsonValue element = array.at(static_cast<qsizetype>(index));
+                if (!element.isDouble() || !std::isfinite(element.toDouble()))
+                {
+                    return false;
+                }
+                (*output)[index] = element.toDouble();
+            }
+            return true;
+        }
+
+        std::shared_ptr<const placamera::FramePinholeModel>
+        depthCameraFromJson(const QJsonObject& object, const cv::Size& depthSize)
+        {
+            if (depthSize.width <= 0 || depthSize.height <= 0)
+            {
+                return {};
+            }
+            std::array<double, 9> world_to_camera{};
+            std::array<double, 3> center{};
+            std::array<double, 3> translation{};
+            if (!readFiniteArray(object.value(QStringLiteral("rotation_world_to_camera")), &world_to_camera) ||
+                !readFiniteArray(object.value(QStringLiteral("translation_world_to_camera")), &translation) ||
+                !readFiniteArray(object.value(QStringLiteral("camera_center")), &center))
+            {
+                return {};
+            }
+
+            const QString instance_id = object.value(QStringLiteral("instance_id")).toString().trimmed();
+            const QString image_id = object.value(QStringLiteral("image_id")).toString().trimmed();
+            const QString frame_id = object.value(QStringLiteral("world_frame")).toString().trimmed();
+            const QJsonValue fx_value = object.value(QStringLiteral("fx"));
+            const QJsonValue fy_value = object.value(QStringLiteral("fy"));
+            const QJsonValue cx_value = object.value(QStringLiteral("cx"));
+            const QJsonValue cy_value = object.value(QStringLiteral("cy"));
+            if (!fx_value.isDouble() || !fy_value.isDouble() || !cx_value.isDouble() || !cy_value.isDouble() ||
+                instance_id.isEmpty() || image_id.isEmpty() || frame_id.isEmpty())
+            {
+                return {};
+            }
+
+            const std::array<double, 9> camera_to_world{world_to_camera[0],
+                                                         world_to_camera[3],
+                                                         world_to_camera[6],
+                                                         world_to_camera[1],
+                                                         world_to_camera[4],
+                                                         world_to_camera[7],
+                                                         world_to_camera[2],
+                                                         world_to_camera[5],
+                                                         world_to_camera[8]};
+            for (int row = 0; row < 3; ++row)
+            {
+                const double expected_translation =
+                    -(world_to_camera[static_cast<std::size_t>(row * 3)] * center[0] +
+                      world_to_camera[static_cast<std::size_t>(row * 3 + 1)] * center[1] +
+                      world_to_camera[static_cast<std::size_t>(row * 3 + 2)] * center[2]);
+                const double tolerance = 1.0e-8 * std::max({1.0, std::abs(expected_translation),
+                                                              std::abs(translation[static_cast<std::size_t>(row)])});
+                if (std::abs(expected_translation - translation[static_cast<std::size_t>(row)]) > tolerance)
+                {
+                    return {};
+                }
+            }
+
+            try
+            {
+                const placamera::FrameId ground_frame(frame_id.toStdString());
+                placamera::FrameIntrinsics intrinsics;
+                intrinsics.focalX = fx_value.toDouble();
+                intrinsics.focalY = fy_value.toDouble();
+                intrinsics.principalX = cx_value.toDouble();
+                intrinsics.principalY = cy_value.toDouble();
+                const auto definition = placamera::FramePinholeDefinition::create(
+                    placamera::CameraDefinitionId(instance_id.toStdString() + "-depth-definition"),
+                    intrinsics,
+                    {},
+                    placamera::PixelConvention::PixelCenter,
+                    ground_frame);
+                return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId(instance_id.toStdString()),
+                    placamera::ImageId(image_id.toStdString()),
+                    definition,
+                    {depthSize.width, depthSize.height},
+                    placamera::Pose::create(ground_frame, center, camera_to_world)));
+            }
+            catch (const std::exception&)
+            {
+                return {};
+            }
+        }
+
+        std::shared_ptr<const placamera::FramePinholeModel>
+        scaledDepthCamera(const placamera::FramePinholeModel& source, const cv::Size& targetSize)
+        {
+            const auto& source_size = source.imageSize();
+            const auto definition = source.pinholeDefinition().scaledIntrinsics(
+                placamera::CameraDefinitionId(source.definitionId().value() + "-scaled-" +
+                                              std::to_string(targetSize.width) + "x" +
+                                              std::to_string(targetSize.height)),
+                static_cast<double>(targetSize.width) / source_size.samples,
+                static_cast<double>(targetSize.height) / source_size.lines);
+            return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                source.instanceId(),
+                source.imageId(),
+                definition,
+                {targetSize.width, targetSize.height},
+                source.pose(),
+                source.captureTime()));
         }
 
         bool validateNativePixelDomainContract(const StoredDepthFrameRecord& stored,
@@ -465,10 +625,11 @@ namespace xjw::core::project
 
         if (frame.algorithmRevision >= xjw::mvs::kMvsPreparedRasterProvenanceRevision)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
-            if (frame.preparedImage.trimmed().isEmpty() || !QFileInfo::exists(frame.preparedImage) ||
-                frame.preparedValidMaskPath.trimmed().isEmpty() || !QFileInfo::exists(frame.preparedValidMaskPath) ||
-                !xjw::mvs::cameraFromMvsWorkspaceJson(frame.preparedCameraModel, &prepared_camera, true))
+            cv::Size prepared_size;
+            cv::Size mask_size;
+            if (!readPreparedPngSize(frame.preparedImage, &prepared_size) ||
+                !readPreparedPngSize(frame.preparedValidMaskPath, &mask_size) || prepared_size != mask_size ||
+                !depthCameraFromJson(frame.preparedCameraModel, prepared_size))
             {
                 return false;
             }
@@ -630,6 +791,13 @@ namespace xjw::core::project
             frame->imgH = oldHeight;
             return false;
         }
+        if (!frame->cameraModel || frame->cameraModel->imageSize().samples != oldWidth ||
+            frame->cameraModel->imageSize().lines != oldHeight)
+        {
+            return false;
+        }
+
+        const auto scaled_camera = scaledDepthCamera(*frame->cameraModel, targetSize);
 
         cv::Mat resizedDepth;
         cv::resize(frame->depthMap, resizedDepth, targetSize, 0.0, 0.0, cv::INTER_NEAREST);
@@ -642,9 +810,7 @@ namespace xjw::core::project
             frame->confidence = std::move(resizedConfidence);
         }
 
-        const double scaleX = static_cast<double>(targetSize.width) / static_cast<double>(oldWidth);
-        const double scaleY = static_cast<double>(targetSize.height) / static_cast<double>(oldHeight);
-        frame->cameraModel = frame->cameraModel.scaledIntrinsics(scaleX, scaleY);
+        frame->cameraModel = scaled_camera;
         frame->imgW = targetSize.width;
         frame->imgH = targetSize.height;
         return true;
@@ -652,7 +818,7 @@ namespace xjw::core::project
 
     FusionFrameBuildResult
     buildStoredFusionFrame(const StoredDepthFrameRecord& stored,
-                           const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                           const placamera::FramePinholeModel& camera,
                            const xjw::mvs::FusionConfig& fusionConfig,
                            int viewCount,
                            int fusionMaxImageDim)
@@ -670,66 +836,42 @@ namespace xjw::core::project
                                                                QStringLiteral("raster_width"),
                                                                QStringLiteral("raster_height"),
                                                                &declared_raster_size);
-        const std::optional<xjw::camera_core::ImageSize> current_camera_size = camera.imageSize();
         result.frame.geometrySupportPrevalidated =
             stored.pixelDomainDiagnostics.value(QStringLiteral("producer")).toString() ==
             QStringLiteral("recovered_scene_d4");
-        result.frame.sourceCamera = camera;
-        result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState prepared_camera;
-        const bool hasPreparedRaster = !stored.preparedImage.trimmed().isEmpty();
-        if (hasPreparedRaster)
+        if (!readPreparedPngSize(stored.preparedImage, &result.frame.preparedRasterSize))
         {
-            if (!QFileInfo::exists(stored.preparedImage) ||
-                !xjw::mvs::cameraFromMvsWorkspaceJson(stored.preparedCameraModel, &prepared_camera, true))
-            {
-                result.status = {false,
-                                 QStringLiteral("缓存深度帧的 prepared raster 或相机 identity/frame 无效")};
-                return result;
-            }
-            result.frame.sourceCamera = prepared_camera;
-            if (has_declared_raster_size)
-            {
-                result.frame.sourceCamera.setImageSize(
-                    xjw::camera_core::ImageSize{declared_raster_size.width, declared_raster_size.height});
-            }
-            else if (current_camera_size.has_value())
-            {
-                // Revision-39 full-grid manifests predate pixel-domain diagnostics.
-                // Prepared rasters preserve the decoded source dimensions, so the
-                // current project camera remains a safe full-raster fallback.
-                result.frame.sourceCamera.setImageSize(*current_camera_size);
-            }
-            result.frame.imagePath = xjw::common::io::toUtf8Path(stored.preparedImage);
-        }
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState stored_camera;
-        const bool has_stored_camera =
-            xjw::mvs::cameraFromMvsWorkspaceJson(stored.cameraModel, &stored_camera, true);
-        if (!has_stored_camera)
-        {
-            result.status = {false,
-                             QStringLiteral("缓存深度帧缺少完整的面阵针孔 identity/frame")};
+            result.status = {false, QStringLiteral("缓存深度帧缺少有效的 prepared PNG 栅格")};
             return result;
         }
-        if (!camera.hasBoundIdentity() || camera.imageId() != stored_camera.imageId() ||
-            camera.instanceId() != stored_camera.instanceId() || camera.worldFrame() != stored_camera.worldFrame())
+        result.frame.imagePath = xjw::common::io::toUtf8Path(stored.preparedImage);
+        if (has_declared_raster_size && declared_raster_size != result.frame.preparedRasterSize)
         {
             result.status = {false,
-                             QStringLiteral("缓存深度帧相机与当前 canonical 相机 identity/frame 不一致")};
+                             QStringLiteral("缓存深度帧的 prepared raster 与 pixel_domain_diagnostics 尺寸不一致")};
             return result;
         }
-        if (hasPreparedRaster &&
-            (prepared_camera.imageId() != stored_camera.imageId() ||
-             prepared_camera.instanceId() != stored_camera.instanceId() ||
-             prepared_camera.worldFrame() != stored_camera.worldFrame()))
+        result.frame.cameraModel = depthCameraFromJson(stored.cameraModel, {stored.gridWidth, stored.gridHeight});
+        if (!result.frame.cameraModel)
         {
-            result.status = {false,
-                             QStringLiteral("缓存深度帧 prepared 相机与主相机 identity/frame 不一致")};
+            result.status = {false, QStringLiteral("缓存深度帧缺少有效的 PlaCamera 面阵针孔 identity/frame 或几何")};
             return result;
         }
-        result.frame.cameraModel = stored_camera.normalizedForPositiveDepth();
-        result.frame.cameraModel.setDistortion(
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
+        if (camera.imageId() != result.frame.cameraModel->imageId() ||
+            camera.instanceId() != result.frame.cameraModel->instanceId() ||
+            camera.groundFrame() != result.frame.cameraModel->groundFrame())
+        {
+            result.status = {false, QStringLiteral("缓存深度帧相机与当前 canonical 相机 identity/frame 不一致")};
+            return result;
+        }
+        const auto prepared_camera = depthCameraFromJson(stored.preparedCameraModel, result.frame.preparedRasterSize);
+        if (!prepared_camera || prepared_camera->imageId() != result.frame.cameraModel->imageId() ||
+            prepared_camera->instanceId() != result.frame.cameraModel->instanceId() ||
+            prepared_camera->groundFrame() != result.frame.cameraModel->groundFrame())
+        {
+            result.status = {false, QStringLiteral("缓存深度帧 prepared 相机与主相机 identity/frame 不一致")};
+            return result;
+        }
         result.frame.imgW = stored.gridWidth;
         result.frame.imgH = stored.gridHeight;
         const QString rawDepthPath = resolveExistingRawDepthPath(stored.depthPng, stored.rawDepthPath);
@@ -750,31 +892,19 @@ namespace xjw::core::project
         }
         if (stored.effectiveNativeFinalDepthGrid)
         {
-            result.frame.sourceCamera.setImageSize(
-                xjw::camera_core::ImageSize{validated_native_raster_size.width, validated_native_raster_size.height});
+            if (result.frame.preparedRasterSize != validated_native_raster_size)
+            {
+                result.status = {false, QStringLiteral("原生深度网格记录的 prepared raster 与 raster 尺寸不一致")};
+                return result;
+            }
         }
 
-        int camera_grid_width = 0;
-        int camera_grid_height = 0;
-        if (has_stored_camera)
+        if (stored.gridWidth != result.frame.depthMap.cols || stored.gridHeight != result.frame.depthMap.rows)
         {
-            camera_grid_width = stored.gridWidth;
-            camera_grid_height = stored.gridHeight;
+            result.frame.cameraModel = scaledDepthCamera(*result.frame.cameraModel, result.frame.depthMap.size());
         }
-        else if (const auto source_size = camera.imageSize(); source_size.has_value())
-        {
-            camera_grid_width = source_size->samples;
-            camera_grid_height = source_size->lines;
-        }
-        if (camera_grid_width > 0 && camera_grid_height > 0 &&
-            (camera_grid_width != result.frame.depthMap.cols || camera_grid_height != result.frame.depthMap.rows))
-        {
-            result.frame.cameraModel = result.frame.cameraModel.scaledIntrinsics(
-                static_cast<double>(result.frame.depthMap.cols) / static_cast<double>(camera_grid_width),
-                static_cast<double>(result.frame.depthMap.rows) / static_cast<double>(camera_grid_height));
-        }
-        result.frame.cameraModel.setImageSize(
-            xjw::camera_core::ImageSize{result.frame.depthMap.cols, result.frame.depthMap.rows});
+        result.frame.imgW = result.frame.depthMap.cols;
+        result.frame.imgH = result.frame.depthMap.rows;
 
         const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng, stored.rawConfidencePath);
         if (!rawConfidencePath.isEmpty())
@@ -864,12 +994,7 @@ namespace xjw::core::project
         resizeEvidenceMap(&evidence.adaptiveConflictRatio, fusion_size);
         const auto resize_done = std::chrono::steady_clock::now();
 
-        cv::Size raster_pixel_domain_size = fusion_size;
-        if (const auto prepared_size = result.frame.sourceCamera.imageSize();
-            prepared_size.has_value() && prepared_size->samples > 0 && prepared_size->lines > 0)
-        {
-            raster_pixel_domain_size = cv::Size(prepared_size->samples, prepared_size->lines);
-        }
+        const cv::Size raster_pixel_domain_size = result.frame.preparedRasterSize;
 
         const auto postprocess_start = resize_done;
         result.frame.depthPostprocess =

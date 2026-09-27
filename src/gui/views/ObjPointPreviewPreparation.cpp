@@ -88,9 +88,7 @@ ObjRenderPreparation prepareObjPointPreview(
             if (cloud.hasNormals())
             {
                 const QVector3D normal = normalizedVector(QVector3D(
-                    cloud.normals()->getValue(row, 0),
-                    cloud.normals()->getValue(row, 1),
-                    cloud.normals()->getValue(row, 2)));
+                    cloud.normals()->coeff(row, 0), cloud.normals()->coeff(row, 1), cloud.normals()->coeff(row, 2)));
                 vertex[3] = normal.x();
                 vertex[4] = normal.y();
                 vertex[5] = normal.z();
@@ -103,9 +101,9 @@ ObjRenderPreparation prepareObjPointPreview(
             }
             if (cloud.hasColors())
             {
-                vertex[6] = cloud.colors()->getValue(row, 0) / 255.0f;
-                vertex[7] = cloud.colors()->getValue(row, 1) / 255.0f;
-                vertex[8] = cloud.colors()->getValue(row, 2) / 255.0f;
+                vertex[6] = cloud.colors()->coeff(row, 0) / 255.0f;
+                vertex[7] = cloud.colors()->coeff(row, 1) / 255.0f;
+                vertex[8] = cloud.colors()->coeff(row, 2) / 255.0f;
             }
             else
             {

@@ -151,9 +151,12 @@ namespace xjw::mesh
                                       .arg(frames.size());
             return result;
         }
+        const placamera::FrameId* ground_frame = nullptr;
         for (const DepthTsdfFrame& frame : frames)
         {
-            if (!frame.camera.isValid() || frame.depth.type() != CV_32FC1 || frame.confidence.type() != CV_32FC1 ||
+            if (!frame.camera || frame.camera->imageSize().samples != frame.depth.cols ||
+                frame.camera->imageSize().lines != frame.depth.rows ||
+                frame.depth.type() != CV_32FC1 || frame.confidence.type() != CV_32FC1 ||
                 frame.geometrySupportCount.type() != CV_16UC1 || frame.depthValidMask.type() != CV_8UC1 ||
                 frame.supportMask.type() != CV_8UC1 || frame.confidence.size() != frame.depth.size() ||
                 frame.geometrySupportCount.size() != frame.depth.size() ||
@@ -168,6 +171,13 @@ namespace xjw::mesh
                     QStringLiteral("TSDF input frame %1 has invalid camera or matrix layout").arg(frame.refIndex);
                 return result;
             }
+            if (ground_frame != nullptr && frame.camera->groundFrame() != *ground_frame)
+            {
+                result.errorMessage = QStringLiteral("TSDF input frame %1 has a different ground frame")
+                                          .arg(frame.refIndex);
+                return result;
+            }
+            ground_frame = &frame.camera->groundFrame();
         }
         result.statistics.acceptedFrameCount = frames.size();
         QVector<float> raw_frame_quality_weights;
@@ -181,7 +191,7 @@ namespace xjw::mesh
             DepthFusionView view;
             view.frameIndex = static_cast<int>(fusion_views.size());
             view.refIndex = frame.refIndex;
-            view.cameraCenter = frame.camera.cameraCenter();
+            view.cameraCenter = frame.camera->pose().center;
             fusion_views.push_back(view);
             if (frame.auxiliarySurfaceOnly)
             {
@@ -770,6 +780,8 @@ namespace xjw::mesh
             }
             std::vector<DepthTsdfNarrowBandFrameView> activation_frames;
             activation_frames.reserve(static_cast<std::size_t>(frames.size()));
+            std::vector<placamera::FramePinholeNumericState> activation_cameras;
+            activation_cameras.reserve(static_cast<std::size_t>(frames.size()));
             for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
             {
                 if (effective_frame_quality_weights[frame_index] <= 0.0f)
@@ -786,8 +798,9 @@ namespace xjw::mesh
                     // independent shell elsewhere in the volume.
                     continue;
                 }
+                activation_cameras.push_back(placamera::FramePinholeNumericState::fromModel(*frame.camera));
                 DepthTsdfNarrowBandFrameView view;
-                view.camera = &frame.camera;
+                view.camera = &activation_cameras.back();
                 view.depth = &frame.depth;
                 view.depthValidMask =
                     erosion_pixels > 0 ? &effective_depth_valid_masks[frame_index] : &frame.depthValidMask;
@@ -864,19 +877,21 @@ namespace xjw::mesh
                             {
                                 continue;
                             }
-                            double pixel[2]{};
-                            double voxel_depth = 0.0;
-                            if (!frame.camera.projectWorldPointWithDepth(world, pixel, voxel_depth))
+                            const auto projected = frame.camera->groundToImage(
+                                {frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+                            if (!projected || !projected.value().positiveDepth)
                             {
                                 continue;
                             }
+                            const auto& pixel = projected.value().image;
+                            const double voxel_depth = *projected.value().positiveDepth;
                             const cv::Mat& depth_valid_mask = !frame.useAdaptiveGeometryEvidence && erosion_pixels > 0
                                                                   ? effective_depth_valid_masks[frame_index]
                                                                   : frame.depthValidMask;
                             const DepthTsdfObservationSample observation = DepthTsdfSurfaceBuilder::sampleObservation(
                                 frame,
                                 depth_valid_mask,
-                                cv::Point2d(pixel[0], pixel[1]),
+                                cv::Point2d(pixel.sample, pixel.line),
                                 options.minimumConfidence,
                                 options.enableDiscontinuityAwareSampling,
                                 options.maximumInterpolationRelativeDepthSpread,

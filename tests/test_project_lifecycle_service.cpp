@@ -142,7 +142,7 @@ TEST(ProjectLifecycleServiceTest, SaveWithoutProjectIsAStableNoOp)
 
     bool saveStarted = false;
     QObject::connect(&service, &ProjectLifecycleService::saveStarted, [&saveStarted]() { saveStarted = true; });
-    service.saveProject();
+    EXPECT_FALSE(service.saveProject());
 
     EXPECT_FALSE(saveStarted);
     EXPECT_FALSE(data.hasProject());
@@ -262,7 +262,7 @@ TEST(ProjectLifecycleServiceTest, ValidSavePublishesCompletion)
     QObject::connect(&service, &ProjectLifecycleService::saveFinished,
                      [&saveFinished](bool success) { saveFinished = success; });
 
-    service.saveProject();
+    EXPECT_TRUE(service.saveProject());
 
     ASSERT_TRUE(waitUntil([&saveFinished] { return saveFinished; }));
     EXPECT_TRUE(saveStarted);

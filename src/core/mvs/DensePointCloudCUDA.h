@@ -35,7 +35,7 @@ namespace xjw
             static std::vector<DensePoint>
             unprojectGPU(const cv::Mat& depth,
                          const cv::Mat& mask,
-                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                         const placamera::FramePinholeModel& cameraModel,
                          const cv::Mat& colorImg,
                          float minDepth = 0.01f,
                          float maxDepth = 1e6f,

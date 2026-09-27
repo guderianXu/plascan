@@ -46,7 +46,9 @@ target_include_directories(control_points PRIVATE
 
 target_link_libraries(control_points PUBLIC
     control_network
-    coordinate_system_gdal
+    placamera::placamera
+    placoordinate::gdal
+    placoordinate::transform
     Qt6::Core
     ${OpenCV_LIBS}
     ${PLASCAN_GDAL_TARGET}

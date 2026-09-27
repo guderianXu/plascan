@@ -73,5 +73,5 @@ private:
     DualImageViewer *_dualImageViewer = nullptr;
     ObservationNetworkView *_obsNetView = nullptr;
     quint64 _cameraPoseGeneration = 0;
-    QJsonArray _cameraPoseMetadata;
+    QJsonObject _cameraPoseMetadata;
 };

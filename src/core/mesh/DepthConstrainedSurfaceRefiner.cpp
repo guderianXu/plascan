@@ -3,6 +3,8 @@
 #include "DepthTsdfSurfaceBuilder.h"
 #include "SurfaceReconstructorPostprocess.h"
 
+#include <placamera/frame_numeric_state.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -96,7 +98,7 @@ ProjectedDisplacementQuality evaluateProjectedDisplacement(
     {
         if ((options.depthRefine.primaryFramesOnly &&
              frame.auxiliarySurfaceOnly) ||
-            !frame.camera.isValid() ||
+            !frame.camera ||
             frame.depth.empty())
         {
             continue;
@@ -107,42 +109,45 @@ ProjectedDisplacementQuality evaluateProjectedDisplacement(
         const int height = frame.colorBgr.empty()
             ? frame.depth.rows
             : frame.colorBgr.rows;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState projection_camera = frame.camera;
+        auto projection_camera = placamera::FramePinholeNumericState::fromModel(*frame.camera);
         if (width != frame.depth.cols || height != frame.depth.rows)
         {
-            projection_camera = frame.camera.scaledIntrinsics(
+            projection_camera = projection_camera.scaledIntrinsics(
                 static_cast<double>(width) /
                     static_cast<double>(frame.depth.cols),
                 static_cast<double>(height) /
                     static_cast<double>(frame.depth.rows));
         }
+        const placamera::FrameId &ground_frame = projection_camera.groundFrame();
         for (std::size_t index = 0; index < baseline.vertices.size(); ++index)
         {
             const MeshVertex &source = baseline.vertices[index];
             const MeshVertex &target = candidate.vertices[index];
-            const double source_world[3]{source.x, source.y, source.z};
-            const double target_world[3]{target.x, target.y, target.z};
-            double source_pixel[2]{};
-            double target_pixel[2]{};
-            double source_depth = 0.0;
-            double target_depth = 0.0;
-            if (!projection_camera.projectWorldPointWithDepth(
-                    source_world, source_pixel, source_depth) ||
-                !projection_camera.projectWorldPointWithDepth(
-                    target_world, target_pixel, target_depth) ||
-                source_pixel[0] < 0.0 ||
-                source_pixel[0] > static_cast<double>(width - 1) ||
-                source_pixel[1] < 0.0 ||
-                source_pixel[1] > static_cast<double>(height - 1) ||
-                target_pixel[0] < 0.0 ||
-                target_pixel[0] > static_cast<double>(width - 1) ||
-                target_pixel[1] < 0.0 ||
-                target_pixel[1] > static_cast<double>(height - 1))
+            const auto source_projection = projection_camera.groundToImage(
+                {ground_frame, {source.x, source.y, source.z}});
+            const auto target_projection = projection_camera.groundToImage(
+                {ground_frame, {target.x, target.y, target.z}});
+            if (!source_projection || !target_projection ||
+                !source_projection.value().positiveDepth ||
+                !target_projection.value().positiveDepth)
             {
                 continue;
             }
-            const double delta_x = target_pixel[0] - source_pixel[0];
-            const double delta_y = target_pixel[1] - source_pixel[1];
+            const auto &source_pixel = source_projection.value().image;
+            const auto &target_pixel = target_projection.value().image;
+            if (source_pixel.sample < 0.0 ||
+                source_pixel.sample > static_cast<double>(width - 1) ||
+                source_pixel.line < 0.0 ||
+                source_pixel.line > static_cast<double>(height - 1) ||
+                target_pixel.sample < 0.0 ||
+                target_pixel.sample > static_cast<double>(width - 1) ||
+                target_pixel.line < 0.0 ||
+                target_pixel.line > static_cast<double>(height - 1))
+            {
+                continue;
+            }
+            const double delta_x = target_pixel.sample - source_pixel.sample;
+            const double delta_y = target_pixel.line - source_pixel.line;
             const double displacement = std::hypot(delta_x, delta_y);
             if (std::isfinite(displacement))
             {

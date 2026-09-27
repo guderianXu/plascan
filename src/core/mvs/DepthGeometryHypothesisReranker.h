@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 #include "DepthLayerReliability.h"
 
 #include <opencv2/core.hpp>
@@ -86,8 +86,8 @@ struct DepthGeometryHypothesisRerankMaps
 ProjectedDepthEvidence projectSourceDepthEvidenceToReference(
     const cv::Mat& sourceDepth,
     const cv::Mat& sourceConfidence,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& referenceCamera,
+    const placamera::FramePinholeModel& sourceCamera,
+    const placamera::FramePinholeModel& referenceCamera,
     const cv::Size& referenceSize,
     float maximumProjectionDistancePixels,
     int baselineSector,

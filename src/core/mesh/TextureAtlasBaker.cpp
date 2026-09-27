@@ -7,7 +7,7 @@
 #include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <opencv2/geometry/2d.hpp>
 #include <opencv2/imgproc.hpp>
@@ -99,9 +99,9 @@ cv::Vec3b fallbackColor(const PlaPointCloud &mesh)
     std::uint64_t blue = 0;
     for (int index = 0; index < mesh.colors()->rows(); ++index)
     {
-        red += mesh.colors()->getValue(index, 0);
-        green += mesh.colors()->getValue(index, 1);
-        blue += mesh.colors()->getValue(index, 2);
+        red += mesh.colors()->coeff(index, 0);
+        green += mesh.colors()->coeff(index, 1);
+        blue += mesh.colors()->coeff(index, 2);
     }
     const std::uint64_t count = mesh.colors()->rows();
     return cv::Vec3b(
@@ -113,10 +113,7 @@ cv::Vec3b fallbackColor(const PlaPointCloud &mesh)
 cv::Vec3b meshVertexColor(const PlaPointCloud &mesh, int vertexIndex)
 {
     const auto row = static_cast<plamatrix::Index>(vertexIndex);
-    return cv::Vec3b(
-        mesh.colors()->getValue(row, 2),
-        mesh.colors()->getValue(row, 1),
-        mesh.colors()->getValue(row, 0));
+    return cv::Vec3b(mesh.colors()->coeff(row, 2), mesh.colors()->coeff(row, 1), mesh.colors()->coeff(row, 0));
 }
 
 void bakeVertexColorTile(cv::Mat *atlas,
@@ -732,31 +729,36 @@ bool sampleFaceTextureColor(const PipelineData &data,
     auto append_sample = [&](const FaceCandidate &candidate)
     {
         WeightedColor sample;
-        const TextureSampleStatus status = sampleTextureView(
-            data.views[candidate.viewIndex],
-            world,
-            candidate,
-            config,
-            data.medianEdgeLength,
-            padding,
-            &sample,
-            face_index);
+        const TextureSampleStatus status = sampleTextureView(data.views[candidate.viewIndex],
+                                                             world,
+                                                             candidate,
+                                                             config,
+                                                             data.medianEdgeLength,
+                                                             padding,
+                                                             &sample,
+                                                             face_index);
         TexturePyramidSample pyramid_sample;
         pyramid_sample.pyramid = &data.views[candidate.viewIndex].blendPyramid;
         pyramid_sample.encodedColor = sample.color;
         pyramid_sample.confidence = sample.weight;
         pyramid_sample.primary = candidate.viewIndex == assignment.primaryView;
-        double pixel[2]{};
-        double depth = 0.0;
-        data.views[candidate.viewIndex].colorCamera.projectWorldPointWithDepth(world.data(), pixel, depth);
-        pyramid_sample.pixel = cv::Point2d(pixel[0], pixel[1]);
+        const auto& camera = data.views[candidate.viewIndex].colorCamera;
+        if (!camera)
+        {
+            return;
+        }
+        const auto projected = camera->groundToImage({camera->groundFrame(), world});
+        if (!projected || !projected.value().positiveDepth)
+        {
+            return;
+        }
+        pyramid_sample.pixel = cv::Point2d(projected.value().image.sample, projected.value().image.line);
         if (status == TextureSampleStatus::Sampled)
         {
             samples.push_back(sample);
             pyramid_samples.push_back(pyramid_sample);
         }
-        else if (status == TextureSampleStatus::MissingDepthEvidence &&
-                 candidate.strict &&
+        else if (status == TextureSampleStatus::MissingDepthEvidence && candidate.strict &&
                  candidate.viewIndex == assignment.primaryView)
         {
             missing_primary_sample = sample;
@@ -861,7 +863,7 @@ bool bakeAndExport(const std::string &productsDir,
     filled_mask(cv::Rect(1, 1, fallback_size, fallback_size)).setTo(255);
 
     const int face_count = data->geometry.size();
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texture_indices(
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> texture_indices(
         static_cast<plamatrix::Index>(face_count), 3);
     const float fallback_u =
         atlasCoordinateToNormalizedUv(
@@ -877,7 +879,7 @@ bool bakeAndExport(const std::string &productsDir,
     {
         for (int corner = 0; corner < 3; ++corner)
         {
-            texture_indices.setValue(face_index, corner, 0);
+            texture_indices(face_index, corner) = 0;
         }
     }
 
@@ -921,7 +923,7 @@ bool bakeAndExport(const std::string &productsDir,
                     centers[corner].x(), atlas_size),
                 1.0f - atlasCoordinateToNormalizedUv(
                     centers[corner].y(), atlas_size)});
-            texture_indices.setValue(face_index, corner, texture_index);
+            texture_indices(face_index, corner) = texture_index;
         }
         ++fallback_tile_index;
         return true;
@@ -1096,7 +1098,7 @@ bool bakeAndExport(const std::string &productsDir,
                 texture_coordinate_values.push_back(
                     {atlasCoordinateToNormalizedUv(centers[corner].x(), atlas_size),
                      1.0f - atlasCoordinateToNormalizedUv(centers[corner].y(), atlas_size)});
-                texture_indices.setValue(face_index, corner, texture_index);
+                texture_indices(face_index, corner) = texture_index;
             }
             ++fallback_tile_index;
             ++result->meshRecoveredFaceCount;
@@ -1126,22 +1128,28 @@ bool bakeAndExport(const std::string &productsDir,
                 return false;
             }
             ++processed_faces;
-            const FaceGeometry &face = data->geometry[face_index];
+            const FaceGeometry& face = data->geometry[face_index];
             chart_for_face[static_cast<std::size_t>(face_index)] = chart.index;
-            FaceAssignment &assignment = data->assignments[face_index];
+            FaceAssignment& assignment = data->assignments[face_index];
             bool wrote_face_texel = false;
             std::array<QPointF, 3> atlas_triangle;
             std::array<double, 3> primary_camera_depths{};
             for (int corner = 0; corner < 3; ++corner)
             {
-                double pixel[2]{};
-                if (!primary_view.colorCamera.projectWorldPointWithDepth(
-                        face.vertices[corner].data(),
-                        pixel,
-                        primary_camera_depths[corner]) ||
-                    !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-                    !std::isfinite(primary_camera_depths[corner]) ||
-                    primary_camera_depths[corner] <= 0.0)
+                const auto projected = primary_view.colorCamera->groundToImage(
+                    {primary_view.colorCamera->groundFrame(), face.vertices[corner]});
+                if (!projected || !projected.value().positiveDepth)
+                {
+                    if (errorMsg)
+                    {
+                        *errorMsg = "纹理 v4 烘焙阶段遇到无效相机投影";
+                    }
+                    return false;
+                }
+                const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+                primary_camera_depths[corner] = *projected.value().positiveDepth;
+                if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+                    !std::isfinite(primary_camera_depths[corner]) || primary_camera_depths[corner] <= 0.0)
                 {
                     if (errorMsg)
                     {
@@ -1150,11 +1158,8 @@ bool bakeAndExport(const std::string &productsDir,
                     return false;
                 }
                 atlas_triangle[corner] = sourcePixelToChartAtlas(chart, QPointF(pixel[0], pixel[1]));
-                const std::uint64_t key =
-                    (static_cast<std::uint64_t>(
-                         static_cast<std::uint32_t>(chart.index)) << 32U) |
-                    static_cast<std::uint32_t>(
-                        face.vertexIndices[corner]);
+                const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(chart.index)) << 32U) |
+                                          static_cast<std::uint32_t>(face.vertexIndices[corner]);
                 const auto existing =
                     texture_index_by_chart_vertex.find(key);
                 int texture_index = 0;
@@ -1173,7 +1178,7 @@ bool bakeAndExport(const std::string &productsDir,
                             atlas_triangle[corner].y(), atlas_size)});
                     texture_index_by_chart_vertex.emplace(key, texture_index);
                 }
-                texture_indices.setValue(face_index, corner, texture_index);
+                texture_indices(face_index, corner) = texture_index;
             }
 
             const int left = std::clamp(
@@ -1337,7 +1342,7 @@ bool bakeAndExport(const std::string &productsDir,
                     {
                         for (int corner = 0; corner < 3; ++corner)
                         {
-                            texture_indices.setValue(face_index, corner, 0);
+                            texture_indices(face_index, corner) = 0;
                         }
                     }
                     ++result->unresolvedBakeFaceCount;
@@ -1425,20 +1430,13 @@ bool bakeAndExport(const std::string &productsDir,
             std::clamp(config.sharpeningStrength, 0.0f, 2.0f));
     }
     interpolateMaskedPyramid(&atlas, &filled_mask, true);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
-        static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
+    plamatrix::MatrixXf texture_coordinates(static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
     for (std::size_t index = 0;
          index < texture_coordinate_values.size();
          ++index)
     {
-        texture_coordinates.setValue(
-            static_cast<plamatrix::Index>(index),
-            0,
-            texture_coordinate_values[index][0]);
-        texture_coordinates.setValue(
-            static_cast<plamatrix::Index>(index),
-            1,
-            texture_coordinate_values[index][1]);
+        texture_coordinates(static_cast<plamatrix::Index>(index), 0) = texture_coordinate_values[index][0];
+        texture_coordinates(static_cast<plamatrix::Index>(index), 1) = texture_coordinate_values[index][1];
     }
     // An imported OBJ can retain face UV indices whose range is valid only for
     // its source UV table.  PointCloud validates those existing indices when a
@@ -1453,7 +1451,7 @@ bool bakeAndExport(const std::string &productsDir,
                  column < existing_indices->cols();
                  ++column)
             {
-                existing_indices->setValue(row, column, 0);
+                existing_indices->coeffRef(row, column) = 0;
             }
         }
     }

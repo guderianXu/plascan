@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace xjw::core::project
@@ -66,12 +67,6 @@ QString csvEscaped(QString value)
 {
     value.replace(QLatin1Char('"'), QStringLiteral("\"\""));
     return value;
-}
-
-xjw::camera_models::frame_pinhole::FramePinholeNumericState
-scaledCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera, double scale_x, double scale_y)
-{
-    return camera.scaledIntrinsics(scale_x, scale_y);
 }
 
 cv::Mat buildOverlay(const cv::Mat &source,
@@ -737,19 +732,35 @@ bool writeReportFiles(const ModelImageQualityOptions &options,
 
 } // namespace
 
-QVector<ModelValidationView> ModelImageQualityEvaluator::validationViewsFromMvsWorkspace(
-    const QString &workspacePath,
-    QString *error)
+QVector<ModelValidationView> ModelImageQualityEvaluator::validationViewsFromMvsWorkspace(const QString& workspacePath,
+                                                                                         QString* error)
 {
     QVector<ModelValidationView> views;
     const QVector<xjw::mesh::DepthFrameArtifact> frames =
         xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(workspacePath);
-    for (const xjw::mesh::DepthFrameArtifact &frame : frames)
+    for (const xjw::mesh::DepthFrameArtifact& frame : frames)
     {
-        if (!frame.hasCameraModel || frame.refImage.isEmpty() ||
-            !QFileInfo::exists(frame.refImage))
+        if (frame.refImage.isEmpty() || !QFileInfo::exists(frame.refImage))
         {
             continue;
+        }
+        if (!frame.cameraModel)
+        {
+            if (error)
+            {
+                *error = QStringLiteral("MVS 深度帧 %1 缺少 instance/image/world frame 身份或相机参数无效")
+                             .arg(frame.refIndex);
+            }
+            return {};
+        }
+        const placamera::ImageSize camera_size = frame.cameraModel->imageSize();
+        if (camera_size.samples != frame.gridWidth || camera_size.lines != frame.gridHeight)
+        {
+            if (error)
+            {
+                *error = QStringLiteral("MVS 深度帧 %1 的相机尺寸与深度栅格不一致").arg(frame.refIndex);
+            }
+            return {};
         }
         ModelValidationView view;
         view.id = QFileInfo(frame.refImage).completeBaseName();
@@ -772,8 +783,7 @@ QVector<ModelValidationView> ModelImageQualityEvaluator::validationViewsFromMvsW
     }
     if (views.isEmpty() && error)
     {
-        *error = QStringLiteral("MVS 工作区没有包含有效相机模型的已完成深度帧: %1")
-                     .arg(workspacePath);
+        *error = QStringLiteral("MVS 工作区没有包含有效相机模型的已完成深度帧: %1").arg(workspacePath);
     }
     else if (error)
     {
@@ -908,8 +918,13 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
             result.views.append(quality);
             continue;
         }
+        if (!validation.camera)
+        {
+            quality.error = QStringLiteral("验收视角缺少 PlaCamera 相机模型");
+            result.views.append(quality);
+            continue;
+        }
 
-        const cv::Size original_size = source.size();
         const int maximum_dimension = std::max(1, options.maximumRenderDimension);
         const double scale = std::min(
             1.0, static_cast<double>(maximum_dimension) /
@@ -920,14 +935,18 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
         {
             cv::resize(source, source, render_size, 0.0, 0.0, cv::INTER_AREA);
         }
-        const int camera_width = validation.cameraWidth > 0
-            ? validation.cameraWidth : original_size.width;
-        const int camera_height = validation.cameraHeight > 0
-            ? validation.cameraHeight : original_size.height;
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-            scaledCamera(validation.camera,
-                         static_cast<double>(render_size.width) / static_cast<double>(camera_width),
-                         static_cast<double>(render_size.height) / static_cast<double>(camera_height));
+        const auto& original_camera = *validation.camera;
+        const auto scaled_definition = original_camera.pinholeDefinition().scaledIntrinsics(
+            placamera::CameraDefinitionId("quality-render-definition:" + original_camera.instanceId().value()),
+            static_cast<double>(render_size.width) / original_camera.imageSize().samples,
+            static_cast<double>(render_size.height) / original_camera.imageSize().lines);
+        const auto camera = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("quality-render-instance:" + original_camera.instanceId().value()),
+            original_camera.imageId(),
+            scaled_definition,
+            placamera::ImageSize{render_size.width, render_size.height},
+            original_camera.pose(),
+            original_camera.captureTime());
         const ModelRenderResult render = renderer.render(mesh, camera, render_size);
         quality.width = render_size.width;
         quality.height = render_size.height;

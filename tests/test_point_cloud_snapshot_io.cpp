@@ -39,7 +39,7 @@ SnapshotCloud makeCloud()
     cloud.points()(2, 1) = 8.0f;
     cloud.points()(2, 2) = -9.25f;
 
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(3, 3);
     for (plamatrix::Index row = 0; row < 3; ++row)
     {
         colors(row, 0) = static_cast<std::uint8_t>(10 + row);
@@ -129,8 +129,14 @@ TEST(PointCloudSnapshotIOTest, CommitsBinaryLittleEndianPly)
         QStringLiteral("edited.ply"));
     writeOriginalFile(final_path);
 
-    const PointCloudSnapshotStageResult result =
-        stagePointCloudSnapshot(final_path, makeCloud());
+    auto cloud = makeCloud();
+    cloud.setNormals(plamatrix::MatrixXf::Constant(3, 3, 0.5f));
+    cloud.setIntensities(plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic>::Constant(3, 1, 513));
+    cloud.setScalarFields({"quality"}, plamatrix::MatrixXf::Constant(3, 1, 0.75f));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(1, 3);
+    faces << 2, 1, 0;
+    cloud.setFaces(std::move(faces));
+    const PointCloudSnapshotStageResult result = stagePointCloudSnapshot(final_path, cloud);
     expectStagedBesideFinal(result, final_path);
 
     QString error_message;
@@ -144,6 +150,18 @@ TEST(PointCloudSnapshotIOTest, CommitsBinaryLittleEndianPly)
         xjw::common::io::toNativeNarrowPath(final_path));
     ASSERT_NE(loaded, nullptr);
     expectCloudCoordinates(*loaded);
+    ASSERT_TRUE(loaded->hasColors());
+    ASSERT_TRUE(loaded->hasNormals());
+    ASSERT_TRUE(loaded->hasIntensities());
+    ASSERT_TRUE(loaded->hasScalarField("quality"));
+    ASSERT_TRUE(loaded->hasFaces());
+    EXPECT_EQ(loaded->colors()->coeff(2, 1), 22);
+    EXPECT_FLOAT_EQ(loaded->normals()->coeff(1, 2), 0.5f);
+    EXPECT_EQ(loaded->intensities()->coeff(1, 0), 513);
+    EXPECT_FLOAT_EQ(loaded->scalarFields()->coeff(1, 0), 0.75f);
+    EXPECT_EQ(loaded->faces()->rows(), 1);
+    EXPECT_EQ(loaded->faces()->coeff(0, 0), 2);
+    EXPECT_EQ(loaded->faces()->coeff(0, 2), 0);
 }
 
 TEST(PointCloudSnapshotIOTest, RejectsUnknownFinalExtension)

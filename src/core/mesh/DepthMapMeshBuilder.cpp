@@ -3,7 +3,6 @@
 #include "DepthFrameUtils.h"
 #include "StudioForegroundMask.h"
 #include "VisualHullReconstructor.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
 
 #include <QDir>
@@ -22,6 +21,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
+#include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace xjw::mesh
@@ -98,7 +101,7 @@ bool parseDoubleArray(const QJsonValue &value, double *output, int count)
 bool parseCameraModel(const QJsonObject& object,
                       int image_width,
                       int image_height,
-                      xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera)
+                      std::shared_ptr<const placamera::FramePinholeModel>* camera)
 {
     if (!camera || object.isEmpty() || image_width <= 0 || image_height <= 0)
     {
@@ -108,53 +111,76 @@ bool parseCameraModel(const QJsonObject& object,
     std::array<double, 3> translation{};
     std::array<double, 3> center{};
     const bool arrays_ok =
-        parseDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")),
-                         worldToCamera.data(),
-                         9) &&
-        parseDoubleArray(object.value(QStringLiteral("translation_world_to_camera")),
-                         translation.data(),
-                         3) &&
+        parseDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")), worldToCamera.data(), 9) &&
+        parseDoubleArray(object.value(QStringLiteral("translation_world_to_camera")), translation.data(), 3) &&
         parseDoubleArray(object.value(QStringLiteral("camera_center")), center.data(), 3);
     const double focalX = object.value(QStringLiteral("fx")).toDouble();
     const double focalY = object.value(QStringLiteral("fy")).toDouble();
-    if (!arrays_ok || !std::isfinite(focalX) || !std::isfinite(focalY) ||
-        std::fabs(focalX) <= 1.0e-12 || std::fabs(focalY) <= 1.0e-12)
+    if (!arrays_ok || !std::isfinite(focalX) || !std::isfinite(focalY) || std::fabs(focalX) <= 1.0e-12 ||
+        std::fabs(focalY) <= 1.0e-12)
     {
         return false;
     }
 
-    std::array<double, 9> cameraToWorld{{
-        worldToCamera[0], worldToCamera[3], worldToCamera[6],
-        worldToCamera[1], worldToCamera[4], worldToCamera[7],
-        worldToCamera[2], worldToCamera[5], worldToCamera[8]
-    }};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-    parsed.setIntrinsics(focalX,
-                         focalY,
-                         object.value(QStringLiteral("cx")).toDouble(),
-                         object.value(QStringLiteral("cy")).toDouble());
-    parsed.setPose(cameraToWorld, center);
-    parsed.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
-    parsed.setImageSize({image_width, image_height});
-    if (!parsed.validateNumericalState())
+    std::array<double, 9> cameraToWorld{{worldToCamera[0],
+                                         worldToCamera[3],
+                                         worldToCamera[6],
+                                         worldToCamera[1],
+                                         worldToCamera[4],
+                                         worldToCamera[7],
+                                         worldToCamera[2],
+                                         worldToCamera[5],
+                                         worldToCamera[8]}};
+    const QString instance_id = object.value(QStringLiteral("instance_id")).toString().trimmed();
+    const QString image_id = object.value(QStringLiteral("image_id")).toString().trimmed();
+    const QString world_frame = object.value(QStringLiteral("world_frame")).toString().trimmed();
+    const bool has_complete_identity = object.value(QStringLiteral("instance_id")).isString() &&
+                                       object.value(QStringLiteral("image_id")).isString() &&
+                                       object.value(QStringLiteral("world_frame")).isString() &&
+                                       !instance_id.isEmpty() && !image_id.isEmpty() && !world_frame.isEmpty();
+    if (!has_complete_identity)
     {
         return false;
     }
-    *camera = parsed;
-    return true;
+    try
+    {
+        const placamera::FrameId ground_frame(world_frame.toStdString());
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = focalX;
+        intrinsics.focalY = focalY;
+        intrinsics.principalX = object.value(QStringLiteral("cx")).toDouble();
+        intrinsics.principalY = object.value(QStringLiteral("cy")).toDouble();
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId(instance_id.toStdString() + "-depth-definition"),
+            intrinsics,
+            {},
+            placamera::PixelConvention::PixelCenter,
+            ground_frame);
+        const auto model =
+            placamera::FramePinholeModel::create(placamera::CameraInstanceId(instance_id.toStdString()),
+                                                 placamera::ImageId(image_id.toStdString()),
+                                                 definition,
+                                                 {image_width, image_height},
+                                                 placamera::Pose::create(ground_frame, center, cameraToWorld));
+        *camera = std::make_shared<const placamera::FramePinholeModel>(std::move(model));
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
 }
 
-bool selectExistingPyramidArtifact(const QDir &directory,
-                                   const QJsonObject &frame_object,
-                                   QString *depth_path,
-                                   QString *confidence_path,
-                                   QString *preview_path,
-                                   QString *valid_mask_path,
-                                   int *grid_width,
-                                   int *grid_height)
+bool selectExistingPyramidArtifact(const QDir& directory,
+                                   const QJsonObject& frame_object,
+                                   QString* depth_path,
+                                   QString* confidence_path,
+                                   QString* preview_path,
+                                   QString* valid_mask_path,
+                                   int* grid_width,
+                                   int* grid_height)
 {
-    if (!depth_path || !confidence_path || !preview_path || !valid_mask_path ||
-        !grid_width || !grid_height)
+    if (!depth_path || !confidence_path || !preview_path || !valid_mask_path || !grid_width || !grid_height)
     {
         return false;
     }
@@ -244,15 +270,14 @@ int countEnclosedMaskHoles(const cv::Mat &mask)
     return hole_count;
 }
 
-bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
-                    std::array<float, 3> *minimum,
-                    std::array<float, 3> *maximum)
+bool estimateBounds(const QVector<DepthFrameArtifact>& frames,
+                    std::array<float, 3>* minimum,
+                    std::array<float, 3>* maximum)
 {
     std::array<std::vector<float>, 3> coordinates;
-    for (const DepthFrameArtifact &frame : frames)
+    for (const DepthFrameArtifact& frame : frames)
     {
-        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) ||
-            !frame.hasCameraModel || frame.depthPath.isEmpty())
+        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) || !frame.cameraModel || frame.depthPath.isEmpty())
         {
             continue;
         }
@@ -261,8 +286,7 @@ bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
         {
             continue;
         }
-        const int stride = std::max(1, static_cast<int>(std::sqrt(
-            static_cast<double>(depth.total()) / 6000.0)));
+        const int stride = std::max(1, static_cast<int>(std::sqrt(static_cast<double>(depth.total()) / 6000.0)));
         for (int row = 0; row < depth.rows; row += stride)
         {
             for (int column = 0; column < depth.cols; column += stride)
@@ -275,17 +299,14 @@ bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
                 // OpenCV's calibrated projection uses integer coordinates for
                 // pixel centres.  Adding half a pixel here shifts every visual-
                 // hull ray away from the depth/TSDF projection convention.
-                const double pixel[2] = {
-                    static_cast<double>(column),
-                    static_cast<double>(row)};
-                double world[3] = {};
-                if (frame.cameraModel.unprojectPixel(pixel, value, world) &&
-                    std::isfinite(world[0]) && std::isfinite(world[1]) &&
-                    std::isfinite(world[2]))
+                const auto ground = frame.cameraModel->imageToGroundAtDepth(
+                    {static_cast<double>(column), static_cast<double>(row)}, value);
+                if (ground && std::isfinite(ground.value().position[0]) && std::isfinite(ground.value().position[1]) &&
+                    std::isfinite(ground.value().position[2]))
                 {
-                    coordinates[0].push_back(static_cast<float>(world[0]));
-                    coordinates[1].push_back(static_cast<float>(world[1]));
-                    coordinates[2].push_back(static_cast<float>(world[2]));
+                    coordinates[0].push_back(static_cast<float>(ground.value().position[0]));
+                    coordinates[1].push_back(static_cast<float>(ground.value().position[1]));
+                    coordinates[2].push_back(static_cast<float>(ground.value().position[2]));
                 }
             }
         }
@@ -451,28 +472,42 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             }
             frame.gridWidth = object.value(QStringLiteral("grid_width")).toInt();
             frame.gridHeight = object.value(QStringLiteral("grid_height")).toInt();
-            frame.hasCameraModel = parseCameraModel(
-                object.value(QStringLiteral("camera_model")).toObject(),
-                frame.gridWidth,
-                frame.gridHeight,
-                &frame.cameraModel);
+            parseCameraModel(object.value(QStringLiteral("camera_model")).toObject(),
+                             frame.gridWidth,
+                             frame.gridHeight,
+                             &frame.cameraModel);
             const int full_grid_width = frame.gridWidth;
             const int full_grid_height = frame.gridHeight;
-            if (!QFileInfo::exists(frame.depthPath) && selectExistingPyramidArtifact(
-                    directory,
-                    object,
-                    &frame.depthPath,
-                    &frame.confidencePath,
-                    &frame.previewPath,
-                    &frame.validMaskPath,
-                    &frame.gridWidth,
-                    &frame.gridHeight))
+            if (!QFileInfo::exists(frame.depthPath) && selectExistingPyramidArtifact(directory,
+                                                                                     object,
+                                                                                     &frame.depthPath,
+                                                                                     &frame.confidencePath,
+                                                                                     &frame.previewPath,
+                                                                                     &frame.validMaskPath,
+                                                                                     &frame.gridWidth,
+                                                                                     &frame.gridHeight))
             {
-                if (frame.hasCameraModel && full_grid_width > 0 && full_grid_height > 0)
+                if (frame.cameraModel && full_grid_width > 0 && full_grid_height > 0)
                 {
-                    frame.cameraModel = frame.cameraModel.scaledIntrinsics(
-                        static_cast<double>(frame.gridWidth) / full_grid_width,
-                        static_cast<double>(frame.gridHeight) / full_grid_height);
+                    try
+                    {
+                        const auto definition = frame.cameraModel->pinholeDefinition().scaledIntrinsics(
+                            placamera::CameraDefinitionId(std::string(frame.cameraModel->definitionId().value()) +
+                                                          "-pyramid"),
+                            static_cast<double>(frame.gridWidth) / full_grid_width,
+                            static_cast<double>(frame.gridHeight) / full_grid_height);
+                        frame.cameraModel = std::make_shared<const placamera::FramePinholeModel>(
+                            placamera::FramePinholeModel::create(frame.cameraModel->instanceId(),
+                                                                 frame.cameraModel->imageId(),
+                                                                 definition,
+                                                                 {frame.gridWidth, frame.gridHeight},
+                                                                 frame.cameraModel->pose(),
+                                                                 frame.cameraModel->captureTime()));
+                    }
+                    catch (const std::exception&)
+                    {
+                        frame.cameraModel.reset();
+                    }
                 }
                 frame.pyramidFallback = true;
             }
@@ -516,17 +551,15 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             frames.push_back(frame);
         }
     }
-    std::sort(frames.begin(), frames.end(), [](const auto &left, const auto &right)
-    {
-        return left.refIndex < right.refIndex;
-    });
+    std::sort(frames.begin(),
+              frames.end(),
+              [](const auto& left, const auto& right) { return left.refIndex < right.refIndex; });
     return frames;
 }
 
-DepthMapVisualHullPreflightResult DepthMapMeshBuilder::inspectVisualHullApplicability(
-    const QString &source_path,
-    int maximum_inspected_frames,
-    int minimum_usable_views)
+DepthMapVisualHullPreflightResult DepthMapMeshBuilder::inspectVisualHullApplicability(const QString& source_path,
+                                                                                      int maximum_inspected_frames,
+                                                                                      int minimum_usable_views)
 {
     DepthMapVisualHullPreflightResult result;
     const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
@@ -539,7 +572,7 @@ DepthMapVisualHullPreflightResult DepthMapMeshBuilder::inspectVisualHullApplicab
     for (const DepthFrameArtifact &frame : frames)
     {
         if (xjw::mvs::isPrimaryFusionFrame(frame.role) &&
-            frame.hasCameraModel && !frame.refImage.isEmpty())
+            frame.cameraModel && !frame.refImage.isEmpty())
         {
             candidates.push_back(&frame);
         }
@@ -581,31 +614,27 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
     return buildVisualHull(source_path, resolution, DepthMapVisualHullOptions{}, progress);
 }
 
-DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
-    const QString &source_path,
-    int resolution,
-    const DepthMapVisualHullOptions &options,
-    const std::function<void(const QString &, int)> &progress)
+DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(const QString& source_path,
+                                                              int resolution,
+                                                              const DepthMapVisualHullOptions& options,
+                                                              const std::function<void(const QString&, int)>& progress)
 {
     DepthMapVisualHullResult result;
     const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
     if (!hasConsistentUsableSceneProfile(frames))
     {
-        result.message = QStringLiteral(
-            "深度图批次的 scene_profile 缺失、无法识别或不一致，"
-            "不能安全构建视觉外壳");
+        result.message = QStringLiteral("深度图批次的 scene_profile 缺失、无法识别或不一致，"
+                                        "不能安全构建视觉外壳");
         return result;
     }
     std::vector<VisualHullView> views;
-    for (const DepthFrameArtifact &frame : frames)
+    for (const DepthFrameArtifact& frame : frames)
     {
-        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) ||
-            !frame.hasCameraModel || frame.refImage.isEmpty())
+        if (!xjw::mvs::isPrimaryFusionFrame(frame.role) || !frame.cameraModel || frame.refImage.isEmpty())
         {
             continue;
         }
-        cv::Mat color = xjw::common::io::readImage(
-            xjw::common::io::toUtf8Path(frame.refImage), cv::IMREAD_COLOR);
+        cv::Mat color = xjw::common::io::readImage(xjw::common::io::toUtf8Path(frame.refImage), cv::IMREAD_COLOR);
         if (color.empty())
         {
             continue;

@@ -3,7 +3,6 @@
 #include "result/OperationResult.h"
 #include "DepthMatStorage.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthMapFusion.h"
 #include "MvsWorkspaceManifest.h"
 
@@ -105,7 +104,7 @@ std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRec
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord& stored,
-                                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                              const placamera::FramePinholeModel& camera,
                                               const xjw::mvs::FusionConfig& fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim = 0);

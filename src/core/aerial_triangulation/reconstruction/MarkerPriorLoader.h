@@ -5,6 +5,7 @@
  * @brief 将完整标记 sidecar 转为 IncrementalSfm 的人工先验轨迹/标尺。
  */
 
+#include <placoordinate/context/CoordinateContext.h>
 #include "registration/PriorTrack.h"
 
 #include <QJsonObject>
@@ -12,11 +13,6 @@
 #include <QString>
 
 #include <vector>
-
-namespace xjw::coordinate_system
-{
-    class CoordinateContext;
-}
 
 namespace xjw::aerial_triangulation
 {
@@ -43,7 +39,7 @@ namespace xjw::aerial_triangulation
         static MarkerPriorLoadResult load(const QString& path,
                                           const QJsonObject& projectMeta,
                                           const QMap<QString, ImageId>& imageIdByCanonicalId,
-                                          const xjw::coordinate_system::CoordinateContext* coordinateContext = nullptr);
+                                          const placoordinate::CoordinateContext* coordinateContext = nullptr);
     };
 
 } // namespace xjw::aerial_triangulation

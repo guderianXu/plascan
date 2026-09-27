@@ -291,7 +291,7 @@ TEST(PointCloudArtifactIOTest, WritesBinaryPlyAndCreatesParentDirectory)
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QString outputPath = QDir(directory.path()).filePath(QStringLiteral("nested/cloud.ply"));
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(1, 3);
+    plamatrix::MatrixXf points(1, 3);
     points(0, 0) = 1.0f;
     points(0, 1) = 2.0f;
     points(0, 2) = 3.0f;

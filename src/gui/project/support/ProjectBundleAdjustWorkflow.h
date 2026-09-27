@@ -1,7 +1,8 @@
 #pragma once
 
 #include "ProjectWorkflowReports.h"
-#include "camera/project/CameraInstanceUpdate.h"
+
+#include <placamera/instance_set.h>
 
 #include <QJsonObject>
 #include <QMap>
@@ -38,9 +39,11 @@ BundleAdjustPreviewPresentation buildBundleAdjustPreviewPresentation(
     const QJsonObject &ba_result,
     int pending_camera_count);
 
-BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
-                                                   const xjw::camera_project::CameraInstanceUpdates &cameraUpdates,
-                                                   const QJsonObject &baResult);
+BundleAdjustCommitResult commitBundleAdjustPreview(
+    ProjectData* projectData,
+    const placamera::CameraInstanceSet& cameraInstances,
+    const QJsonObject& baResult,
+    const QMap<QString, QJsonObject>& annotationsByImageId = {});
 
 BundleAdjustArtifactsResult finalizeBundleAdjustArtifacts(const QString &assetsDir,
                                                           const QJsonObject &baResult,

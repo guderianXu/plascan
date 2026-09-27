@@ -25,7 +25,7 @@ public:
                                        QObject *parent = nullptr);
 
     bool isCloseSavePending() const;
-    void requestCloseAfterSave();
+    bool requestCloseAfterSave();
 
 signals:
     void closeAfterSaveRequested();

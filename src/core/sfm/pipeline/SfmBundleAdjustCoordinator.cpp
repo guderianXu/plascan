@@ -5,8 +5,7 @@
 #include "geometry/TriangulationQuality.h"
 #include "geometry/OpenCvCameraAdapter.h"
 #include "geometry/SimilarityGaugeNormalizer.h"
-#include "BundleAdjustAdaptiveCameraModel.h"
-#include "Intersection.h"
+#include "SfmBundleCameraCodec.h"
 #include "pose/CameraReferencePosePriorAdapter.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "triangulation/Triangulator.h"
@@ -15,6 +14,9 @@
 
 #include "DeterministicOpenCvRansac.h"
 #include <opencv2/core.hpp>
+
+#include <plabundle/adaptive_camera_model.h>
+#include <plabundle/solver.h>
 
 #include <algorithm>
 #include <cmath>
@@ -89,8 +91,9 @@ namespace xjw
                     {
                         continue;
                     }
-                    double pixel[2]{};
-                    if (!reconstruction.camera(element.imageId).projectWorldPoint(point.xyz.data(), pixel))
+                    const auto& camera = reconstruction.camera(element.imageId);
+                    const auto projection = camera.groundToImage({camera.groundFrame(), point.xyz});
+                    if (!projection)
                     {
                         continue;
                     }
@@ -98,8 +101,8 @@ namespace xjw
                     const double scale = std::isfinite(keypoint.scale) && keypoint.scale > 0.0
                                              ? static_cast<double>(keypoint.scale)
                                              : 1.0;
-                    const double dx = (pixel[0] - static_cast<double>(keypoint.x)) / scale;
-                    const double dy = (pixel[1] - static_cast<double>(keypoint.y)) / scale;
+                    const double dx = (projection.value().image.sample - static_cast<double>(keypoint.x)) / scale;
+                    const double dy = (projection.value().image.line - static_cast<double>(keypoint.y)) / scale;
                     const double error = std::hypot(dx, dy);
                     if (std::isfinite(error))
                     {
@@ -116,8 +119,8 @@ namespace xjw
             return std::sqrt(squared_sum / static_cast<double>(residual_count));
         }
 
-        AerialCameraPlaneEstimate estimateAerialCameraPlane(
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras)
+        AerialCameraPlaneEstimate
+        estimateAerialCameraPlane(const std::vector<placamera::FramePinholeNumericState>& cameras)
         {
             AerialCameraPlaneEstimate estimate;
             if (cameras.size() < 3)
@@ -126,12 +129,11 @@ namespace xjw
             }
 
             std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
-            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& sourceCamera : cameras)
+            for (const placamera::FramePinholeNumericState& sourceCamera : cameras)
             {
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-                    sourceCamera.normalizedForPositiveDepth();
-                const auto center = camera.cameraCenter();
-                const auto rotation = camera.cameraToWorldRotation();
+                const placamera::FramePinholeNumericState camera = sourceCamera.normalizedForPositiveDepth();
+                const auto center = camera.pose().center;
+                const auto rotation = camera.pose().cameraToWorldRotation;
                 for (int axis = 0; axis < 3; ++axis)
                 {
                     estimate.center[axis] += center[axis];
@@ -148,9 +150,9 @@ namespace xjw
                 std::sqrt(meanAxis[0] * meanAxis[0] + meanAxis[1] * meanAxis[1] + meanAxis[2] * meanAxis[2]);
 
             cv::Matx33d covariance = cv::Matx33d::zeros();
-            for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : cameras)
+            for (const placamera::FramePinholeNumericState& camera : cameras)
             {
-                const auto center = camera.cameraCenter();
+                const auto center = camera.pose().center;
                 const cv::Vec3d delta(
                     center[0] - estimate.center[0], center[1] - estimate.center[1], center[2] - estimate.center[2]);
                 covariance += (delta * delta.t()) / count;
@@ -184,9 +186,8 @@ namespace xjw
             return estimate;
         }
 
-        double cameraLayerReferenceDriftRms(
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-            const BACameraPlaneConstraint& constraint)
+        double cameraLayerReferenceDriftRms(const std::vector<placamera::FramePinholeNumericState>& cameras,
+                                            const plabundle::CameraPlaneConstraint& constraint)
         {
             if (cameras.empty() || constraint.referenceSignedDistances.size() != cameras.size())
             {
@@ -196,7 +197,7 @@ namespace xjw
             double squaredSum = 0.0;
             for (std::size_t index = 0; index < cameras.size(); ++index)
             {
-                const auto center = cameras[index].cameraCenter();
+                const auto center = cameras[index].pose().center;
                 const double signedDistance = constraint.normal[0] * (center[0] - constraint.point[0]) +
                                               constraint.normal[1] * (center[1] - constraint.point[1]) +
                                               constraint.normal[2] * (center[2] - constraint.point[2]);
@@ -369,19 +370,20 @@ namespace xjw
         return {};
     }
 
-    BAIntrinsicParameterMask SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(SfmBundleAdjustmentStage stage)
+    plabundle::IntrinsicParameterMask
+    SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(SfmBundleAdjustmentStage stage)
     {
-        BAIntrinsicParameterMask mask{};
-        mask[static_cast<std::size_t>(BAIntrinsicParameter::FocalLength)] = true;
-        mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK1)] = true;
-        mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK2)] = true;
+        plabundle::IntrinsicParameterMask mask{};
+        mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::FocalLength)] = true;
+        mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::RadialK1)] = true;
+        mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::RadialK2)] = true;
         if (stage == SfmBundleAdjustmentStage::FinalVariance)
         {
-            mask[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointX)] = true;
-            mask[static_cast<std::size_t>(BAIntrinsicParameter::PrincipalPointY)] = true;
-            mask[static_cast<std::size_t>(BAIntrinsicParameter::RadialK3)] = true;
-            mask[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP1)] = true;
-            mask[static_cast<std::size_t>(BAIntrinsicParameter::TangentialP2)] = true;
+            mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::PrincipalPointX)] = true;
+            mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::PrincipalPointY)] = true;
+            mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::RadialK3)] = true;
+            mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::TangentialP1)] = true;
+            mask[static_cast<std::size_t>(plabundle::IntrinsicParameter::TangentialP2)] = true;
         }
         return mask;
     }
@@ -422,18 +424,17 @@ namespace xjw
         return result;
     }
 
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-    SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+    std::vector<placamera::FramePinholeNumericState> SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
         const std::vector<ImageId>& imageIds,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>* referencesByImageId)
+        const std::vector<placamera::FramePinholeNumericState>& current,
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState>* referencesByImageId)
     {
         if (!referencesByImageId || imageIds.size() != current.size())
         {
             return {};
         }
 
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> references;
+        std::vector<placamera::FramePinholeNumericState> references;
         references.reserve(current.size());
         for (std::size_t index = 0; index < imageIds.size(); ++index)
         {
@@ -445,9 +446,9 @@ namespace xjw
     }
 
     double SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& previous,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences)
+        const std::vector<placamera::FramePinholeNumericState>& previous,
+        const std::vector<placamera::FramePinholeNumericState>& current,
+        const std::vector<placamera::FramePinholeNumericState>& stableReferences)
     {
         if (previous.empty() || previous.size() != current.size() || previous.size() != stableReferences.size())
         {
@@ -457,16 +458,11 @@ namespace xjw
         double maximumChange = 0.0;
         for (std::size_t index = 0; index < current.size(); ++index)
         {
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics before =
-                previous[index].intrinsics();
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics after =
-                current[index].intrinsics();
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics reference =
-                stableReferences[index].intrinsics();
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion beforeDistortion =
-                previous[index].distortion();
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion afterDistortion =
-                current[index].distortion();
+            const placamera::FrameIntrinsics before = previous[index].intrinsics();
+            const placamera::FrameIntrinsics after = current[index].intrinsics();
+            const placamera::FrameIntrinsics reference = stableReferences[index].intrinsics();
+            const placamera::BrownConradyDistortion beforeDistortion = previous[index].distortion();
+            const placamera::BrownConradyDistortion afterDistortion = current[index].distortion();
             const double focalScale = std::max({1.0, std::abs(reference.focalX), std::abs(reference.focalY)});
             const double beforeAspect = before.focalX > 1.0e-12 ? before.focalY / before.focalX : 1.0;
             const double afterAspect = after.focalX > 1.0e-12 ? after.focalY / after.focalX : 1.0;
@@ -597,7 +593,7 @@ namespace xjw
         options.completeMaxReprojError =
             std::max(options.completeMaxReprojError, std::max(12.0, _owner._sfmOptions.filterMaxReprojError * 6.0));
         Triangulator triangulator(
-            *_owner._reconstruction, _owner._correspondenceGraph, _owner._sfmOptions.baOptions.numThreads);
+            *_owner._reconstruction, _owner._correspondenceGraph, _owner._sfmOptions.baOptions.solver.numThreads);
         const TriangulationStats triangulation = triangulator.triangulateTracks(registeredTracks, options);
         const std::array<std::size_t, 3> newNetwork = measureNetwork(*_owner._reconstruction);
 
@@ -631,12 +627,12 @@ namespace xjw
         return accepted;
     }
 
-    void IncrementalSfm::runBundleAdjust(
-        bool localOnly,
-        const std::vector<ImageId>& anchorIds,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* stableIntrinsicReferences,
-        int maxIterationsOverride,
-        SfmBundleAdjustmentStage stage)
+    void
+    IncrementalSfm::runBundleAdjust(bool localOnly,
+                                    const std::vector<ImageId>& anchorIds,
+                                    const std::vector<placamera::FramePinholeNumericState>* stableIntrinsicReferences,
+                                    int maxIterationsOverride,
+                                    SfmBundleAdjustmentStage stage)
     {
         const char* scopeName = localOnly ? "local" : "global";
         const auto reportSkipped = [this, localOnly, scopeName](const std::string& reason)
@@ -661,9 +657,9 @@ namespace xjw
                 _lastGlobalBASharedRadialK3 = 0.0;
                 _lastGlobalBASharedTangentialP1 = 0.0;
                 _lastGlobalBASharedTangentialP2 = 0.0;
-                _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
-                _lastGlobalBAUsedBackend = BABackend::PlaMatrixCpu;
-                _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+                _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend.requested;
+                _lastGlobalBAUsedBackend = plabundle::Backend::PlaMatrixCpu;
+                _lastGlobalBASolveStatus = plabundle::SolveStatus::NotRun;
                 _lastGlobalBASolutionUsable = false;
                 _lastGlobalBAResultApplied = false;
                 _lastGlobalBABackendFallback = false;
@@ -802,7 +798,7 @@ namespace xjw
 
         // 构造 imageId → BA 内部相机索引的映射
         std::unordered_map<ImageId, int> idToIdx;
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> baCameras;
+        std::vector<placamera::FramePinholeNumericState> baCameras;
         for (size_t i = 0; i < baImageIds.size(); ++i)
         {
             idToIdx[baImageIds[i]] = static_cast<int>(i);
@@ -820,7 +816,7 @@ namespace xjw
         }
 
         // 收集轨迹（同时记录 trackIdx → Point3DId 的映射，用于回写和过滤）
-        std::vector<BATrack> baTracks;
+        std::vector<plabundle::Track> baTracks;
         std::vector<Point3DId> trackToPid; // 与 baTracks 索引对应
         std::unordered_map<std::string, int> marker_track_indices;
 
@@ -840,7 +836,7 @@ namespace xjw
             if (!_reconstruction->hasPoint3D(pid))
                 continue;
             const ScenePoint3D& pt = _reconstruction->point3D(pid);
-            BATrack track;
+            plabundle::Track track;
             track.initialPoint = pt.xyz;
 
             if (_controlNetworkApplied && pt.track.source == TrackSource::PriorMarker)
@@ -860,7 +856,7 @@ namespace xjw
                             ++sigma_count;
                         }
                     }
-                    BAControlPointConstraint constraint;
+                    plabundle::ControlPointConstraint constraint;
                     constraint.point = prior->referencePoint;
                     constraint.sigmaMeters =
                         sigma_count > 0 ? std::sqrt(sigma_sum_squared / static_cast<double>(sigma_count)) : 1.0;
@@ -882,7 +878,7 @@ namespace xjw
                 if (elem.featureIdx >= img.keypoints.size())
                     continue;
 
-                BAObservation obs;
+                plabundle::Observation obs;
                 obs.cameraIndex = idxIt->second;
                 obs.u = img.keypoints[elem.featureIdx].x;
                 obs.v = img.keypoints[elem.featureIdx].y;
@@ -924,7 +920,7 @@ namespace xjw
                                                                        globalMultiViewTrackCount);
         if (useMultiViewOnlyGlobalBa)
         {
-            std::vector<BATrack> filtered_tracks;
+            std::vector<plabundle::Track> filtered_tracks;
             std::vector<Point3DId> filtered_point_ids;
             filtered_tracks.reserve(baTracks.size());
             filtered_point_ids.reserve(trackToPid.size());
@@ -962,18 +958,32 @@ namespace xjw
         }
 
         // 构造本次 BA 选项，并显式消除无绝对约束问题的 7 自由度 gauge。
-        BAOptions baOpt = _sfmOptions.baOptions;
+        plabundle::SolveOptions baOpt = _sfmOptions.baOptions;
+        plabundle::Problem baProblem;
+        baProblem.tracks = baTracks;
+        std::string camera_conversion_error;
+        if (!sfm_bundle_camera::encodeAll(baCameras, &baProblem.cameras, &camera_conversion_error))
+        {
+            reportSkipped("frame_camera_conversion_failed: " + camera_conversion_error);
+            return;
+        }
         if (!_sfmOptions.cameraReferencePosePriors.empty())
         {
-            if (_sfmOptions.useKnownCameraPoses || !baOpt.cameraPosePriors.empty())
+            if (_sfmOptions.useKnownCameraPoses || !baProblem.cameraPosePriors.empty())
             {
                 reportSkipped("external_camera_reference_conflicts_with_known_pose_source");
                 return;
             }
 
+            std::vector<CameraReferenceTarget> referenceTargets;
+            referenceTargets.reserve(baCameras.size());
+            for (const auto& camera : baCameras)
+            {
+                referenceTargets.push_back({camera.imageId(), camera.groundFrame()});
+            }
             const CameraReferencePosePriorAdapterResult converted =
-                CameraReferencePosePriorAdapter::toBundleAdjustPriors(
-                    baCameras, _sfmOptions.cameraReferencePosePriors);
+                CameraReferencePosePriorAdapter::toBundleAdjustPriors(referenceTargets,
+                                                                      _sfmOptions.cameraReferencePosePriors);
             if (!converted.ok())
             {
                 reportSkipped("external_camera_reference_alignment_failed: " + converted.error);
@@ -981,34 +991,39 @@ namespace xjw
             }
             if (converted.hasEnabledPriors())
             {
-                baOpt.cameraPosePriors = converted.priors;
+                baProblem.cameraPosePriors = converted.priors;
                 Logger::instance()->infof("[BA] external_camera_reference_priors matched=%zu ignored=%zu provenance=%s",
                                           converted.matchedReferenceCount,
                                           converted.ignoredReferenceCount,
                                           converted.commonTransformProvenanceHash.c_str());
             }
         }
-        baOpt.useReferenceOnlineSchur =
+        baOpt.solver.useReferenceOnlineSchur =
             _sfmOptions.executionProfile == SfmExecutionProfile::FullRefinement && !_sfmOptions.useKnownCameraPoses;
         // 普通增量/最终 BA 单次最多 10 次；初始像对 evaluator 通过显式覆盖使用 20 次。
         // 外层继续按阶段执行 BA—重三角化—过滤并判断有效点净增量。
-        baOpt.maxIterations =
-            maxIterationsOverride > 0 ? maxIterationsOverride : std::min(10, std::max(1, baOpt.maxIterations));
-        baOpt.enablePointFilter = false;
+        baOpt.solver.maxIterations =
+            maxIterationsOverride > 0 ? maxIterationsOverride : std::min(10, std::max(1, baOpt.solver.maxIterations));
+        baOpt.solver.enablePointFilter = false;
         if (stableIntrinsicReferences)
         {
-            baOpt.sharedIntrinsicReferenceCameras = *stableIntrinsicReferences;
+            if (!sfm_bundle_camera::encodeAll(
+                    *stableIntrinsicReferences, &baProblem.sharedIntrinsicReferenceCameras, &camera_conversion_error))
+            {
+                reportSkipped("stable_intrinsic_reference_conversion_failed: " + camera_conversion_error);
+                return;
+            }
         }
-        BAAdaptiveCameraModelAssessment adaptiveCameraModelAssessment;
+        plabundle::AdaptiveCameraModelAssessment adaptiveCameraModelAssessment;
         bool adaptiveCameraModelFittingEvaluated = false;
-        BAIntrinsicParameterMask effectiveIntrinsicParameterMask{};
+        plabundle::IntrinsicParameterMask effectiveIntrinsicParameterMask{};
         std::string effectiveAdaptiveCameraModel = "fixed";
         if (localOnly)
         {
             // 局部窗口只负责稳定新注册相机，不需要沿用最终全局 BA 的 20 轮预算。
             // 这也避免数百图工程在每个局部窗口输出整段迭代日志，造成“逐图平差”的错觉。
-            baOpt.maxIterations = std::min(baOpt.maxIterations, 10);
-            baOpt.logIterationProgress = false;
+            baOpt.solver.maxIterations = std::min(baOpt.solver.maxIterations, 10);
+            baOpt.solver.logIterationProgress = false;
         }
         const bool referenceGlobalCalibration = _sfmOptions.executionProfile == SfmExecutionProfile::FullRefinement &&
                                                 !localOnly && !_sfmOptions.useKnownCameraPoses;
@@ -1022,44 +1037,50 @@ namespace xjw
             _sfmOptions.useKnownCameraPoses && _sfmOptions.keepIntrinsicsFixedInKnownPoseBa;
         if (refineSharedIntrinsics && !keepKnownPoseIntrinsicsFixed)
         {
-            baOpt.cameraCalibrationGroupIds = sensorCalibrationGroups(*_reconstruction, baImageIds);
+            baProblem.cameraCalibrationGroupIds = sensorCalibrationGroups(*_reconstruction, baImageIds);
         }
         if (!refineSharedIntrinsics || keepKnownPoseIntrinsicsFixed)
         {
             // 局部/未完整注册阶段只优化位姿和物点；完整已知位姿路径还要遵守调用方
             // 的固定标定契约。两者都不能把 adaptive 最大模型的残余开关带入 BA。
-            baOpt.refineSharedFocalLength = false;
-            baOpt.refineSharedFocalAspectRatio = false;
-            baOpt.refineSharedPrincipalPoint = false;
-            baOpt.refineSharedRadialDistortion = false;
-            baOpt.refineSharedHighOrderDistortion = false;
-            baOpt.useSharedIntrinsicParameterMask = false;
-            baOpt.cameraCalibrationGroupIds.clear();
-            baOpt.sharedIntrinsicReferenceCameras.clear();
+            baOpt.calibration.refineSharedFocalLength = false;
+            baOpt.calibration.refineSharedFocalAspectRatio = false;
+            baOpt.calibration.refineSharedPrincipalPoint = false;
+            baOpt.calibration.refineSharedRadialDistortion = false;
+            baOpt.calibration.refineSharedHighOrderDistortion = false;
+            baOpt.calibration.useSharedIntrinsicParameterMask = false;
+            baProblem.cameraCalibrationGroupIds.clear();
+            baProblem.sharedIntrinsicReferenceCameras.clear();
         }
         else if (_sfmOptions.adaptiveCameraModelFitting)
         {
-            adaptiveCameraModelAssessment = assessAdaptiveCameraModel(baCameras, baTracks, &baOpt);
-            applyAdaptiveCameraModel(adaptiveCameraModelAssessment, &baOpt);
-            if (!baOpt.sharedIntrinsicReferenceCameras.empty() &&
-                !restoreInactiveAdaptiveIntrinsics(
-                    &baCameras, baOpt.sharedIntrinsicReferenceCameras, baOpt.sharedIntrinsicParameterMask))
+            adaptiveCameraModelAssessment = plabundle::assessAdaptiveCameraModel(baProblem, baOpt);
+            plabundle::applyAdaptiveCameraModel(adaptiveCameraModelAssessment, &baOpt);
+            if (!baProblem.sharedIntrinsicReferenceCameras.empty() &&
+                !plabundle::restoreInactiveAdaptiveIntrinsics(&baProblem.cameras,
+                                                              baProblem.sharedIntrinsicReferenceCameras,
+                                                              baOpt.calibration.sharedIntrinsicParameterMask))
             {
                 Logger::instance()->warn("[BA] adaptive intrinsic restore skipped: stable reference size mismatch");
             }
+            else if (!sfm_bundle_camera::decodeAll(baProblem.cameras, &baCameras, &camera_conversion_error))
+            {
+                reportSkipped("adaptive_camera_restore_failed: " + camera_conversion_error);
+                return;
+            }
             adaptiveCameraModelFittingEvaluated = true;
-            effectiveIntrinsicParameterMask = baOpt.sharedIntrinsicParameterMask;
-            effectiveAdaptiveCameraModel = adaptiveCameraModelName(effectiveIntrinsicParameterMask);
+            effectiveIntrinsicParameterMask = baOpt.calibration.sharedIntrinsicParameterMask;
+            effectiveAdaptiveCameraModel = plabundle::adaptiveCameraModelName(effectiveIntrinsicParameterMask);
 
             std::ostringstream parameterSummary;
-            for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
+            for (std::size_t index = 0; index < plabundle::kIntrinsicParameterCount; ++index)
             {
                 if (index > 0)
                 {
                     parameterSummary << ',';
                 }
-                const auto parameter = static_cast<BAIntrinsicParameter>(index);
-                parameterSummary << baIntrinsicParameterName(parameter) << '='
+                const auto parameter = static_cast<plabundle::IntrinsicParameter>(index);
+                parameterSummary << plabundle::intrinsicParameterName(parameter) << '='
                                  << adaptiveCameraModelAssessment.reliability[index]
                                  << (effectiveIntrinsicParameterMask[index] ? ":on" : ":off");
             }
@@ -1091,47 +1112,52 @@ namespace xjw
         }
         else if (referenceGlobalCalibration)
         {
-            baOpt.refineSharedFocalLength = true;
-            baOpt.refineSharedFocalAspectRatio = false;
-            baOpt.refineSharedPrincipalPoint = stage == SfmBundleAdjustmentStage::FinalVariance;
-            baOpt.refineSharedRadialDistortion = true;
-            baOpt.refineSharedHighOrderDistortion = true;
-            baOpt.useSharedIntrinsicParameterMask = true;
-            baOpt.sharedIntrinsicParameterMask = SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(stage);
-            effectiveIntrinsicParameterMask = baOpt.sharedIntrinsicParameterMask;
-            effectiveAdaptiveCameraModel = adaptiveCameraModelName(effectiveIntrinsicParameterMask);
+            baOpt.calibration.refineSharedFocalLength = true;
+            baOpt.calibration.refineSharedFocalAspectRatio = false;
+            baOpt.calibration.refineSharedPrincipalPoint = stage == SfmBundleAdjustmentStage::FinalVariance;
+            baOpt.calibration.refineSharedRadialDistortion = true;
+            baOpt.calibration.refineSharedHighOrderDistortion = true;
+            baOpt.calibration.useSharedIntrinsicParameterMask = true;
+            baOpt.calibration.sharedIntrinsicParameterMask =
+                SfmBundleAdjustCoordinator::referenceIntrinsicParameterMask(stage);
+            effectiveIntrinsicParameterMask = baOpt.calibration.sharedIntrinsicParameterMask;
+            effectiveAdaptiveCameraModel = plabundle::adaptiveCameraModelName(effectiveIntrinsicParameterMask);
         }
-        const bool seedSharedFocal = sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::FocalLength);
-        const bool seedSharedK1 = sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::RadialK1);
+        const bool seedSharedFocal =
+            plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::FocalLength);
+        const bool seedSharedK1 =
+            plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::RadialK1);
         const bool refiningSharedCameraModel =
             refineSharedIntrinsics &&
-            (seedSharedFocal || sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::FocalAspectRatio) ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::PrincipalPointX) ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::PrincipalPointY) || seedSharedK1 ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::RadialK2) ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::RadialK3) ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::TangentialP1) ||
-             sharedIntrinsicParameterEnabled(baOpt, BAIntrinsicParameter::TangentialP2));
-        if (refiningSharedCameraModel && baOpt.sharedIntrinsicReferenceCameras.empty())
+            (seedSharedFocal ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::FocalAspectRatio) ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::PrincipalPointX) ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::PrincipalPointY) ||
+             seedSharedK1 ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::RadialK2) ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::RadialK3) ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::TangentialP1) ||
+             plabundle::sharedIntrinsicParameterEnabled(baOpt, plabundle::IntrinsicParameter::TangentialP2));
+        if (refiningSharedCameraModel && baProblem.sharedIntrinsicReferenceCameras.empty())
         {
-            baOpt.sharedIntrinsicReferenceCameras = baCameras;
+            baProblem.sharedIntrinsicReferenceCameras = baProblem.cameras;
         }
         if (refiningSharedCameraModel)
         {
-            BAIntrinsicParameterMask requested_parameters{};
+            plabundle::IntrinsicParameterMask requested_parameters{};
             for (std::size_t parameter = 0; parameter < requested_parameters.size(); ++parameter)
             {
-                requested_parameters[parameter] =
-                    sharedIntrinsicParameterEnabled(baOpt, static_cast<BAIntrinsicParameter>(parameter));
+                requested_parameters[parameter] = plabundle::sharedIntrinsicParameterEnabled(
+                    baOpt, static_cast<plabundle::IntrinsicParameter>(parameter));
             }
-            baOpt.useReferenceCalibrationTransitionPrior = true;
-            baOpt.referencePreviousIntrinsicParameterMask =
+            baOpt.calibration.useReferenceCalibrationTransitionPrior = true;
+            baOpt.calibration.referencePreviousIntrinsicParameterMask =
                 referenceGlobalCalibration ? _referenceCommittedIntrinsicParameterMask : requested_parameters;
-            baOpt.maxIterations = std::min(10, std::max(1, baOpt.maxIterations));
+            baOpt.solver.maxIterations = std::min(10, std::max(1, baOpt.solver.maxIterations));
         }
         // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
         // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
-        baOpt.gaugePolicy = BAGaugePolicy::CallerManaged;
+        baProblem.gauge.policy = plabundle::GaugePolicy::CallerManaged;
         int control_scale_bar_count = 0;
         for (std::size_t scale_index = 0; scale_index < _pendingPriorScaleBars.size(); ++scale_index)
         {
@@ -1149,51 +1175,53 @@ namespace xjw
             {
                 continue;
             }
-            BAScaleBarConstraint constraint;
+            plabundle::ScaleBarConstraint constraint;
             constraint.trackIndexA = first->second;
             constraint.trackIndexB = second->second;
             constraint.measuredDistanceMeters = scale_bar.measuredDistance;
             constraint.sigmaMeters = scale_bar.sigma;
             constraint.weight = 1.0;
             constraint.sourceIndex = static_cast<int>(scale_index);
-            baOpt.scaleBarConstraints.push_back(constraint);
+            baProblem.scaleBarConstraints.push_back(constraint);
             ++control_scale_bar_count;
         }
-        if (_sfmOptions.useKnownCameraPoses && baOpt.cameraPosePriors.empty())
+        if (_sfmOptions.useKnownCameraPoses && baProblem.cameraPosePriors.empty())
         {
-            baOpt.cameraPosePriors = buildCameraPosePriorsFromInputCameras(baImageIds);
-            baOpt.refineCameraPose = _sfmOptions.refineKnownCameraPoseWithSoftPrior;
+            baProblem.cameraPosePriors = buildCameraPosePriorsFromInputCameras(baImageIds);
+            baOpt.calibration.refineCameraPose = _sfmOptions.refineKnownCameraPoseWithSoftPrior;
         }
         if (_controlNetworkApplied)
         {
             // 已知位姿先验原本位于 SfM 局部坐标系，绝对定向后必须同步变换。
-            for (BACameraPosePrior& prior : baOpt.cameraPosePriors)
+            for (std::optional<plabundle::CameraPosePrior>& prior : baProblem.cameraPosePriors)
             {
-                if (!prior.enabled)
+                if (!prior)
+                {
                     continue;
-                prior.cameraCenter = _controlNetworkTransform.apply(prior.cameraCenter);
-                prior.cameraToWorldRotation = _controlNetworkTransform.rotate(prior.cameraToWorldRotation);
-                prior.positionSigmaMeters *= _controlNetworkTransform.scale;
+                }
+                prior->cameraCenter = _controlNetworkTransform.apply(prior->cameraCenter);
+                prior->cameraToWorldRotation = _controlNetworkTransform.rotate(prior->cameraToWorldRotation);
+                prior->positionSigmaMeters *= _controlNetworkTransform.scale;
             }
         }
         if (control_constraint_count > 0)
         {
-            baOpt.enableControlPointConstraints = true;
-            baOpt.backend = BABackend::Auto;
+            baOpt.backend.requested = plabundle::Backend::Auto;
         }
         if (control_scale_bar_count > 0)
         {
-            baOpt.enableScaleBarConstraints = true;
-            baOpt.backend = BABackend::Auto;
+            baOpt.backend.requested = plabundle::Backend::Auto;
         }
         AerialCameraPlaneEstimate cameraPlaneBefore;
         bool cameraPlaneConstraintActive = false;
-        const bool hasCameraLayerAbsoluteConstraint =
-            control_constraint_count > 0 || control_scale_bar_count > 0 || !baOpt.cameraPosePriors.empty();
+        const bool hasCameraLayerAbsoluteConstraint = control_constraint_count > 0 || control_scale_bar_count > 0 ||
+                                                      std::any_of(baProblem.cameraPosePriors.begin(),
+                                                                  baProblem.cameraPosePriors.end(),
+                                                                  [](const auto& prior) { return prior.has_value(); });
         const bool hasAerialSelfCalibrationAbsoluteConstraint =
-            control_constraint_count > 0 || std::any_of(baOpt.cameraPosePriors.begin(),
-                                                        baOpt.cameraPosePriors.end(),
-                                                        [](const BACameraPosePrior& prior) { return prior.enabled; });
+            control_constraint_count > 0 || std::any_of(baProblem.cameraPosePriors.begin(),
+                                                        baProblem.cameraPosePriors.end(),
+                                                        [](const auto& prior) { return prior.has_value(); });
         cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
         // 最终方差轮必须使用参考实现的完整 Brown 模型（f、cx、cy、k1-k3、p1-p2）。
         // 低阶防拱形保护只用于增量阶段，不能覆盖 FinalVariance 的参数掩码。
@@ -1208,16 +1236,16 @@ namespace xjw
                                                        cameraPlaneBefore.opticalAxisConcentration);
         if (lowOrderAerialSelfCalibration)
         {
-            baOpt.refineSharedHighOrderDistortion = false;
-            baOpt.sharedFocalPriorSigma = std::min(baOpt.sharedFocalPriorSigma, 0.04);
-            baOpt.sharedRadialK1PriorSigma = std::min(baOpt.sharedRadialK1PriorSigma, 0.05);
+            baOpt.calibration.refineSharedHighOrderDistortion = false;
+            baOpt.calibration.sharedFocalPriorSigma = std::min(baOpt.calibration.sharedFocalPriorSigma, 0.04);
+            baOpt.calibration.sharedRadialK1PriorSigma = std::min(baOpt.calibration.sharedRadialK1PriorSigma, 0.05);
             Logger::instance()->infof("[BA] aerial_self_calibration_guard scope=global cameras=%zu "
                                       "opticalAxis=%.6f model=focal+k1 focalPriorSigma=%.6f "
                                       "k1PriorSigma=%.6f",
                                       baCameras.size(),
                                       cameraPlaneBefore.opticalAxisConcentration,
-                                      baOpt.sharedFocalPriorSigma,
-                                      baOpt.sharedRadialK1PriorSigma);
+                                      baOpt.calibration.sharedFocalPriorSigma,
+                                      baOpt.calibration.sharedRadialK1PriorSigma);
         }
         if (!cameraPlaneConstraintActive && _sfmOptions.preserveCameraLayerDuringSelfCalibration)
         {
@@ -1228,15 +1256,15 @@ namespace xjw
                 SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
                     localOnly, hasCameraLayerAbsoluteConstraint, refineSharedIntrinsics, refiningSharedCameraModel))
             {
-                BACameraPlaneConstraint& constraint = baOpt.cameraPlaneConstraint;
-                constraint.enabled = true;
+                baProblem.cameraPlaneConstraint = plabundle::CameraPlaneConstraint{};
+                plabundle::CameraPlaneConstraint& constraint = *baProblem.cameraPlaneConstraint;
                 constraint.point = cameraPlaneBefore.center;
                 constraint.normal = cameraPlaneBefore.normal;
                 constraint.referenceSignedDistances.clear();
                 constraint.referenceSignedDistances.reserve(baCameras.size());
-                for (const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera : baCameras)
+                for (const placamera::FramePinholeNumericState& camera : baCameras)
                 {
-                    const auto center = camera.cameraCenter();
+                    const auto center = camera.pose().center;
                     constraint.referenceSignedDistances.push_back(
                         constraint.normal[0] * (center[0] - constraint.point[0]) +
                         constraint.normal[1] * (center[1] - constraint.point[1]) +
@@ -1247,8 +1275,8 @@ namespace xjw
                 constraint.weight = _sfmOptions.cameraLayerPreservationWeight;
                 // 这是对本轮新增漂移的正则项，不是对相机绝对形状的平面先验。
                 // 使用完整二次项，使所有相机相对各自参考偏移得到一致约束。
-                baOpt.cameraPlaneHuberDelta = 0.0;
-                baOpt.backend = BABackend::Auto;
+                baOpt.constraints.cameraPlaneHuberDelta = 0.0;
+                baOpt.backend.requested = plabundle::Backend::Auto;
                 cameraPlaneConstraintActive = true;
                 Logger::instance()->infof("[BA] camera_layer_preservation scope=global cameras=%zu "
                                           "opticalAxis=%.6f planarityVariance=%.9f "
@@ -1265,9 +1293,9 @@ namespace xjw
             }
         }
         const bool hasAbsolutePoseConstraint =
-            control_constraint_count > 0 || std::any_of(baOpt.cameraPosePriors.begin(),
-                                                        baOpt.cameraPosePriors.end(),
-                                                        [](const BACameraPosePrior& prior) { return prior.enabled; });
+            control_constraint_count > 0 || std::any_of(baProblem.cameraPosePriors.begin(),
+                                                        baProblem.cameraPosePriors.end(),
+                                                        [](const auto& prior) { return prior.has_value(); });
         const bool hasAbsoluteScaleConstraint = hasAbsolutePoseConstraint || control_scale_bar_count > 0;
         std::optional<std::pair<int, int>> similarityGaugeCameras;
 
@@ -1278,28 +1306,28 @@ namespace xjw
                 const auto index = idToIdx.find(fixedImageId);
                 if (index != idToIdx.end())
                 {
-                    baOpt.fixedCameraIndices.push_back(index->second);
+                    baProblem.fixedCameraIndices.push_back(index->second);
                 }
             }
             // 没有外部边界和绝对控制时固定一台相机，消除局部块的旋转和平移规范。
-            if (baOpt.fixedCameraIndices.empty() && !hasAbsolutePoseConstraint && !baImageIds.empty())
+            if (baProblem.fixedCameraIndices.empty() && !hasAbsolutePoseConstraint && !baImageIds.empty())
             {
-                baOpt.fixedCameraIndices.push_back(0);
+                baProblem.fixedCameraIndices.push_back(0);
             }
         }
         else if (!baImageIds.empty())
         {
             if (!hasAbsolutePoseConstraint)
             {
-                baOpt.fixedCameraIndices = {0};
+                baProblem.fixedCameraIndices = {0};
                 if (cameraPlaneConstraintActive && baCameras.size() >= 2)
                 {
-                    const auto anchor_center = baCameras.front().cameraCenter();
+                    const auto anchor_center = baCameras.front().pose().center;
                     int scale_camera_index = -1;
                     double farthest_squared_distance = 0.0;
                     for (int index = 1; index < static_cast<int>(baCameras.size()); ++index)
                     {
-                        const auto center = baCameras[static_cast<std::size_t>(index)].cameraCenter();
+                        const auto center = baCameras[static_cast<std::size_t>(index)].pose().center;
                         const double dx = center[0] - anchor_center[0];
                         const double dy = center[1] - anchor_center[1];
                         const double dz = center[2] - anchor_center[2];
@@ -1312,7 +1340,7 @@ namespace xjw
                     }
                     if (scale_camera_index >= 0 && farthest_squared_distance > 1.0e-20)
                     {
-                        baOpt.fixedCameraIndices.push_back(scale_camera_index);
+                        baProblem.fixedCameraIndices.push_back(scale_camera_index);
                         Logger::instance()->infof("[BA] camera_layer_gauge anchor=0 scaleCamera=%d "
                                                   "baseline=%.6f",
                                                   scale_camera_index,
@@ -1324,29 +1352,29 @@ namespace xjw
 
         // 单目 BA 固定一台相机后仍有尺度规范。不要固定第二台相机的完整位姿；
         // 记录一条非退化基线，并在求解后对全部相机中心和点做同一 Sim(3) 尺度恢复。
-        if (baOpt.refineCameraPose && !hasAbsoluteScaleConstraint && !cameraPlaneConstraintActive &&
-            baOpt.fixedCameraIndices.size() == 1)
+        if (baOpt.calibration.refineCameraPose && !hasAbsoluteScaleConstraint && !cameraPlaneConstraintActive &&
+            baProblem.fixedCameraIndices.size() == 1)
         {
-            const int anchorIndex = baOpt.fixedCameraIndices.front();
+            const int anchorIndex = baProblem.fixedCameraIndices.front();
             if (anchorIndex >= 0 && anchorIndex < static_cast<int>(baCameras.size()))
             {
-                const auto anchorCenter = baCameras[static_cast<std::size_t>(anchorIndex)].cameraCenter();
+                const auto anchorCenter = baCameras[static_cast<std::size_t>(anchorIndex)].pose().center;
                 for (int candidateIndex = static_cast<int>(baCameras.size()) - 1; candidateIndex >= 0; --candidateIndex)
                 {
                     if (candidateIndex == anchorIndex)
                     {
                         continue;
                     }
-                    const auto candidateCenter = baCameras[static_cast<std::size_t>(candidateIndex)].cameraCenter();
+                    const auto candidateCenter = baCameras[static_cast<std::size_t>(candidateIndex)].pose().center;
                     const double dx = candidateCenter[0] - anchorCenter[0];
                     const double dy = candidateCenter[1] - anchorCenter[1];
                     const double dz = candidateCenter[2] - anchorCenter[2];
                     if (dx * dx + dy * dy + dz * dz > 1.0e-20)
                     {
                         similarityGaugeCameras = std::make_pair(anchorIndex, candidateIndex);
-                        baOpt.referenceGaugeAnchorCameraIndex = anchorIndex;
-                        baOpt.referenceGaugeScaleCameraIndex = candidateIndex;
-                        baOpt.referenceGaugeBaseline = std::sqrt(dx * dx + dy * dy + dz * dz);
+                        baProblem.gauge.referenceAnchorCameraIndex = anchorIndex;
+                        baProblem.gauge.referenceScaleCameraIndex = candidateIndex;
+                        baProblem.gauge.referenceBaseline = std::sqrt(dx * dx + dy * dy + dz * dz);
                         break;
                     }
                 }
@@ -1356,47 +1384,60 @@ namespace xjw
         // 在进入可能耗时数分钟的大规模求解前输出完整问题规模和自动后端决策。
         // 之前该日志位于 optimizePoints 之后，运行中无法判断相机/观测规模，
         // 也无法区分 CUDA 未编译和问题规模未达到阈值。
-        if (baOpt.logIterationProgress)
+        if (baOpt.solver.logIterationProgress)
         {
-            const BAProblemStats stats = BundleAdjust::summarizeProblem(baCameras, baTracks);
-            const BABackendDecision decision = BundleAdjust::decideBackendForProblem(stats, baOpt);
-            Logger::instance()->infof("[BA] problem scope=%s cameras=%d tracks=%d observations=%d threads=%d "
-                                      "requested=%s selected=%s reason=%s plaMatrixCudaAvailable=%s "
-                                      "cudaMinCameras=%d cudaMinObservations=%d openClMinCameras=%d "
-                                      "openClMinObservations=%d denseMinCameras=%d cudaDenseMinObservations=%d "
-                                      "openClDenseMinObservations=%d",
-                                      scopeName,
-                                      stats.cameraCount,
-                                      stats.trackCount,
-                                      stats.observationCount,
-                                      baOpt.numThreads,
-                                      BundleAdjust::backendName(baOpt.backend),
-                                      BundleAdjust::backendName(decision.backend),
-                                      decision.reason.c_str(),
-                                      BundleAdjust::isBackendAvailable(BABackend::PlaMatrixCuda) ? "true" : "false",
-                                      baOpt.minPlaMatrixCudaCameras,
-                                      baOpt.minPlaMatrixCudaObservations,
-                                      baOpt.minPlaMatrixOpenClCameras,
-                                      baOpt.minPlaMatrixOpenClObservations,
-                                      baOpt.minPlaMatrixDenseCameras,
-                                      baOpt.minPlaMatrixCudaDenseObservations,
-                                      baOpt.minPlaMatrixOpenClDenseObservations);
+            const plabundle::ProblemStats stats = plabundle::summarizeProblem(baProblem);
+            const plabundle::BackendDecision decision = plabundle::Solver::decideBackendForProblem(baProblem, baOpt);
+            Logger::instance()->infof(
+                "[BA] problem scope=%s cameras=%d tracks=%d observations=%d threads=%d "
+                "requested=%s selected=%s reason=%s plaMatrixCudaAvailable=%s "
+                "plaMatrixVulkanAvailable=%s cudaMinCameras=%d cudaMinObservations=%d "
+                "vulkanMinCameras=%d vulkanMinObservations=%d openClMinCameras=%d "
+                "openClMinObservations=%d denseMinCameras=%d cudaDenseMinObservations=%d "
+                "vulkanDenseMinObservations=%d openClDenseMinObservations=%d",
+                scopeName,
+                stats.cameraCount,
+                stats.trackCount,
+                stats.observationCount,
+                baOpt.solver.numThreads,
+                plabundle::backendName(baOpt.backend.requested),
+                plabundle::backendName(decision.backend),
+                decision.reason.c_str(),
+                plabundle::Solver::isBackendAvailable(plabundle::Backend::PlaMatrixCuda) ? "true" : "false",
+                plabundle::Solver::isBackendAvailable(plabundle::Backend::PlaMatrixVulkan) ? "true" : "false",
+                baOpt.backend.minPlaMatrixCudaCameras,
+                baOpt.backend.minPlaMatrixCudaObservations,
+                baOpt.backend.minPlaMatrixVulkanCameras,
+                baOpt.backend.minPlaMatrixVulkanObservations,
+                baOpt.backend.minPlaMatrixOpenClCameras,
+                baOpt.backend.minPlaMatrixOpenClObservations,
+                baOpt.backend.minPlaMatrixDenseCameras,
+                baOpt.backend.minPlaMatrixCudaDenseObservations,
+                baOpt.backend.minPlaMatrixVulkanDenseObservations,
+                baOpt.backend.minPlaMatrixOpenClDenseObservations);
         }
 
-        BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+        plabundle::Result baResult = plabundle::Solver().solve(baProblem, baOpt);
+        std::vector<placamera::FramePinholeNumericState> refinedCameras = baCameras;
+        if (baResult.usable() &&
+            !sfm_bundle_camera::decodeAll(baResult.refinedCameras, &refinedCameras, &camera_conversion_error))
+        {
+            baResult.solutionUsable = false;
+            baResult.backendMessage += "; typed_camera_apply_failed=" + camera_conversion_error;
+        }
         const double cameraLayerDriftRms =
-            baResult.solutionUsable && cameraPlaneConstraintActive
-                ? cameraLayerReferenceDriftRms(baResult.refinedCameras, baOpt.cameraPlaneConstraint)
+            baResult.usable() && cameraPlaneConstraintActive
+                ? cameraLayerReferenceDriftRms(refinedCameras, *baProblem.cameraPlaneConstraint)
                 : std::numeric_limits<double>::infinity();
 
         bool gaugeNormalizationFailed = false;
-        if (baResult.solutionUsable && similarityGaugeCameras.has_value())
+        if (baResult.usable() && similarityGaugeCameras.has_value())
         {
             const SimilarityGaugeNormalizationResult gaugeResult =
                 normalizeSimilarityGauge(baCameras,
                                          similarityGaugeCameras->first,
                                          similarityGaugeCameras->second,
-                                         &baResult.refinedCameras,
+                                         &refinedCameras,
                                          &baResult.points);
             if (gaugeResult.applied)
             {
@@ -1416,28 +1457,29 @@ namespace xjw
             }
         }
 
-        bool applyBaResult = baResult.solutionUsable && !gaugeNormalizationFailed;
+        bool applyBaResult = baResult.usable() && !gaugeNormalizationFailed;
         if (!applyBaResult)
         {
             Logger::instance()->warnf("[BA] 求解结果不可写回: status=%d backend=%s message=%s",
-                                      static_cast<int>(baResult.solveStatus),
-                                      BundleAdjust::backendName(baResult.usedBackend),
+                                      static_cast<int>(baResult.status),
+                                      plabundle::backendName(baResult.usedBackend),
                                       baResult.backendMessage.c_str());
         }
-        if (applyBaResult && !baResult.plaMatrixReferenceOnlineSchurUsed && control_constraint_count == 0 &&
-            control_scale_bar_count == 0 && std::isfinite(baResult.meanRmsBefore) &&
-            std::isfinite(baResult.meanRmsAfter))
+        if (applyBaResult && !baResult.plaMatrix.referenceOnlineSchurUsed && control_constraint_count == 0 &&
+            control_scale_bar_count == 0 && std::isfinite(baResult.quality.meanRmsBefore) &&
+            std::isfinite(baResult.quality.meanRmsAfter))
         {
-            const double rmsTolerance = std::max(1.0e-9, std::abs(baResult.meanRmsBefore) * 1.0e-6);
-            const double acceptedRmsGrowth =
-                cameraPlaneConstraintActive ? std::max(0.03, std::abs(baResult.meanRmsBefore) * 0.03) : rmsTolerance;
-            if (baResult.meanRmsAfter > baResult.meanRmsBefore + acceptedRmsGrowth)
+            const double rmsTolerance = std::max(1.0e-9, std::abs(baResult.quality.meanRmsBefore) * 1.0e-6);
+            const double acceptedRmsGrowth = cameraPlaneConstraintActive
+                                                 ? std::max(0.03, std::abs(baResult.quality.meanRmsBefore) * 0.03)
+                                                 : rmsTolerance;
+            if (baResult.quality.meanRmsAfter > baResult.quality.meanRmsBefore + acceptedRmsGrowth)
             {
                 applyBaResult = false;
                 Logger::instance()->warnf("[BA] rejected scope=%s reason=reprojection_rms_regressed rms=%.9f->%.9f",
                                           scopeName,
-                                          baResult.meanRmsBefore,
-                                          baResult.meanRmsAfter);
+                                          baResult.quality.meanRmsBefore,
+                                          baResult.quality.meanRmsAfter);
             }
         }
         if (applyBaResult && cameraPlaneConstraintActive)
@@ -1457,40 +1499,41 @@ namespace xjw
                 Logger::instance()->warn("[BA] rejected scope=global reason=camera_layer_reference_drift_exceeded");
             }
         }
-        const bool knownPoseGlobalBa =
-            _sfmOptions.useKnownCameraPoses && !localOnly && baOpt.refineCameraPose && !baOpt.cameraPosePriors.empty();
+        const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&
+                                       baOpt.calibration.refineCameraPose && !baProblem.cameraPosePriors.empty();
         if (knownPoseGlobalBa)
         {
-            if (!std::isfinite(baResult.meanRmsAfter) || baResult.meanRmsAfter > _sfmOptions.filterMaxReprojError)
+            if (!std::isfinite(baResult.quality.meanRmsAfter) ||
+                baResult.quality.meanRmsAfter > _sfmOptions.filterMaxReprojError)
             {
                 applyBaResult = false;
             }
             for (size_t i = 0; applyBaResult && i < baImageIds.size() && i < baCameras.size() &&
-                               i < baResult.refinedCameras.size() && i < baOpt.cameraPosePriors.size();
+                               i < refinedCameras.size() && i < baProblem.cameraPosePriors.size();
                  ++i)
             {
                 const int cameraIndex = static_cast<int>(i);
-                if (std::find(baOpt.fixedCameraIndices.begin(), baOpt.fixedCameraIndices.end(), cameraIndex) !=
-                    baOpt.fixedCameraIndices.end())
+                if (std::find(baProblem.fixedCameraIndices.begin(), baProblem.fixedCameraIndices.end(), cameraIndex) !=
+                    baProblem.fixedCameraIndices.end())
                 {
                     continue;
                 }
-                const BACameraPosePrior& prior = baOpt.cameraPosePriors[i];
-                if (!prior.enabled)
+                const std::optional<plabundle::CameraPosePrior>& prior = baProblem.cameraPosePriors[i];
+                if (!prior)
                 {
                     continue;
                 }
-                const auto beforeCenter = baCameras[i].cameraCenter();
-                const auto afterCenter = baResult.refinedCameras[i].cameraCenter();
+                const auto beforeCenter = baCameras[i].pose().center;
+                const auto afterCenter = refinedCameras[i].pose().center;
                 const double beforeDistance =
-                    std::sqrt((beforeCenter[0] - prior.cameraCenter[0]) * (beforeCenter[0] - prior.cameraCenter[0]) +
-                              (beforeCenter[1] - prior.cameraCenter[1]) * (beforeCenter[1] - prior.cameraCenter[1]) +
-                              (beforeCenter[2] - prior.cameraCenter[2]) * (beforeCenter[2] - prior.cameraCenter[2]));
+                    std::sqrt((beforeCenter[0] - prior->cameraCenter[0]) * (beforeCenter[0] - prior->cameraCenter[0]) +
+                              (beforeCenter[1] - prior->cameraCenter[1]) * (beforeCenter[1] - prior->cameraCenter[1]) +
+                              (beforeCenter[2] - prior->cameraCenter[2]) * (beforeCenter[2] - prior->cameraCenter[2]));
                 const double afterDistance =
-                    std::sqrt((afterCenter[0] - prior.cameraCenter[0]) * (afterCenter[0] - prior.cameraCenter[0]) +
-                              (afterCenter[1] - prior.cameraCenter[1]) * (afterCenter[1] - prior.cameraCenter[1]) +
-                              (afterCenter[2] - prior.cameraCenter[2]) * (afterCenter[2] - prior.cameraCenter[2]));
-                const double tolerance = std::max(1e-3, prior.positionSigmaMeters * 3.0);
+                    std::sqrt((afterCenter[0] - prior->cameraCenter[0]) * (afterCenter[0] - prior->cameraCenter[0]) +
+                              (afterCenter[1] - prior->cameraCenter[1]) * (afterCenter[1] - prior->cameraCenter[1]) +
+                              (afterCenter[2] - prior->cameraCenter[2]) * (afterCenter[2] - prior->cameraCenter[2]));
+                const double tolerance = std::max(1e-3, prior->positionSigmaMeters * 3.0);
                 if (afterDistance > std::max(beforeDistance + tolerance, beforeDistance * 2.0 + 1e-3))
                 {
                     applyBaResult = false;
@@ -1511,47 +1554,47 @@ namespace xjw
                                   baCameras.size(),
                                   baTracks.size(),
                                   baResult.observationCount,
-                                  BundleAdjust::backendName(baResult.requestedBackend),
-                                  BundleAdjust::backendName(baResult.usedBackend),
-                                  BundleAdjust::solveStatusName(baResult.solveStatus),
-                                  baResult.solutionUsable ? "true" : "false",
+                                  plabundle::backendName(baResult.requestedBackend),
+                                  plabundle::backendName(baResult.usedBackend),
+                                  plabundle::solveStatusName(baResult.status),
+                                  baResult.usable() ? "true" : "false",
                                   applyBaResult ? "true" : "false",
                                   baResult.backendFallback ? "true" : "false",
-                                  baResult.plaMatrixReferenceOnlineSchurUsed ? "true" : "false",
-                                  baResult.meanRmsBefore,
-                                  baResult.meanRmsAfter,
-                                  baResult.setupSeconds,
-                                  baResult.solveSeconds,
-                                  baResult.postprocessSeconds,
-                                  baResult.totalSeconds,
-                                  baResult.plaMatrixAssemblySeconds,
-                                  baResult.plaMatrixObjectiveSeconds,
-                                  baResult.plaMatrixTrialStateSeconds,
-                                  baResult.plaMatrixLinearSolveSeconds,
-                                  baResult.plaMatrixLinearIterations,
-                                  baResult.plaMatrixLinearToleranceMinimum,
-                                  baResult.plaMatrixLinearToleranceMaximum,
-                                  baResult.plaMatrixDenseFallbacks,
+                                  baResult.plaMatrix.referenceOnlineSchurUsed ? "true" : "false",
+                                  baResult.quality.meanRmsBefore,
+                                  baResult.quality.meanRmsAfter,
+                                  baResult.timing.setupSeconds,
+                                  baResult.timing.solveSeconds,
+                                  baResult.timing.postprocessSeconds,
+                                  baResult.timing.totalSeconds,
+                                  baResult.plaMatrix.assemblySeconds,
+                                  baResult.plaMatrix.objectiveSeconds,
+                                  baResult.plaMatrix.trialStateSeconds,
+                                  baResult.plaMatrix.linearSolveSeconds,
+                                  baResult.plaMatrix.linearIterations,
+                                  baResult.plaMatrix.linearToleranceMinimum,
+                                  baResult.plaMatrix.linearToleranceMaximum,
+                                  baResult.plaMatrix.denseFallbacks,
                                   baResult.backendMessage.c_str());
-        if (baOpt.refineSharedFocalLength || baOpt.refineSharedFocalAspectRatio || baOpt.refineSharedPrincipalPoint ||
-            baOpt.refineSharedRadialDistortion)
+        if (baOpt.calibration.refineSharedFocalLength || baOpt.calibration.refineSharedFocalAspectRatio ||
+            baOpt.calibration.refineSharedPrincipalPoint || baOpt.calibration.refineSharedRadialDistortion)
         {
             Logger::instance()->infof("[BA] intrinsics scope=%s applied=%s cameras=%d groups=%d "
                                       "focalScale=%.8f aspectScale=%.8f principalOffsetPx=(%.4f,%.4f) "
                                       "distortion=(k1=%.8f,k2=%.8f,k3=%.8f,p1=%.8f,p2=%.8f)",
                                       scopeName,
                                       applyBaResult ? "true" : "false",
-                                      applyBaResult ? baResult.refinedIntrinsicCount : 0,
-                                      applyBaResult ? baResult.refinedCalibrationGroupCount : 0,
-                                      applyBaResult ? baResult.refinedSharedFocalScale : 1.0,
-                                      applyBaResult ? baResult.refinedSharedFocalAspectScale : 1.0,
-                                      applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0,
-                                      applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0,
-                                      applyBaResult ? baResult.refinedSharedRadialK1 : 0.0,
-                                      applyBaResult ? baResult.refinedSharedRadialK2 : 0.0,
-                                      applyBaResult ? baResult.refinedSharedRadialK3 : 0.0,
-                                      applyBaResult ? baResult.refinedSharedTangentialP1 : 0.0,
-                                      applyBaResult ? baResult.refinedSharedTangentialP2 : 0.0);
+                                      applyBaResult ? baResult.quality.refinedIntrinsicCount : 0,
+                                      applyBaResult ? baResult.quality.refinedCalibrationGroupCount : 0,
+                                      applyBaResult ? baResult.quality.refinedSharedFocalScale : 1.0,
+                                      applyBaResult ? baResult.quality.refinedSharedFocalAspectScale : 1.0,
+                                      applyBaResult ? baResult.quality.refinedSharedPrincipalOffsetX : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedPrincipalOffsetY : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedRadialK1 : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedRadialK2 : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedRadialK3 : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedTangentialP1 : 0.0,
+                                      applyBaResult ? baResult.quality.refinedSharedTangentialP2 : 0.0);
         }
 
         // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
@@ -1559,30 +1602,24 @@ namespace xjw
         {
             for (size_t i = 0; i < baImageIds.size(); ++i)
             {
-                if (i < baResult.refinedCameras.size())
+                if (i < refinedCameras.size())
                 {
-                    _reconstruction->camera(baImageIds[i]) = baResult.refinedCameras[i];
+                    _reconstruction->camera(baImageIds[i]) = refinedCameras[i];
                 }
             }
 
-            if (!localOnly && refineSharedIntrinsics && baResult.refinedCalibrationGroupCount == 1 &&
-                !baResult.refinedCameras.empty())
+            if (!localOnly && refineSharedIntrinsics && baResult.quality.refinedCalibrationGroupCount == 1 &&
+                !refinedCameras.empty())
             {
                 // 未注册影像的 PnP 会从预载相机读取内参。单一镜头组完成全局自标定后，
                 // 将同一组内参同步过去，避免最终重试继续使用零畸变/旧焦距。
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& calibratedCamera =
-                    baResult.refinedCameras.front();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics calibratedIntrinsics =
-                    calibratedCamera.intrinsics();
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion calibratedDistortion =
-                    calibratedCamera.distortion();
+                const placamera::FramePinholeNumericState& calibratedCamera = refinedCameras.front();
+                const placamera::FrameIntrinsics calibratedIntrinsics = calibratedCamera.intrinsics();
+                const placamera::BrownConradyDistortion calibratedDistortion = calibratedCamera.distortion();
                 for (auto& [imageId, camera] : _preloadedCameras)
                 {
                     (void)imageId;
-                    camera.setIntrinsics(calibratedIntrinsics.focalX,
-                                         calibratedIntrinsics.focalY,
-                                         calibratedIntrinsics.principalX,
-                                         calibratedIntrinsics.principalY);
+                    camera.setIntrinsics(calibratedIntrinsics);
                     camera.setDistortion(calibratedDistortion);
                 }
             }
@@ -1603,7 +1640,7 @@ namespace xjw
             if (!_reconstruction->hasPoint3D(pid))
                 continue;
 
-            const BARefinedPoint& bp = baResult.points[ti];
+            const plabundle::RefinedPoint& bp = baResult.points[ti];
             if (!bp.valid)
             {
                 if (_sfmOptions.executionProfile == SfmExecutionProfile::FullRefinement)
@@ -1616,7 +1653,7 @@ namespace xjw
                 }
                 // ── 观测级过滤：逐观测检查重投影误差 ──
                 auto& pt = _reconstruction->point3D(pid);
-                const double filterThresh = _sfmOptions.baOptions.filterMaxReprojError;
+                const double filterThresh = _sfmOptions.baOptions.solver.filterMaxReprojError;
                 std::vector<size_t> badObsIndices;
                 size_t goodObs = 0;
 
@@ -1628,8 +1665,7 @@ namespace xjw
                     if (!_reconstruction->hasCamera(elem.imageId))
                         continue;
 
-                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam =
-                        _reconstruction->camera(elem.imageId);
+                    const placamera::FramePinholeNumericState& cam = _reconstruction->camera(elem.imageId);
                     const ImageData& imgData = _reconstruction->image(elem.imageId);
                     if (elem.featureIdx >= imgData.keypoints.size())
                         continue;
@@ -1638,16 +1674,14 @@ namespace xjw
                     double v_obs = imgData.keypoints[elem.featureIdx].y;
 
                     // 计算重投影
-                    double world[3] = {bp.point[0], bp.point[1], bp.point[2]};
-                    double uv_proj[2] = {0, 0};
-                    bool projected = cam.projectWorldPoint(world, uv_proj);
-                    if (!projected)
+                    const auto projection = cam.groundToImage({cam.groundFrame(), bp.point});
+                    if (!projection)
                     {
                         badObsIndices.push_back(oi);
                         continue;
                     }
-                    double du = uv_proj[0] - u_obs;
-                    double dv = uv_proj[1] - v_obs;
+                    double du = projection.value().image.sample - u_obs;
+                    double dv = projection.value().image.line - v_obs;
                     double reproj = std::sqrt(du * du + dv * dv);
                     const float storedScale = imgData.keypoints[elem.featureIdx].scale;
                     reproj /= std::isfinite(storedScale) && storedScale > 0.0F ? static_cast<double>(storedScale) : 1.0;
@@ -1696,46 +1730,48 @@ namespace xjw
         // 全局 BA：记录统计供最终结果使用（lastGlobalBA* 成员变量）
         if (!localOnly)
         {
-            if (applyBaResult && baOpt.useReferenceCalibrationTransitionPrior)
+            if (applyBaResult && baOpt.calibration.useReferenceCalibrationTransitionPrior)
             {
-                _referenceCommittedIntrinsicParameterMask = baResult.referenceCommittedIntrinsicParameterMask;
+                _referenceCommittedIntrinsicParameterMask = baResult.quality.referenceCommittedIntrinsicParameterMask;
             }
-            const double appliedRmsAfter = applyBaResult ? baResult.meanRmsAfter : baResult.meanRmsBefore;
+            const double appliedRmsAfter =
+                applyBaResult ? baResult.quality.meanRmsAfter : baResult.quality.meanRmsBefore;
             _lastControlPointConstraintCount = control_constraint_count;
             _lastControlScaleBarConstraintCount = control_scale_bar_count;
-            _lastGlobalBARmsBefore = baResult.meanRmsBefore;
+            _lastGlobalBARmsBefore = baResult.quality.meanRmsBefore;
             _lastGlobalBARmsAfter = appliedRmsAfter;
-            _lastGlobalBATracksTotal = baResult.totalTracks;
-            _lastGlobalBATracksOptimized = baResult.optimizedTracks;
+            _lastGlobalBATracksTotal = baResult.quality.totalTracks;
+            _lastGlobalBATracksOptimized = baResult.quality.optimizedTracks;
             _lastGlobalBATracksFiltered =
-                applyBaResult ? static_cast<int>(baTracks.size()) - baResult.optimizedTracks : 0;
+                applyBaResult ? static_cast<int>(baTracks.size()) - baResult.quality.optimizedTracks : 0;
             if (_lastGlobalBATracksFiltered < 0)
                 _lastGlobalBATracksFiltered = deletedPts;
-            _lastGlobalBARefinedIntrinsicCount = applyBaResult ? baResult.refinedIntrinsicCount : 0;
-            _lastGlobalBARefinedCalibrationGroupCount = applyBaResult ? baResult.refinedCalibrationGroupCount : 0;
-            _lastGlobalBASelfCalibrationStagesRun = applyBaResult ? baResult.selfCalibrationStagesRun : 0;
-            _lastGlobalBASharedFocalScale = applyBaResult ? baResult.refinedSharedFocalScale : 1.0;
-            _lastGlobalBASharedFocalAspectScale = applyBaResult ? baResult.refinedSharedFocalAspectScale : 1.0;
-            _lastGlobalBASharedPrincipalOffsetX = applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0;
-            _lastGlobalBASharedPrincipalOffsetY = applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0;
-            _lastGlobalBASharedRadialK1 = applyBaResult ? baResult.refinedSharedRadialK1 : 0.0;
-            _lastGlobalBASharedRadialK2 = applyBaResult ? baResult.refinedSharedRadialK2 : 0.0;
-            _lastGlobalBASharedRadialK3 = applyBaResult ? baResult.refinedSharedRadialK3 : 0.0;
-            _lastGlobalBASharedTangentialP1 = applyBaResult ? baResult.refinedSharedTangentialP1 : 0.0;
-            _lastGlobalBASharedTangentialP2 = applyBaResult ? baResult.refinedSharedTangentialP2 : 0.0;
+            _lastGlobalBARefinedIntrinsicCount = applyBaResult ? baResult.quality.refinedIntrinsicCount : 0;
+            _lastGlobalBARefinedCalibrationGroupCount =
+                applyBaResult ? baResult.quality.refinedCalibrationGroupCount : 0;
+            _lastGlobalBASelfCalibrationStagesRun = applyBaResult ? baResult.quality.selfCalibrationStagesRun : 0;
+            _lastGlobalBASharedFocalScale = applyBaResult ? baResult.quality.refinedSharedFocalScale : 1.0;
+            _lastGlobalBASharedFocalAspectScale = applyBaResult ? baResult.quality.refinedSharedFocalAspectScale : 1.0;
+            _lastGlobalBASharedPrincipalOffsetX = applyBaResult ? baResult.quality.refinedSharedPrincipalOffsetX : 0.0;
+            _lastGlobalBASharedPrincipalOffsetY = applyBaResult ? baResult.quality.refinedSharedPrincipalOffsetY : 0.0;
+            _lastGlobalBASharedRadialK1 = applyBaResult ? baResult.quality.refinedSharedRadialK1 : 0.0;
+            _lastGlobalBASharedRadialK2 = applyBaResult ? baResult.quality.refinedSharedRadialK2 : 0.0;
+            _lastGlobalBASharedRadialK3 = applyBaResult ? baResult.quality.refinedSharedRadialK3 : 0.0;
+            _lastGlobalBASharedTangentialP1 = applyBaResult ? baResult.quality.refinedSharedTangentialP1 : 0.0;
+            _lastGlobalBASharedTangentialP2 = applyBaResult ? baResult.quality.refinedSharedTangentialP2 : 0.0;
             _lastGlobalBARequestedBackend = baResult.requestedBackend;
             _lastGlobalBAUsedBackend = baResult.usedBackend;
-            _lastGlobalBASolveStatus = baResult.solveStatus;
-            _lastGlobalBASolutionUsable = baResult.solutionUsable;
+            _lastGlobalBASolveStatus = baResult.status;
+            _lastGlobalBASolutionUsable = baResult.usable();
             _lastGlobalBAResultApplied = applyBaResult;
             _lastGlobalBABackendFallback = baResult.backendFallback;
             _lastGlobalBAObservationCount = baResult.observationCount;
-            _lastGlobalBATotalSeconds = baResult.totalSeconds;
+            _lastGlobalBATotalSeconds = baResult.timing.totalSeconds;
             _lastGlobalBABackendMessage = useMultiViewOnlyGlobalBa
                                               ? "network=multi_view_only; " + baResult.backendMessage
                                               : baResult.backendMessage;
             const bool adaptiveCameraModelAppliedThisRound =
-                adaptiveCameraModelFittingEvaluated && applyBaResult && baResult.refinedIntrinsicCount > 0;
+                adaptiveCameraModelFittingEvaluated && applyBaResult && baResult.quality.refinedIntrinsicCount > 0;
             SfmAdaptiveCameraModelDiagnosticSnapshot previousDiagnostics;
             previousDiagnostics.evaluated = _lastGlobalBAAdaptiveCameraModelFittingEvaluated;
             previousDiagnostics.applied = _lastGlobalBAAdaptiveCameraModelFittingApplied;
@@ -1754,7 +1790,7 @@ namespace xjw
             _lastGlobalBAAdaptiveCameraModel = mergedDiagnostics.accumulated.modelName;
             // 参考阶段使用固定的低阶/完整 Brown 掩码，不运行 adaptive assessment。
             // 其实际生效掩码必须独立于 adaptive 诊断合并保存，否则会被误报为全 false。
-            if (applyBaResult && baResult.refinedIntrinsicCount > 0)
+            if (applyBaResult && baResult.quality.refinedIntrinsicCount > 0)
             {
                 _lastGlobalBAIntrinsicParameterMask = effectiveIntrinsicParameterMask;
                 _lastGlobalBAAdaptiveCameraModel = effectiveAdaptiveCameraModel;
@@ -1816,7 +1852,7 @@ namespace xjw
             HierarchicalBundleAdjuster::shouldRun(_sfmOptions.enableHierarchicalBA,
                                                   registered_count,
                                                   _sfmOptions.hierarchicalBAMinImages,
-                                                  _sfmOptions.baOptions.refineCameraPose) &&
+                                                  _sfmOptions.baOptions.calibration.refineCameraPose) &&
             !_sfmOptions.useKnownCameraPoses && !_controlNetworkApplied && _pendingPriorTracks.empty() &&
             _pendingPriorScaleBars.empty();
         const bool recently_partitioned = hierarchical_schedule_active && _lastHierarchicalBAImageCount > 0 &&
@@ -1835,7 +1871,8 @@ namespace xjw
             hierarchical_schedule_active ? HierarchicalBundleAdjuster(*this).run() : HierarchicalBaRunSummary{};
         if (hierarchical_summary.applied())
         {
-            Triangulator hierarchical_tri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator hierarchical_tri(
+                *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             const int retriangulated = hierarchical_tri.retriangulatePoints(_sfmOptions.filterMaxReprojError);
             hierarchical_tri.filterPoints(_sfmOptions.filterMaxReprojError, _sfmOptions.filterMinTriAngle);
             hierarchical_tri.completeTracks(_sfmOptions.triangulatorOptions);
@@ -1858,11 +1895,12 @@ namespace xjw
             // 共享镜头自标定后必须重三角化并再做一次全局求解，否则输出点网仍对应
             // 旧内参。固定内参路径保持单轮，避免大工程产生不必要的重复计算。
             bool refiningSharedCameraModel = false;
-            for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
+            for (std::size_t index = 0; index < plabundle::kIntrinsicParameterCount; ++index)
             {
                 refiningSharedCameraModel =
                     refiningSharedCameraModel ||
-                    sharedIntrinsicParameterEnabled(_sfmOptions.baOptions, static_cast<BAIntrinsicParameter>(index));
+                    plabundle::sharedIntrinsicParameterEnabled(_sfmOptions.baOptions,
+                                                               static_cast<plabundle::IntrinsicParameter>(index));
             }
             maxRounds = refiningSharedCameraModel ? std::min(3, maxRounds) : 1;
             Logger::instance()->info(
@@ -1875,22 +1913,18 @@ namespace xjw
         // IncrementalSfm 生命周期的首次影像标定，不能在周期/最终/重试 BA 间重新锚定。
         std::vector<ImageId> iterativeImageIds = _reconstruction->registeredImageIds();
         std::sort(iterativeImageIds.begin(), iterativeImageIds.end());
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> currentIntrinsicCameras;
+        std::vector<placamera::FramePinholeNumericState> currentIntrinsicCameras;
         currentIntrinsicCameras.reserve(iterativeImageIds.size());
         for (const ImageId imageId : iterativeImageIds)
         {
             currentIntrinsicCameras.push_back(_reconstruction->camera(imageId));
         }
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> iterativeIntrinsicReferences =
-            _sfmOptions.baOptions.sharedIntrinsicReferenceCameras;
-        if (iterativeIntrinsicReferences.size() != iterativeImageIds.size())
-        {
-            iterativeIntrinsicReferences = SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+        const std::vector<placamera::FramePinholeNumericState> iterativeIntrinsicReferences =
+            SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
                 iterativeImageIds, currentIntrinsicCameras, &_stableIntrinsicReferenceByImageId);
-        }
 
         size_t prevNumPoints = _reconstruction->numPoints3D();
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> previousRoundIntrinsicCameras;
+        std::vector<placamera::FramePinholeNumericState> previousRoundIntrinsicCameras;
 
         for (int round = 0; round < maxRounds; ++round)
         {
@@ -1903,7 +1937,7 @@ namespace xjw
                                       stage_name,
                                       round + 1,
                                       maxRounds,
-                                      maxIterations > 0 ? maxIterations : _sfmOptions.baOptions.maxIterations,
+                                      maxIterations > 0 ? maxIterations : _sfmOptions.baOptions.solver.maxIterations,
                                       _reconstruction->numPoints3D());
 
             // (1) 过滤负深度点
@@ -1938,7 +1972,7 @@ namespace xjw
 
             // (3) 先恢复上一轮过滤后重新可用的完整输入轨迹，再利用 BA 后相机
             // 位姿刷新已有点。这与参考实现的 available-tracks refresh 顺序一致。
-            Triangulator tri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator tri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             TriangulatorOptions refresh_options = _sfmOptions.triangulatorOptions;
             refresh_options.maxReprojError = filter_threshold;
             refresh_options.continueMaxReprojError = filter_threshold;
@@ -1969,7 +2003,7 @@ namespace xjw
                     tri.recomputeReprojErrors();
                 }
                 const ReferenceStructureFilterResult filter_result = filterReferenceStructurePoints(
-                    *_reconstruction, filter_threshold, _sfmOptions.baOptions.numThreads);
+                    *_reconstruction, filter_threshold, _sfmOptions.baOptions.solver.numThreads);
                 nFiltered = filter_result.totalRemoved();
                 Logger::instance()->infof("[SFM]   Reference filters far=%d inaccurate=%d weak=%d",
                                           filter_result.farPoints,
@@ -2071,10 +2105,9 @@ namespace xjw
                 if (!_reconstruction->hasCamera(elem.imageId))
                     continue;
 
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam =
-                    _reconstruction->camera(elem.imageId);
-                const double world[3] = {xyz[0], xyz[1], xyz[2]};
-                if (!cam.isPointInFront(world))
+                const placamera::FramePinholeNumericState& cam = _reconstruction->camera(elem.imageId);
+                const auto depth = cam.signedDepth({cam.groundFrame(), xyz});
+                if (!depth || depth.value() <= 0.0)
                 {
                     badObsIndices.push_back(oi);
                     hasNegativeDepth = true;

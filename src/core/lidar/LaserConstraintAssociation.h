@@ -1,7 +1,8 @@
 #pragma once
 
-#include "BundleAdjustSolver.h"
 #include "LaserConstraintMap.h"
+
+#include <plabundle/problem.h>
 
 #include <vector>
 
@@ -28,7 +29,7 @@ struct LaserAssociationSummary
 };
 
 LaserAssociationSummary attachLaserPlaneConstraints(const LaserConstraintMap &map,
-                                                    std::vector<xjw::BATrack> *tracks,
+                                                    std::vector<plabundle::Track> *tracks,
                                                     const LaserAssociationOptions &options);
 
 } // namespace lidar

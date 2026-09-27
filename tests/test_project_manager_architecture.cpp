@@ -69,7 +69,7 @@ namespace
             QStringLiteral("std::make_unique<xjw::gui::project::ProjectServiceContainer>(projectData, parent)")));
     }
 
-    TEST(ProjectManagerArchitectureTest, PublicCommandsAreOnlyStableServiceAccessorsAndCleanupWait)
+    TEST(ProjectManagerArchitectureTest, PublicCommandsAreOnlyStableServiceAccessors)
     {
         const QSet<QString> expected{
             QStringLiteral("ProjectManager"),
@@ -80,7 +80,6 @@ namespace
             QStringLiteral("resources"),
             QStringLiteral("cleanup"),
             QStringLiteral("lifecycle"),
-            QStringLiteral("waitForResourceCleanup"),
         };
         EXPECT_EQ(extractPublicMethods(readTextFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"))),
                   expected);
@@ -116,9 +115,9 @@ namespace
         const QString tasks = readTextFile(QStringLiteral("src/gui/project/tasks/ProjectTaskOrchestrator.h"));
 
         for (const QString& method : {
-                 QStringLiteral("getPinholeNumericStatesForImages"),
                  QStringLiteral("getImageIdsForImages"),
                  QStringLiteral("getReferenceCameraGeometriesForImages"),
+                 QStringLiteral("getPinholeModelsForImages"),
                  QStringLiteral("getRpcCameraImagePaths"),
              })
         {

@@ -76,7 +76,6 @@ function(add_plascan_cli name)
 endfunction()
 
 add_subdirectory(common)
-add_subdirectory(camera)
 add_subdirectory(control_points)
 add_subdirectory(features)
 add_subdirectory(dense)

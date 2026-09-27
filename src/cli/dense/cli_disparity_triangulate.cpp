@@ -7,11 +7,10 @@
 // =============================================================================
 #include "cli_common.h"
 #include "DisparityTriangulator.h"
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/tsai.h>
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgcodecs.hpp>
@@ -23,7 +22,7 @@
 #include <cstdint>
 #include <string>
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     CLI::App app{"PlaScan 视差三角化工具 — 视差图 → 密集点云 .ply"};
     cli::configureApp(app);
@@ -31,23 +30,25 @@ int main(int argc, char *argv[])
     std::string dispPath, rectPath, camL, camR, outPath, intensityImagePath, validMaskPath;
     app.add_option("-d,--disparity", dispPath, "视差图路径 (.tif)")->required();
     app.add_option("--rect", rectPath, "校正参数文件 (.xml)")->required();
-    app.add_option("--camL", camL,    "左相机文件路径")->required();
-    app.add_option("--camR", camR,    "右相机文件路径")->required();
+    app.add_option("--camL", camL, "左相机文件路径")->required();
+    app.add_option("--camR", camR, "右相机文件路径")->required();
+    std::string groundFrame = "scene-local";
+    app.add_option("--ground-frame", groundFrame, "两台相机共享的局部地面坐标系 ID");
     app.add_option("-o,--output", outPath, "输出点云路径 (.ply)")->required();
-    app.add_option("--intensity-image", intensityImagePath,
-                   "可选：与视差图同尺寸的灰度影像，用于写入 intensity 属性");
-    app.add_option("--valid-mask", validMaskPath,
-                   "可选：与视差图同尺寸的 8 位有效掩码（非零表示有效）");
+    app.add_option("--intensity-image", intensityImagePath, "可选：与视差图同尺寸的灰度影像，用于写入 intensity 属性");
+    app.add_option("--valid-mask", validMaskPath, "可选：与视差图同尺寸的 8 位有效掩码（非零表示有效）");
 
     float maxError = 0.01f;
-    int   threads  = 4;
+    int threads = 4;
     app.add_option("--max-error", maxError, "最大三角化误差 (m)");
-    app.add_option("--threads",   threads,  "线程数");
+    app.add_option("--threads", threads, "线程数");
 
     bool verbose = false;
     app.add_flag("-V,--verbose", verbose, "详细诊断日志");
 
     CLI11_PARSE(app, argc, argv);
+    if (groundFrame.find_first_not_of(" \t\r\n") == std::string::npos)
+        cli::fatal("地面坐标系 ID 不能为空", cli::EXIT_ARG_ERR);
 
     // 加载视差图
     cv::Mat disparity = xjw::common::io::readImage(dispPath, cv::IMREAD_UNCHANGED);
@@ -76,28 +77,39 @@ int main(int argc, char *argv[])
     if (!fs.isOpened())
         cli::fatal("无法加载校正参数: " + rectPath, cli::EXIT_IO_ERR);
     cv::Mat H1inv, H2inv;
+    int originalWidth = 0;
+    int originalHeight = 0;
     fs["H1inv"] >> H1inv;
     fs["H2inv"] >> H2inv;
+    fs["origW"] >> originalWidth;
+    fs["origH"] >> originalHeight;
     fs.release();
 
-    // 相机文件是输入边界；数值内核只接收独立的数值状态。
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camLObj;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camRObj;
-    QJsonObject camLMetadata;
-    QJsonObject camRMetadata;
-    QString cameraError;
-    if (!xjw::common::project::parseTsaiCamera(
-            xjw::common::io::fromUtf8Path(camL), &camLMetadata, &cameraError) ||
-        !xjw::common::project::decodeFramePinholeNumericState(camLMetadata, &camLObj))
+    const placamera::FrameId ground_frame(groundFrame);
+    const auto left_camera =
+        placamera::loadTsaiFramePinhole(camL, placamera::CameraDefinitionId("triangulate-left"), ground_frame);
+    if (!left_camera)
     {
-        cli::fatal("无法加载左相机: " + camL, cli::EXIT_IO_ERR);
+        cli::fatal("无法加载左相机: " + camL + " (" + left_camera.message() + ")", cli::EXIT_IO_ERR);
     }
-    if (!xjw::common::project::parseTsaiCamera(
-            xjw::common::io::fromUtf8Path(camR), &camRMetadata, &cameraError) ||
-        !xjw::common::project::decodeFramePinholeNumericState(camRMetadata, &camRObj))
+    const auto right_camera =
+        placamera::loadTsaiFramePinhole(camR, placamera::CameraDefinitionId("triangulate-right"), ground_frame);
+    if (!right_camera)
     {
-        cli::fatal("无法加载右相机: " + camR, cli::EXIT_IO_ERR);
+        cli::fatal("无法加载右相机: " + camR + " (" + right_camera.message() + ")", cli::EXIT_IO_ERR);
     }
+    const placamera::ImageSize camera_image_size{originalWidth > 0 ? originalWidth : disparity.cols,
+                                                 originalHeight > 0 ? originalHeight : disparity.rows};
+    const auto camLObj = placamera::FramePinholeModel::create(placamera::CameraInstanceId("triangulate-left"),
+                                                              placamera::ImageId("triangulate-left-image"),
+                                                              left_camera.value().definition,
+                                                              camera_image_size,
+                                                              left_camera.value().pose);
+    const auto camRObj = placamera::FramePinholeModel::create(placamera::CameraInstanceId("triangulate-right"),
+                                                              placamera::ImageId("triangulate-right-image"),
+                                                              right_camera.value().definition,
+                                                              camera_image_size,
+                                                              right_camera.value().pose);
 
     fprintf(stdout, "三角化: %s -> %s\n", dispPath.c_str(), outPath.c_str());
 
@@ -123,8 +135,7 @@ int main(int argc, char *argv[])
             for (int x = 0; x < disparity.cols; ++x)
             {
                 const float value = disparity.at<float>(y, x);
-                validMask.at<uchar>(y, x) =
-                    std::isfinite(value) && value != 0.0f ? 255 : 0;
+                validMask.at<uchar>(y, x) = std::isfinite(value) && value != 0.0f ? 255 : 0;
             }
         }
     }
@@ -132,10 +143,10 @@ int main(int argc, char *argv[])
     // 三角化
     xjw::mvs::TriangulationConfig triCfg;
     triCfg.maxTriangulationError = maxError;
-    triCfg.numThreads            = threads;
+    triCfg.numThreads = threads;
 
-    auto result = xjw::mvs::DisparityTriangulator::triangulate(
-        disparity, validMask, H1inv, H2inv, camLObj, camRObj, triCfg);
+    auto result =
+        xjw::mvs::DisparityTriangulator::triangulate(disparity, validMask, H1inv, H2inv, camLObj, camRObj, triCfg);
     if (!result.errorMessage.empty())
     {
         cli::fatal("三角化失败: " + result.errorMessage, cli::EXIT_ALGO_ERR);
@@ -151,22 +162,23 @@ int main(int argc, char *argv[])
     int count = 0;
     for (int y = 0; y < result.pointCloud.rows; ++y)
         for (int x = 0; x < result.pointCloud.cols; ++x)
-            if (result.validMask.at<uchar>(y, x)) ++count;
+            if (result.validMask.at<uchar>(y, x))
+                ++count;
 
-    using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(count, 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> errors(count, 1);
-    plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> intensities(count, 1);
+    using PlaCloud = plapoint::GeometryCloud<float>;
+    plamatrix::MatrixXf points(count, 3);
+    plamatrix::MatrixXf errors(count, 1);
+    plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic> intensities(count, 1);
 
     int row = 0;
     for (int y = 0; y < result.pointCloud.rows; ++y)
     {
         for (int x = 0; x < result.pointCloud.cols; ++x)
         {
-            if (!result.validMask.at<uchar>(y, x)) continue;
+            if (!result.validMask.at<uchar>(y, x))
+                continue;
             auto pt = result.pointCloud.at<cv::Vec3d>(y, x);
-            const float err = result.errorMap.empty() ? 0.0f
-                              : result.errorMap.at<float>(y, x);
+            const float err = result.errorMap.empty() ? 0.0f : result.errorMap.at<float>(y, x);
             const auto matrixRow = static_cast<plamatrix::Index>(row);
             points(matrixRow, 0) = static_cast<float>(pt[0] + result.pointOffset[0]);
             points(matrixRow, 1) = static_cast<float>(pt[1] + result.pointOffset[1]);
@@ -174,8 +186,7 @@ int main(int argc, char *argv[])
             errors(matrixRow, 0) = err;
             if (!intensityImage.empty())
             {
-                intensities(matrixRow, 0) =
-                    static_cast<std::uint16_t>(intensityImage.at<uchar>(y, x));
+                intensities(matrixRow, 0) = static_cast<std::uint16_t>(intensityImage.at<uchar>(y, x));
             }
             ++row;
         }
@@ -190,10 +201,9 @@ int main(int argc, char *argv[])
 
     try
     {
-        plapoint::io::writePly(
-            xjw::common::io::toNativeNarrowPath(outPath), cloud, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly(xjw::common::io::toNativeNarrowPath(outPath), cloud, plapoint::io::PlyFormat::ASCII);
     }
-    catch (const std::exception &e)
+    catch (const std::exception& e)
     {
         cli::fatal(std::string("无法写入: ") + outPath + " (" + e.what() + ")", cli::EXIT_IO_ERR);
     }

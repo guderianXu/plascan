@@ -1,7 +1,5 @@
 #include "DepthRayMetric.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -47,7 +45,7 @@ std::array<double, 3> cross(
         left[0] * right[1] - left[1] * right[0]};
 }
 
-bool unproject(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool unproject(const placamera::FramePinholeNumericState& camera,
                const std::array<double, 2>& pixel,
                double depth,
                std::array<double, 3>* world)
@@ -56,14 +54,12 @@ bool unproject(const xjw::camera_models::frame_pinhole::FramePinholeNumericState
     {
         return false;
     }
-    const double raw_pixel[2] = {pixel[0], pixel[1]};
-    double raw_world[3]{};
-    if (!camera.unprojectPixel(raw_pixel, depth, raw_world))
+    const auto projected = camera.imageToGroundAtDepth({pixel[0], pixel[1]}, depth);
+    if (!projected)
     {
         return false;
     }
-    const std::array<double, 3> candidate{
-        raw_world[0], raw_world[1], raw_world[2]};
+    const std::array<double, 3> candidate = projected.value().position;
     if (!isFinite(candidate))
     {
         return false;
@@ -72,7 +68,7 @@ bool unproject(const xjw::camera_models::frame_pinhole::FramePinholeNumericState
     return true;
 }
 
-bool makeUnitRay(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool makeUnitRay(const placamera::FramePinholeNumericState& camera,
                  const std::array<double, 2>& pixel,
                  std::array<double, 3>* unit_ray)
 {
@@ -80,12 +76,12 @@ bool makeUnitRay(const xjw::camera_models::frame_pinhole::FramePinholeNumericSta
     {
         return false;
     }
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
-    if (!camera.rayForPixel(pixel, &ray) || !isFinite(ray.direction))
+    const auto ray = camera.imageToImagingLocus({pixel[0], pixel[1]});
+    if (!ray || !isFinite(ray.value().direction))
     {
         return false;
     }
-    *unit_ray = ray.direction;
+    *unit_ray = ray.value().direction;
     return true;
 }
 
@@ -97,7 +93,7 @@ double pointToRayDistance(
     return norm(cross(subtract(point, ray_origin), unit_ray));
 }
 
-bool footprintForAxis(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool footprintForAxis(const placamera::FramePinholeNumericState& camera,
                       const std::array<double, 2>& pixel,
                       const std::array<double, 3>& center,
                       const std::array<double, 3>& world_point,
@@ -175,13 +171,12 @@ bool pointAtDistances(
 
 } // namespace
 
-DepthRayMetricSample DepthRayMetric::evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+DepthRayMetricSample DepthRayMetric::evaluate(const placamera::FramePinholeNumericState& camera,
                                               const std::array<double, 2>& pixel,
                                               double positive_camera_z_depth)
 {
     DepthRayMetricSample result;
-    if (!camera.isValid() ||
-        !(positive_camera_z_depth > kMinimumPositiveDepth) ||
+    if (!(positive_camera_z_depth > kMinimumPositiveDepth) ||
         !std::isfinite(positive_camera_z_depth) ||
         !std::isfinite(pixel[0]) ||
         !std::isfinite(pixel[1]))
@@ -189,7 +184,7 @@ DepthRayMetricSample DepthRayMetric::evaluate(const xjw::camera_models::frame_pi
         return result;
     }
 
-    result.cameraCenter = camera.cameraCenter();
+    result.cameraCenter = camera.pose().center;
     result.cameraZDepth = positive_camera_z_depth;
     if (!isFinite(result.cameraCenter) ||
         !unproject(camera, pixel, positive_camera_z_depth, &result.worldPoint))

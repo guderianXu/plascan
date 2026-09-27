@@ -23,15 +23,15 @@ cv::Mat cameraToWorldMatrix(const std::array<double, 9> &rotation)
 
 } // namespace
 
-cv::Mat openCvCameraMatrix(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-                           bool positiveDepthConvention)
+cv::Mat openCvCameraMatrix(const placamera::FramePinholeDefinition& camera, bool positiveDepthConvention)
 {
-    return openCvCameraMatrix(camera.focalX(),
-                              camera.focalY(),
-                              camera.principalX(),
-                              camera.principalY(),
-                              camera.uAxisSign(),
-                              camera.vAxisSign(),
+    const placamera::FrameIntrinsics& intrinsics = camera.intrinsics();
+    return openCvCameraMatrix(intrinsics.focalX,
+                              intrinsics.focalY,
+                              intrinsics.principalX,
+                              intrinsics.principalY,
+                              intrinsics.uAxisSign,
+                              intrinsics.vAxisSign,
                               camera.depthAxisFlipped(),
                               positiveDepthConvention);
 }
@@ -93,19 +93,18 @@ cv::Mat openCvTvecFromCameraPose(
     return translation;
 }
 
-cv::Mat openCvProjectionMatrix(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+cv::Mat openCvProjectionMatrix(const placamera::FramePinholeModel& camera)
 {
-    const cv::Mat cameraToWorld = cameraToWorldMatrix(camera.cameraToWorldRotation());
+    const cv::Mat cameraToWorld = cameraToWorldMatrix(camera.pose().cameraToWorldRotation);
     const cv::Mat worldToCamera = cameraToWorld.t();
-    const std::array<double, 3> cameraCenter = camera.cameraCenter();
-    const cv::Mat center = (cv::Mat_<double>(3, 1)
-        << cameraCenter[0], cameraCenter[1], cameraCenter[2]);
+    const std::array<double, 3>& cameraCenter = camera.pose().center;
+    const cv::Mat center = (cv::Mat_<double>(3, 1) << cameraCenter[0], cameraCenter[1], cameraCenter[2]);
     const cv::Mat translation = -worldToCamera * center;
 
     cv::Mat extrinsics(3, 4, CV_64F);
     worldToCamera.copyTo(extrinsics(cv::Rect(0, 0, 3, 3)));
     translation.copyTo(extrinsics(cv::Rect(3, 0, 1, 3)));
-    return openCvCameraMatrix(camera, false) * extrinsics;
+    return openCvCameraMatrix(camera.pinholeDefinition(), false) * extrinsics;
 }
 
 } // namespace xjw

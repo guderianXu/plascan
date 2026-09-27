@@ -89,11 +89,12 @@ namespace xjw::gui::project
         void startMapProjectAsync(const OrthoGenerationRequest& request);
         void cancelMapProject();
         bool importCameraForImage(const QString& imagePath);
-        bool importCamerasByFilenameBatch();
+        bool importCameraProject();
         bool initializeCamerasFromExifOrDefault(const QJsonObject& settings);
         bool initializeCamerasFromIntrinsics(const QJsonObject& settings);
         bool initializeCameraPosesWithSFM(const QJsonObject& settings);
         bool hasRunningCameraTask() const noexcept;
+        void cancelCameraTask();
 
         // Controlled task seam used by workflow adapters and deterministic tests.
         bool beginTask(const QString& taskId);
@@ -247,9 +248,9 @@ namespace xjw::gui::project
         bool releaseOrthoLaneIfMatches(const ProjectTaskContext& context);
         void invalidateTerrainLanes();
         bool cameraContextMatches(const ProjectTaskContext& context, bool requireCurrent = true) const;
+        bool startCameraOperation(const QString& taskIdPrefix, std::function<bool(const ProjectTaskContext&)> starter);
         void releaseCameraLane();
         bool releaseCameraLaneIfMatches(const ProjectTaskContext& context);
-        void cancelCameraTask();
         void finishAutomaticModel(bool success);
         bool startAutomaticModelDepth(const QJsonObject& settings);
         void startAutomaticModelBuild(const QString& outputDirectory);

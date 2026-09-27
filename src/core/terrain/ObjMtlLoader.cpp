@@ -2,7 +2,7 @@
 #include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 #include <QDir>
 #include <QFileInfo>
@@ -194,7 +194,7 @@ bool ObjMtlLoader::load(const QString &objPath, TerrainMeshInput *out, QString *
     }
 
     // 1. Read OBJ geometry using plapoint IO
-    std::shared_ptr<plapoint::PointCloud<float, plamatrix::Device::CPU>> cloudPtr;
+    std::shared_ptr<plapoint::GeometryCloud<float>> cloudPtr;
     try
     {
         cloudPtr = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));

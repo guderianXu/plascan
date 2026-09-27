@@ -1,7 +1,9 @@
 #pragma once
 
-#include "MvsTypes.h"
 #include <opencv2/core.hpp>
+#include <placamera/frame_camera.h>
+
+#include <optional>
 #include <string>
 
 namespace xjw
@@ -16,8 +18,8 @@ public:
     {
         cv::Mat rectLeft;
         cv::Mat rectRight;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState rectCamLeft;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState rectCamRight;
+        std::optional<placamera::FramePinholeModel> rectCamLeft;
+        std::optional<placamera::FramePinholeModel> rectCamRight;
         cv::Mat H1;
         cv::Mat H2;
         cv::Mat H1inv;
@@ -30,23 +32,23 @@ public:
 
     static bool rectify(const cv::Mat& imgLeft,
                         const cv::Mat& imgRight,
-                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camLeft,
-                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camRight,
+                        const placamera::FramePinholeModel& camLeft,
+                        const placamera::FramePinholeModel& camRight,
                         RectifiedPair& result,
                         std::string* errorMsg = nullptr);
 
     static cv::Mat
     unrectifyDepth(const cv::Mat& rectifiedDepth,
                    const RectifiedPair& pair,
-                   const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
+                   const placamera::FramePinholeModel& originalReferenceCamera,
                    int origW,
                    int origH);
 
     /// Converts an axial positive-depth interval from the original reference
     /// camera into a conservative interval for the rectified reference camera.
     static bool
-    rectifiedDepthRange(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalReferenceCamera,
-                        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& rectifiedReferenceCamera,
+    rectifiedDepthRange(const placamera::FramePinholeModel& originalReferenceCamera,
+                        const placamera::FramePinholeModel& rectifiedReferenceCamera,
                         int originalWidth,
                         int originalHeight,
                         float originalNear,

@@ -136,6 +136,7 @@ function Invoke-DepthPyramidRegression
     $qualityArguments = @(
         "--mesh", $modelPath,
         "--image-camera-list", $listFile,
+        "--world-frame", "regression-local",
         "--scene-type", [string]$config.QualityScene,
         "--validation-split", "auto",
         "--output-dir", $qualityDir,

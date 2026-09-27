@@ -13,7 +13,7 @@
 #include "common/SfmTypes.h"
 
 #include <plamatrix/plamatrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/search/kdtree.h>
 
@@ -37,14 +37,14 @@ using SparsePointCloudNeighborList = std::vector<SparsePointCloudNeighbor>;
 /**
  * @brief 一次稀疏点处理会话。
  *
- * Cloud 和 KdTree 固定在 PlaMatrix CPU 设备；具体离群点过滤可通过 PlaPoint
- * ProcessingDevice 选择 CPU/CUDA 实现，但返回索引仍映射到该主机工作集。
+ * GeometryCloud 保存双精度几何数据，PointXYZd KD-tree 提供主机搜索；离群点过滤
+ * 通过 PlaPoint ProcessingDevice 选择设备，返回索引始终映射到原始工作集。
  */
 class SparsePointCloudWorkspace
 {
 public:
-    using Cloud = plapoint::PointCloud<double, plamatrix::Device::CPU>;
-    using KdTree = plapoint::search::KdTree<double, plamatrix::Device::CPU>;
+    using Cloud = plapoint::GeometryCloud<double>;
+    using KdTree = plapoint::search::KdTree<plapoint::PointXYZd>;
 
     /// 从普通点数组构建；pointIds 使用无效哨兵。
     static SparsePointCloudWorkspace fromPoints(const std::vector<SparsePointCloudPoint> &points);

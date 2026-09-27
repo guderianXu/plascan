@@ -12,11 +12,11 @@
 #include "projection/AsteroidProjection.h"
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/xyz_io.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <QDir>
 #include <QDateTime>
@@ -969,7 +969,7 @@ namespace xjw
         }
 
         // Build combined point cloud
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> combinedPts(allXs.size(), 3);
+        plamatrix::MatrixXf combinedPts(allXs.size(), 3);
         for (size_t i = 0; i < allXs.size(); ++i)
         {
             combinedPts(static_cast<plamatrix::Index>(i), 0) = allXs[i];
@@ -1244,7 +1244,7 @@ namespace xjw
                 projZs.push_back(static_cast<float>(elev));
             }
 
-            plamatrix::DenseMatrix<float, plamatrix::Device::CPU> projPts(projXs.size(), 3);
+            plamatrix::MatrixXf projPts(projXs.size(), 3);
             for (size_t i = 0; i < projXs.size(); ++i)
             {
                 projPts(static_cast<plamatrix::Index>(i), 0) = projXs[i];
@@ -1299,13 +1299,10 @@ namespace xjw
                 // 用投影后顶点坐标覆盖位置，但保留 UV 纹理坐标和三角面（深拷贝 mesh）
                 TerrainMeshInput projMesh;
                 projMesh.texture = meshInput.texture;
-                // Manually deep-copy PointCloud (DenseMatrix is move-only)
+                // Copy the Eigen-style position matrix before replacing projected coordinates.
                 {
                     const auto& srcPts = meshInput.mesh.points();
-                    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> ptsCopy(srcPts.rows(), srcPts.cols());
-                    for (plamatrix::Index r = 0; r < srcPts.rows(); ++r)
-                        for (int c = 0; c < 3; ++c)
-                            ptsCopy(r, c) = srcPts(r, c);
+                    plamatrix::MatrixXf ptsCopy = srcPts;
                     projMesh.mesh = PlaPointCloud(std::move(ptsCopy));
                 }
                 if (meshInput.mesh.hasNormals())
@@ -1376,12 +1373,11 @@ namespace xjw
         return true;
     }
 
-    bool TerrainPipeline::generateDemFromDepthMaps(
-        const std::vector<cv::Mat>& depthMaps,
-        const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-        const QString& outputDir,
-        QJsonObject* result,
-        QString* errorMsg)
+    bool TerrainPipeline::generateDemFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
+                                                   const std::vector<placamera::FramePinholeModel>& cameras,
+                                                   const QString& outputDir,
+                                                   QJsonObject* result,
+                                                   QString* errorMsg)
     {
         if (depthMaps.empty() || cameras.empty())
         {

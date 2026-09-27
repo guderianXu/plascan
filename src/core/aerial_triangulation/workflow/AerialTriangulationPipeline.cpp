@@ -9,10 +9,10 @@
 
 #include "workflow/AerialTriangulationPipeline.h"
 
-#include "CameraIntrinsicPrior.h"
-#include "ProjectCameraIO.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/project/CameraProjectRuntime.h"
+#include "preparation/CameraIntrinsicPrior.h"
+#include <placamera/tsai.h>
+#include "placamera_runtime/ProjectCameraStore.h"
+#include <placamera/frame_camera.h>
 #include "io/PathIO.h"
 #include "io/ImageIO.h"
 #include "project/ProjectCommonUtils.h"
@@ -210,10 +210,10 @@ namespace xjw::aerial_triangulation
             std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
             for (const ImageId imageId : imageIds)
             {
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
+                const placamera::FramePinholeNumericState camera =
                     reconstruction.camera(imageId).normalizedForPositiveDepth();
-                const auto center = camera.cameraCenter();
-                const auto rotation = camera.cameraToWorldRotation();
+                const auto center = camera.pose().center;
+                const auto rotation = camera.pose().cameraToWorldRotation;
                 for (int axis = 0; axis < 3; ++axis)
                 {
                     meanCenter[axis] += center[axis];
@@ -232,7 +232,7 @@ namespace xjw::aerial_triangulation
             std::array<double, 9> covariance{};
             for (const ImageId imageId : imageIds)
             {
-                const auto center = reconstruction.camera(imageId).cameraCenter();
+                const auto center = reconstruction.camera(imageId).pose().center;
                 const std::array<double, 3> delta{
                     {center[0] - meanCenter[0], center[1] - meanCenter[1], center[2] - meanCenter[2]}};
                 for (int row = 0; row < 3; ++row)
@@ -268,7 +268,7 @@ namespace xjw::aerial_triangulation
         /**
          * @brief 判断每张影像是否都有可直接使用的可信内参。
          *
-         * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效数值状态。
+         * 独立 Tsai 相机文件优先；工程内参必须有规范 PlaCamera 实例和可信来源。
          * 由上一次 SfM 写回的 intrinsic_source=sfm_estimated 不作为新一轮初始化真值。
          */
         bool hasCompleteExternalCameraFiles(const PreparedAerialTriangulationInput& input)
@@ -282,39 +282,19 @@ namespace xjw::aerial_triangulation
                                    {
                                        return false;
                                    }
-                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-                                   return xjw::common::project::loadFramePinholeNumericStateFromFile(path, &camera);
-                   });
-        }
-
-        std::vector<QString> canonicalImageIdsForInput(const PreparedAerialTriangulationInput& input)
-        {
-            std::vector<QString> imageIds;
-            if (input.imageIds.size() == static_cast<std::size_t>(input.images.size()))
-            {
-                imageIds.reserve(input.imageIds.size());
-                for (const camera_core::ImageId& imageId : input.imageIds)
-                {
-                    imageIds.push_back(QString::fromStdString(imageId.value()));
-                }
-                return imageIds;
-            }
-            if (input.cameraBindings.size() == static_cast<std::size_t>(input.images.size()))
-            {
-                imageIds.reserve(input.cameraBindings.size());
-                for (const SolverCameraBinding& binding : input.cameraBindings)
-                {
-                    imageIds.push_back(QString::fromStdString(binding.imageId.value()));
-                }
-            }
-            return imageIds;
+                                   return placamera::loadTsaiFramePinhole(
+                                              xjw::common::io::toUtf8Path(path),
+                                              placamera::CameraDefinitionId("external-sfm-validation"),
+                                              placamera::FrameId("external-sfm-validation"))
+                                       .ok();
+                               });
         }
 
         struct CanonicalRuntimeSelection
         {
             bool present = false;
-            std::optional<xjw::camera_project::CameraProjectRuntimeResult> runtime;
-            std::vector<camera_core::ImageId> imageIds;
+            std::optional<placamera::CameraInstanceSet> runtime;
+            std::vector<placamera::ImageId> imageIds;
             QString error;
         };
 
@@ -337,8 +317,7 @@ namespace xjw::aerial_triangulation
             if (!projectFiles.value(QStringLiteral("camera_instances")).isArray() ||
                 !projectFiles.value(QStringLiteral("camera_definitions")).isArray())
             {
-                result.error = QStringLiteral(
-                    "canonical camera_definitions/camera_instances 必须同时存在且为数组");
+                result.error = QStringLiteral("canonical camera_definitions/camera_instances 必须同时存在且为数组");
                 return result;
             }
 
@@ -360,12 +339,15 @@ namespace xjw::aerial_triangulation
                 return result;
             }
 
-            result.runtime = xjw::camera_project::CameraProjectRuntime::load(
-                projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-            if (!result.runtime->ok())
+            const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+            if (!loaded.ok())
             {
-                result.error = QStringLiteral("canonical 相机运行时无效: %1")
-                                   .arg(result.runtime->errors.join(QStringLiteral("; ")));
+                result.error =
+                    QStringLiteral("canonical 相机运行时无效: %1").arg(loaded.errors.join(QStringLiteral("; ")));
+            }
+            else
+            {
+                result.runtime = loaded.instances;
             }
             return result;
         }
@@ -385,25 +367,43 @@ namespace xjw::aerial_triangulation
                 return QStringLiteral("canonical 相机运行时未解析");
             }
 
-            const camera_core::CameraOperationPlan plan = canonical.runtime->planOperationForImages(
-                canonical.imageIds, camera_core::CameraOperation::StaticSfM);
-            if (!plan.ok())
+            std::vector<placamera::ImageId> image_ids;
+            image_ids.reserve(canonical.imageIds.size());
+            for (const placamera::ImageId& image_id : canonical.imageIds)
             {
-                return QString::fromStdString(plan.failureMessage());
+                image_ids.emplace_back(image_id.value());
+            }
+            const auto selected = canonical.runtime->select(image_ids);
+            if (!selected)
+            {
+                return QString::fromStdString(selected.message());
+            }
+            const auto capabilities =
+                selected.value().requireCapabilities(placamera::CapabilitySet{placamera::CapabilityKind::Projection,
+                                                                              placamera::CapabilityKind::StaticPose,
+                                                                              placamera::CapabilityKind::Optimization});
+            const auto frame = selected.value().requireCommonGroundFrame();
+            if (!capabilities.ok() || !frame.ok())
+            {
+                return QStringLiteral("static_sfm rejected: required capabilities include static_pose and "
+                                      "optimization, and cameras must share a common ground frame");
             }
             return {};
         }
 
-        QMap<QString, QJsonObject> projectCameraParametersByImageId(const QJsonObject& metadata)
+        QMap<QString, QJsonObject> projectCameraStateByImageId(const QJsonObject& metadata)
         {
             QMap<QString, QJsonObject> result;
-            for (const QJsonValue& value : xjw::common::project::projectImageEntries(metadata))
+            const QJsonArray records = xjw::common::project::projectFilesRootObject(metadata)
+                                           .value(QStringLiteral("camera_instances"))
+                                           .toArray();
+            for (const QJsonValue& value : records)
             {
-                const QJsonObject image = value.toObject();
-                const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+                const QJsonObject instance = value.toObject();
+                const QString imageId = instance.value(QStringLiteral("image_uuid")).toString().trimmed();
                 if (!imageId.isEmpty())
                 {
-                    result.insert(imageId, xjw::common::project::projectCameraModelParameters(metadata, image));
+                    result.insert(imageId, instance.value(QStringLiteral("state")).toObject());
                 }
             }
             return result;
@@ -422,56 +422,28 @@ namespace xjw::aerial_triangulation
                 return false;
             }
 
-            if (canonical.present)
-            {
-                if (!canonical.error.isEmpty() || !canonical.runtime)
-                {
-                    return false;
-                }
-                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
-                std::string conversionError;
-                if (!canonical.runtime->framePinholeStatesForImages(
-                        canonical.imageIds, &states, &conversionError))
-                {
-                    return false;
-                }
-                const QMap<QString, QJsonObject> cameraParameters =
-                    projectCameraParametersByImageId(input.projectMeta);
-                for (const camera_core::ImageId& imageId : canonical.imageIds)
-                {
-                    const auto metadata = cameraParameters.constFind(QString::fromStdString(imageId.value()));
-                    if (metadata == cameraParameters.cend() ||
-                        !isTrustedProjectCameraIntrinsic(metadata.value()))
-                    {
-                        return false;
-                    }
-                }
-                return !canonical.imageIds.empty();
-            }
-
-            const std::vector<QString> imageIds = canonicalImageIdsForInput(input);
-            if (imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            if (!canonical.present || !canonical.error.isEmpty() || !canonical.runtime)
             {
                 return false;
             }
-            const QMap<QString, QJsonObject> cameraParameters =
-                projectCameraParametersByImageId(input.projectMeta);
-            for (const QString& imageId : imageIds)
+            for (const placamera::ImageId& imageId : canonical.imageIds)
             {
-                const auto metadata = cameraParameters.constFind(imageId);
-                if (metadata == cameraParameters.cend())
-                {
-                    return false;
-                }
-                const QJsonObject cameraObject = metadata.value();
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-                if (!isTrustedProjectCameraIntrinsic(cameraObject) ||
-                    !xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) || !camera.isValid())
+                const auto lookup = canonical.runtime->forImage(imageId);
+                if (!lookup || dynamic_cast<const placamera::FramePinholeModel*>(lookup.value().get()) == nullptr)
                 {
                     return false;
                 }
             }
-            return !input.images.isEmpty();
+            const QMap<QString, QJsonObject> cameraStates = projectCameraStateByImageId(input.projectMeta);
+            for (const placamera::ImageId& imageId : canonical.imageIds)
+            {
+                const auto state = cameraStates.constFind(QString::fromStdString(imageId.value()));
+                if (state == cameraStates.cend() || !isTrustedProjectCameraIntrinsic(state.value()))
+                {
+                    return false;
+                }
+            }
+            return !canonical.imageIds.empty();
         }
 
         /// 与正式 AttemptRunner 使用同一规则判断是否能复用一整组真实外参。
@@ -488,56 +460,34 @@ namespace xjw::aerial_triangulation
                 return false;
             }
 
-            if (canonical.present)
-            {
-                if (!canonical.error.isEmpty() || !canonical.runtime)
-                {
-                    return false;
-                }
-                std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> states;
-                std::string conversionError;
-                if (!canonical.runtime->framePinholeStatesForImages(
-                        canonical.imageIds, &states, &conversionError))
-                {
-                    return false;
-                }
-                const QMap<QString, QJsonObject> cameraParameters =
-                    projectCameraParametersByImageId(input.projectMeta);
-                for (const camera_core::ImageId& imageId : canonical.imageIds)
-                {
-                    const auto metadata = cameraParameters.constFind(QString::fromStdString(imageId.value()));
-                    if (metadata == cameraParameters.cend() ||
-                        metadata.value().value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
-                    {
-                        return false;
-                    }
-                }
-                return !canonical.imageIds.empty();
-            }
-
-            const std::vector<QString> imageIds = canonicalImageIdsForInput(input);
-            if (imageIds.size() != static_cast<std::size_t>(input.images.size()))
+            if (!canonical.present || !canonical.error.isEmpty() || !canonical.runtime)
             {
                 return false;
             }
-            const QMap<QString, QJsonObject> cameraParameters =
-                projectCameraParametersByImageId(input.projectMeta);
-            for (const QString& imageId : imageIds)
+            for (const placamera::ImageId& imageId : canonical.imageIds)
             {
-                const auto metadata = cameraParameters.constFind(imageId);
-                if (metadata == cameraParameters.cend())
-                {
-                    return false;
-                }
-                const QJsonObject cameraObject = metadata.value();
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-                if (cameraObject.value(QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
-                    !xjw::common::project::decodeFramePinholeNumericState(cameraObject, &camera) || !camera.isValid())
+                const auto lookup = canonical.runtime->forImage(imageId);
+                if (!lookup || dynamic_cast<const placamera::FramePinholeModel*>(lookup.value().get()) == nullptr)
                 {
                     return false;
                 }
             }
-            return !input.images.isEmpty();
+            const QMap<QString, QJsonObject> cameraStates = projectCameraStateByImageId(input.projectMeta);
+            for (const placamera::ImageId& imageId : canonical.imageIds)
+            {
+                const auto state = cameraStates.constFind(QString::fromStdString(imageId.value()));
+                if (state == cameraStates.cend())
+                {
+                    return false;
+                }
+                const QJsonObject annotations = state.value().value(QStringLiteral("metadata")).toObject();
+                if (state.value().value(QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
+                    annotations.value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+                {
+                    return false;
+                }
+            }
+            return !canonical.imageIds.empty();
         }
 
         /// 自标定只有在 BA 确实提交了至少一个内参更新后才算生效。
@@ -637,8 +587,8 @@ namespace xjw::aerial_triangulation
                             valid = false;
                             break;
                         }
-                        const auto current_center = execution.reconstruction->camera(current).cameraCenter();
-                        const auto next_center = execution.reconstruction->camera(next).cameraCenter();
+                        const auto current_center = execution.reconstruction->camera(current).pose().center;
+                        const auto next_center = execution.reconstruction->camera(next).pose().center;
                         const double dx = current_center[0] - next_center[0];
                         const double dy = current_center[1] - next_center[1];
                         const double dz = current_center[2] - next_center[2];

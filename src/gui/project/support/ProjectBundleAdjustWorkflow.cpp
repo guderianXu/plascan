@@ -206,9 +206,11 @@ BundleAdjustPreviewPresentation buildBundleAdjustPreviewPresentation(
     return presentation;
 }
 
-BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
-                                                   const xjw::camera_project::CameraInstanceUpdates &cameraUpdates,
-                                                   const QJsonObject &baResult)
+BundleAdjustCommitResult commitBundleAdjustPreview(
+    ProjectData* projectData,
+    const placamera::CameraInstanceSet& cameraInstances,
+    const QJsonObject& baResult,
+    const QMap<QString, QJsonObject>& annotationsByImageId)
 {
     BundleAdjustCommitResult result;
     if (!projectData)
@@ -217,7 +219,7 @@ BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
         return result;
     }
 
-    if (cameraUpdates.empty())
+    if (cameraInstances.empty())
     {
         result.errorMessage = QStringLiteral("没有可应用的平差相机结果");
         return result;
@@ -225,7 +227,7 @@ BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
 
     QString errorMessage;
     ProjectBundleAdjustMetadataStageToken token;
-    if (!projectData->stageBundleAdjustMetadata(cameraUpdates, baResult, &token, &errorMessage))
+    if (!projectData->stageBundleAdjustMetadata(cameraInstances, annotationsByImageId, baResult, &token, &errorMessage))
     {
         result.errorMessage = errorMessage;
         return result;

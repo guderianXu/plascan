@@ -3,6 +3,10 @@
 `src/core/terrain` 把密集点云、网格、深度产品和已解算相机转换为正式 DEM/DOM 地形成果。
 DEM/DOM、质量栅格、有效参数和覆盖统计都会进入项目结果记录，而不是只作为临时导出文件。
 
+`DemGenerator::generateFromDepthMaps()` 和 `TerrainPipeline::generateDemFromDepthMaps()` 直接接收
+PlaCamera 面阵模型。每幅非空深度图必须与对应模型的影像尺寸一致，所有模型必须共享地面坐标系；
+反投影、回投及三角化误差计算均不再经过旧数值相机状态。
+
 `DemMosaic` 和 `TerrainProductManifest` 位于可选静态库 `terrain_utilities`，头文件路径保持不变。
 生产 `terrain` 不依赖该库；使用这些 API 必须显式链接 `terrain_utilities`。目标采用 `EXCLUDE_FROM_ALL`，
 启用测试时由各自测试构建，也可显式运行 `cmake --build build/linux-source-release --target terrain_utilities`。
@@ -55,8 +59,11 @@ MapProjectDialog
   不加载高程波段。
 - `OrthoProjector::planOutputGrid()` 将用户区域与 DEM 外边界相交，解析最终 X/Y 像元、
   宽高、范围和预计内存。默认像素上限为 100,000,000，超限、无交集或非法范围都会明确失败。
+- `OrthoProjector::buildImageInputs()` 从规范项目相机集合读取 PlaCamera 面阵模型，要求所选相机
+  具有投影和静态位姿能力，且共用同一地面坐标系；不再转换成旧数值相机状态。
 - `OrthoProjector::project()` 在输出网格中心采样 DEM 高程，将三维点投影到已选择的有效相机，
-  双线性采样影像，并记录有效表面、直接影像覆盖和孔洞填充掩膜。
+  CPU 路径直接调用 PlaCamera 投影，GPU 路径从同一模型打包内参、畸变和位姿；双线性采样影像，
+  并记录有效表面、直接影像覆盖和孔洞填充掩膜。
 - `TerrainPipeline` 把后台阶段和百分比回传 GUI，并在安全检查点响应取消；任务完成后把
   已解析参数、网格、相机贡献数和覆盖统计写入 `ortho_results`。
 

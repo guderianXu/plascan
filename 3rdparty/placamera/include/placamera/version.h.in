@@ -1,0 +1,18 @@
+#pragma once
+
+// clang-format off
+#define PLACAMERA_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define PLACAMERA_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define PLACAMERA_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define PLACAMERA_VERSION_STRING "@PROJECT_VERSION@"
+// clang-format on
+
+namespace placamera
+{
+
+    inline constexpr int kVersionMajor = PLACAMERA_VERSION_MAJOR;
+    inline constexpr int kVersionMinor = PLACAMERA_VERSION_MINOR;
+    inline constexpr int kVersionPatch = PLACAMERA_VERSION_PATCH;
+    inline constexpr const char* kVersionString = PLACAMERA_VERSION_STRING;
+
+} // namespace placamera

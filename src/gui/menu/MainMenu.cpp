@@ -1273,7 +1273,6 @@ void MainMenu::buildMenuSystem()
         _generateMaskAct = findNamedChild<QAction>(_mainWindow, "actionGenerateMask");
         _viewWorkflowReportAct = findNamedChild<QAction>(_mainWindow, "actionViewWorkflowReport");
         _cameraCalibrationAct = findNamedChild<QAction>(_mainWindow, "actionCameraCalibration");
-        _cameraConvertAct = findNamedChild<QAction>(_mainWindow, "actionCameraConvert");
         _surveyControlAct = findNamedChild<QAction>(_mainWindow, "actionSurveyControl");
         _detectMarkersAct = findNamedChild<QAction>(_mainWindow, "actionDetectMarkers");
         _reviewMarkerDetectionsAct = findNamedChild<QAction>(_mainWindow, "actionReviewMarkerDetections");
@@ -1426,7 +1425,7 @@ void MainMenu::buildMenuSystem()
             _cameraCalibrationAct->setToolTip(tr("查看空中三角测量前后的相机内参及变化量"));
             if (toolsMenu)
             {
-                QAction* before = _cameraConvertAct ? _cameraConvertAct : _viewWorkflowReportAct;
+                QAction* before = _viewWorkflowReportAct;
                 if (before)
                 {
                     toolsMenu->insertAction(before, _cameraCalibrationAct);
@@ -1434,25 +1433,6 @@ void MainMenu::buildMenuSystem()
                 else
                 {
                     toolsMenu->addAction(_cameraCalibrationAct);
-                }
-            }
-        }
-        if (!_cameraConvertAct)
-        {
-            QObject* actionParent = toolsMenu ? static_cast<QObject*>(toolsMenu) : static_cast<QObject*>(_mainWindow);
-            _cameraConvertAct = new QAction(tr("相机格式转换..."), actionParent);
-            _cameraConvertAct->setObjectName(QStringLiteral("actionCameraConvert"));
-            _cameraConvertAct->setToolTip(tr("将外部相机文件转换为 PlaScan tsai 和 image_camera.lis"));
-            if (toolsMenu)
-            {
-                if (_viewWorkflowReportAct)
-                {
-                    toolsMenu->insertAction(_viewWorkflowReportAct, _cameraConvertAct);
-                    toolsMenu->insertSeparator(_viewWorkflowReportAct);
-                }
-                else
-                {
-                    toolsMenu->addAction(_cameraConvertAct);
                 }
             }
         }
@@ -1464,11 +1444,7 @@ void MainMenu::buildMenuSystem()
             _generateMaskAct->setToolTip(tr("根据照片背景或阈值生成蒙版，并在照片视图中显示轮廓"));
             if (toolsMenu)
             {
-                if (_cameraConvertAct)
-                {
-                    toolsMenu->insertAction(_cameraConvertAct, _generateMaskAct);
-                }
-                else if (_viewWorkflowReportAct)
+                if (_viewWorkflowReportAct)
                 {
                     toolsMenu->insertAction(_viewWorkflowReportAct, _generateMaskAct);
                 }
@@ -1866,12 +1842,11 @@ void MainMenu::buildMenuSystem()
     _generateMaskAct->setObjectName(QStringLiteral("actionGenerateMask"));
     _generateMaskAct->setToolTip(tr("根据照片背景或阈值生成蒙版，并在照片视图中显示轮廓"));
 
-    // 相机校准只读对比，以及外部相机格式转换。
+    // 相机校准只读对比。
     toolsMenu->addSeparator();
     _cameraCalibrationAct = toolsMenu->addAction(tr("相机校准..."));
     _cameraCalibrationAct->setObjectName(QStringLiteral("actionCameraCalibration"));
     _cameraCalibrationAct->setToolTip(tr("查看空中三角测量前后的相机内参及变化量"));
-    _cameraConvertAct = toolsMenu->addAction(tr("相机格式转换..."));
 
     // 参考数据：外部 DEM/LiDAR 只登记引用，用于精度检查和后续 BA 软约束
     _surveyControlAct = toolsMenu->addAction(tr("测绘控制..."));
@@ -2645,10 +2620,6 @@ QAction* MainMenu::freehandSelectionAction() const
 QAction* MainMenu::cameraCalibrationAction() const
 {
     return _cameraCalibrationAct;
-}
-QAction* MainMenu::cameraConvertAction() const
-{
-    return _cameraConvertAct;
 }
 QAction* MainMenu::generateMaskAction() const
 {

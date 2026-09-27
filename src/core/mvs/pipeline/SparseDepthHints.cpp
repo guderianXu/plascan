@@ -7,13 +7,13 @@ namespace xjw::mvs
 
     std::vector<ProjectedSparseDepthSample> MvsPipelineService::collectProjectedSparseDepthSamples(
         const SparseCloud& sparse,
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        const placamera::FramePinholeModel& camera,
         int imageWidth,
         int imageHeight,
         const std::vector<size_t>& visiblePointIndices)
     {
         std::vector<ProjectedSparseDepthSample> samples;
-        if (sparse.points.empty() || imageWidth <= 0 || imageHeight <= 0 || !camera.isValid())
+        if (sparse.points.empty() || imageWidth <= 0 || imageHeight <= 0)
         {
             return samples;
         }
@@ -34,19 +34,24 @@ namespace xjw::mvs
                 continue;
             }
             const auto& pt = sparse.points[pointIndex];
-            const double world[3] = {pt[0], pt[1], pt[2]};
-            double pixel[2] = {0.0, 0.0};
-            double depth = 0.0;
-            if (!camera.projectWorldPointWithDepth(world, pixel, depth) || !std::isfinite(depth) || pixel[0] < 0.0 ||
-                pixel[0] >= static_cast<double>(imageWidth) || pixel[1] < 0.0 ||
-                pixel[1] >= static_cast<double>(imageHeight))
+            const auto projected = camera.groundToImage(placamera::GroundCoordinate{
+                camera.groundFrame(), {static_cast<double>(pt[0]), static_cast<double>(pt[1]),
+                                       static_cast<double>(pt[2])}});
+            if (!projected || !projected.value().positiveDepth)
+            {
+                continue;
+            }
+            const auto& pixel = projected.value().image;
+            const double depth = *projected.value().positiveDepth;
+            if (!std::isfinite(depth) || pixel.sample < 0.0 || pixel.sample >= static_cast<double>(imageWidth) ||
+                pixel.line < 0.0 || pixel.line >= static_cast<double>(imageHeight))
             {
                 continue;
             }
 
             ProjectedSparseDepthSample candidate;
-            candidate.uNorm = static_cast<float>(pixel[0] / static_cast<double>(imageWidth));
-            candidate.vNorm = static_cast<float>(pixel[1] / static_cast<double>(imageHeight));
+            candidate.uNorm = static_cast<float>(pixel.sample / static_cast<double>(imageWidth));
+            candidate.vNorm = static_cast<float>(pixel.line / static_cast<double>(imageHeight));
             candidate.depth = static_cast<float>(depth);
             projectedCandidates.push_back(candidate);
 

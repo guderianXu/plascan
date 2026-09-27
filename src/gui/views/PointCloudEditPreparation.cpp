@@ -39,7 +39,7 @@ std::shared_ptr<SceneRenderCloud> copyRows(
     }
     if (source.hasColors())
     {
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> values(rows.size(), 3);
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> values(rows.size(), 3);
         for (std::size_t target = 0; target < rows.size(); ++target)
         {
             if ((target & 4095U) == 0U && isCancelled(cancellationFlag))
@@ -48,15 +48,14 @@ std::shared_ptr<SceneRenderCloud> copyRows(
             }
             for (int column = 0; column < 3; ++column)
             {
-                values(static_cast<Index>(target), column) =
-                    source.colors()->getValue(rows[target], column);
+                values(static_cast<Index>(target), column) = source.colors()->coeff(rows[target], column);
             }
         }
         output->setColors(std::move(values));
     }
     if (source.hasNormals())
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> values(rows.size(), 3);
+        plamatrix::MatrixXf values(rows.size(), 3);
         for (std::size_t target = 0; target < rows.size(); ++target)
         {
             if ((target & 4095U) == 0U && isCancelled(cancellationFlag))
@@ -65,30 +64,28 @@ std::shared_ptr<SceneRenderCloud> copyRows(
             }
             for (int column = 0; column < 3; ++column)
             {
-                values(static_cast<Index>(target), column) =
-                    source.normals()->getValue(rows[target], column);
+                values(static_cast<Index>(target), column) = source.normals()->coeff(rows[target], column);
             }
         }
         output->setNormals(std::move(values));
     }
     if (source.hasIntensities())
     {
-        plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> values(rows.size(), 1);
+        plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic> values(rows.size(), 1);
         for (std::size_t target = 0; target < rows.size(); ++target)
         {
             if ((target & 4095U) == 0U && isCancelled(cancellationFlag))
             {
                 return {};
             }
-            values(static_cast<Index>(target), 0) =
-                source.intensities()->getValue(rows[target], 0);
+            values(static_cast<Index>(target), 0) = source.intensities()->coeff(rows[target], 0);
         }
         output->setIntensities(std::move(values));
     }
     if (source.hasScalarFields())
     {
         const int columns = source.scalarFields()->cols();
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> values(rows.size(), columns);
+        plamatrix::MatrixXf values(rows.size(), columns);
         for (std::size_t target = 0; target < rows.size(); ++target)
         {
             if ((target & 4095U) == 0U && isCancelled(cancellationFlag))
@@ -97,15 +94,14 @@ std::shared_ptr<SceneRenderCloud> copyRows(
             }
             for (int column = 0; column < columns; ++column)
             {
-                values(static_cast<Index>(target), column) =
-                    source.scalarFields()->getValue(rows[target], column);
+                values(static_cast<Index>(target), column) = source.scalarFields()->coeff(rows[target], column);
             }
         }
         output->setScalarFields(source.scalarFieldNames(), std::move(values));
     }
     if (source.hasPointAlignedTextureCoords())
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> values(rows.size(), 2);
+        plamatrix::MatrixXf values(rows.size(), 2);
         for (std::size_t target = 0; target < rows.size(); ++target)
         {
             if ((target & 4095U) == 0U && isCancelled(cancellationFlag))
@@ -114,8 +110,7 @@ std::shared_ptr<SceneRenderCloud> copyRows(
             }
             for (int column = 0; column < 2; ++column)
             {
-                values(static_cast<Index>(target), column) =
-                    source.textureCoords()->getValue(rows[target], column);
+                values(static_cast<Index>(target), column) = source.textureCoords()->coeff(rows[target], column);
             }
         }
         output->setTextureCoords(std::move(values));
@@ -258,16 +253,13 @@ PointCloudEditResult restorePointCloudFromDelta(
         && delta.removedCloud->hasPointAlignedTextureCoords();
     const int scalar_columns = has_scalars ? filtered->scalarFields()->cols() : 0;
 
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
-        delta.originalPointCount, has_colors ? 3 : 0);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
-        delta.originalPointCount, has_normals ? 3 : 0);
-    plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> intensities(
-        delta.originalPointCount, has_intensities ? 1 : 0);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> scalars(
-        delta.originalPointCount, scalar_columns);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture(
-        delta.originalPointCount, has_texture ? 2 : 0);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(delta.originalPointCount,
+                                                                                   has_colors ? 3 : 0);
+    plamatrix::MatrixXf normals(delta.originalPointCount, has_normals ? 3 : 0);
+    plamatrix::Matrix<std::uint16_t, plamatrix::Dynamic, plamatrix::Dynamic> intensities(delta.originalPointCount,
+                                                                                         has_intensities ? 1 : 0);
+    plamatrix::MatrixXf scalars(delta.originalPointCount, scalar_columns);
+    plamatrix::MatrixXf texture(delta.originalPointCount, has_texture ? 2 : 0);
 
     std::size_t filtered_cursor = 0;
     std::size_t removed_cursor = 0;
@@ -288,25 +280,25 @@ PointCloudEditResult restorePointCloudFromDelta(
             restored->points()(target_row, column) = source.points()(source_row, column);
             if (has_colors)
             {
-                colors(target_row, column) = source.colors()->getValue(source_row, column);
+                colors(target_row, column) = source.colors()->coeff(source_row, column);
             }
             if (has_normals)
             {
-                normals(target_row, column) = source.normals()->getValue(source_row, column);
+                normals(target_row, column) = source.normals()->coeff(source_row, column);
             }
         }
         if (has_intensities)
         {
-            intensities(target_row, 0) = source.intensities()->getValue(source_row, 0);
+            intensities(target_row, 0) = source.intensities()->coeff(source_row, 0);
         }
         for (int column = 0; column < scalar_columns; ++column)
         {
-            scalars(target_row, column) = source.scalarFields()->getValue(source_row, column);
+            scalars(target_row, column) = source.scalarFields()->coeff(source_row, column);
         }
         if (has_texture)
         {
-            texture(target_row, 0) = source.textureCoords()->getValue(source_row, 0);
-            texture(target_row, 1) = source.textureCoords()->getValue(source_row, 1);
+            texture(target_row, 0) = source.textureCoords()->coeff(source_row, 0);
+            texture(target_row, 1) = source.textureCoords()->coeff(source_row, 1);
         }
     }
     if (has_colors) restored->setColors(std::move(colors));

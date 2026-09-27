@@ -155,7 +155,7 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
     frames->clear();
     std::vector<double> lumas;
     std::vector<double> sharpness;
-    for (const OrthoImageInput &input : inputs)
+    for (const OrthoImageInput& input : inputs)
     {
         if (isCancelled(cancelFlag))
         {
@@ -165,13 +165,11 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
             }
             return false;
         }
-        std::string camera_error;
-        if (!input.camera.validateNumericalState(&camera_error))
+        if (!input.camera)
         {
             if (errorMsg)
             {
-                *errorMsg = QStringLiteral("影像相机参数无效（内参或位姿）: %1；%2")
-                                .arg(input.imagePath, QString::fromStdString(camera_error));
+                *errorMsg = QStringLiteral("影像相机参数缺失: %1").arg(input.imagePath);
             }
             return false;
         }
@@ -180,8 +178,15 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
         {
             if (errorMsg)
             {
-                *errorMsg = QStringLiteral("正射输入影像读取失败: %1")
-                                .arg(input.imagePath);
+                *errorMsg = QStringLiteral("正射输入影像读取失败: %1").arg(input.imagePath);
+            }
+            return false;
+        }
+        if (image.cols != input.camera->imageSize().samples || image.rows != input.camera->imageSize().lines)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("影像尺寸与 PlaCamera 模型不一致: %1").arg(input.imagePath);
             }
             return false;
         }
@@ -191,8 +196,7 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
         frame.imageBgr = std::move(image);
         if (options.useProjectMasks && !input.exclusionMaskPath.isEmpty())
         {
-            frame.exclusionMask =
-                xjw::common::io::readImage(input.exclusionMaskPath, cv::IMREAD_GRAYSCALE);
+            frame.exclusionMask = xjw::common::io::readImage(input.exclusionMaskPath, cv::IMREAD_GRAYSCALE);
             if (frame.exclusionMask.empty())
             {
                 if (errorMsg)
@@ -244,44 +248,42 @@ bool loadFrames(const std::vector<OrthoImageInput> &inputs,
     return true;
 }
 
-bool sampleFrame(const LoadedFrame &frame,
-                 const double world[3],
-                 ColorCandidate *candidate)
+bool sampleFrame(const LoadedFrame& frame, const double world[3], ColorCandidate* candidate)
 {
-    double pixel[2]{0.0, 0.0};
-    if (!candidate || !frame.input.camera.projectWorldPoint(world, pixel))
+    if (!candidate || !frame.input.camera)
     {
         return false;
     }
-    const double u = pixel[0];
-    const double v = pixel[1];
-    if (u < 0.0 || v < 0.0
-        || u >= static_cast<double>(frame.imageBgr.cols - 1)
-        || v >= static_cast<double>(frame.imageBgr.rows - 1))
+    const auto& camera = *frame.input.camera;
+    const auto projected = camera.groundToImage({camera.groundFrame(), {world[0], world[1], world[2]}});
+    if (!projected.ok())
+    {
+        return false;
+    }
+    const double u = projected.value().image.sample;
+    const double v = projected.value().image.line;
+    if (u < 0.0 || v < 0.0 || u >= static_cast<double>(frame.imageBgr.cols - 1) ||
+        v >= static_cast<double>(frame.imageBgr.rows - 1))
     {
         return false;
     }
 
     if (!frame.exclusionMask.empty())
     {
-        const int mask_x = std::clamp(
-            static_cast<int>(std::lround(u)), 0, frame.exclusionMask.cols - 1);
-        const int mask_y = std::clamp(
-            static_cast<int>(std::lround(v)), 0, frame.exclusionMask.rows - 1);
+        const int mask_x = std::clamp(static_cast<int>(std::lround(u)), 0, frame.exclusionMask.cols - 1);
+        const int mask_y = std::clamp(static_cast<int>(std::lround(v)), 0, frame.exclusionMask.rows - 1);
         if (frame.exclusionMask.at<uchar>(mask_y, mask_x) != 0)
         {
             return false;
         }
     }
 
-    const double du = (u - frame.input.camera.principalX())
-        / std::max(1.0, frame.input.camera.focalX());
-    const double dv = (v - frame.input.camera.principalY())
-        / std::max(1.0, frame.input.camera.focalY());
+    const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+    const double du = (u - intrinsics.principalX) / std::max(1.0, intrinsics.focalX);
+    const double dv = (v - intrinsics.principalY) / std::max(1.0, intrinsics.focalY);
     const double view_weight = 1.0 / (1.0 + du * du + dv * dv);
-    const double edge_distance = std::min(
-        std::min(u, static_cast<double>(frame.imageBgr.cols - 1) - u),
-        std::min(v, static_cast<double>(frame.imageBgr.rows - 1) - v));
+    const double edge_distance = std::min(std::min(u, static_cast<double>(frame.imageBgr.cols - 1) - u),
+                                          std::min(v, static_cast<double>(frame.imageBgr.rows - 1) - v));
     const double edge_weight = std::clamp(edge_distance / 20.0, 0.05, 1.0);
     candidate->color =
         sampleBilinear(frame.imageBgr, u, v) * static_cast<float>(frame.gain);

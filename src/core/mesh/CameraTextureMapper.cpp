@@ -4,10 +4,10 @@
 #include "MeshColorizer.h"
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <opencv2/imgproc.hpp>
 
@@ -32,13 +32,13 @@ namespace xjw::mesh
 namespace
 {
 
-using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using PlaPointCloud = plapoint::GeometryCloud<float>;
 
-struct AtlasTile
-{
-    float scale = 1.0f;
-    float offsetX = 0.0f;
-    float offsetY = 0.0f;
+    struct AtlasTile
+    {
+        float scale = 1.0f;
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
 };
 
 struct FaceViewSelection
@@ -101,9 +101,7 @@ float meshDiagonal(const PlaPointCloud &mesh)
 
 std::array<double, 3> faceVertex(const PlaPointCloud &mesh, int index)
 {
-    return {mesh.points().getValue(index, 0),
-            mesh.points().getValue(index, 1),
-            mesh.points().getValue(index, 2)};
+    return {mesh.points().coeff(index, 0), mesh.points().coeff(index, 1), mesh.points().coeff(index, 2)};
 }
 
 std::array<float, 3> faceNormal(const std::array<double, 3> &a,
@@ -129,36 +127,39 @@ std::array<float, 3> faceNormal(const std::array<double, 3> &a,
     return normal;
 }
 
-float cameraScore(const MeshColorView &view,
-                  const std::array<double, 3> &centroid,
-                  const std::array<float, 3> &normal,
+float cameraScore(const MeshColorView& view,
+                  const std::array<double, 3>& centroid,
+                  const std::array<float, 3>& normal,
                   float absolute_tolerance)
 {
-    double pixel[2]{};
-    double camera_depth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(centroid.data(), pixel, camera_depth))
+    if (!view.camera)
     {
         return -1.0f;
     }
-    const int column = static_cast<int>(std::lround(pixel[0]));
-    const int row = static_cast<int>(std::lround(pixel[1]));
+    const auto projected = view.camera->groundToImage({view.camera->groundFrame(), centroid});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return -1.0f;
+    }
+    const auto& pixel = projected.value().image;
+    const double camera_depth = *projected.value().positiveDepth;
+    const int column = static_cast<int>(std::lround(pixel.sample));
+    const int row = static_cast<int>(std::lround(pixel.line));
     if (row < 0 || column < 0 || row >= view.depth.rows || column >= view.depth.cols ||
-        view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-        view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+        view.supportMask.at<std::uint8_t>(row, column) == 0 || view.depthValidMask.at<std::uint8_t>(row, column) == 0)
     {
         return -1.0f;
     }
     const float observed_depth = view.depth.at<float>(row, column);
     const float confidence = view.confidence.at<float>(row, column);
-    const float tolerance = std::max(absolute_tolerance,
-                                     0.008f * std::fabs(static_cast<float>(camera_depth)));
+    const float tolerance = std::max(absolute_tolerance, 0.008f * std::fabs(static_cast<float>(camera_depth)));
     const float residual = std::fabs(observed_depth - static_cast<float>(camera_depth));
-    if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
-        !std::isfinite(confidence) || confidence < 0.25f || residual > tolerance)
+    if (!std::isfinite(observed_depth) || observed_depth <= 0.0f || !std::isfinite(confidence) || confidence < 0.25f ||
+        residual > tolerance)
     {
         return -1.0f;
     }
-    const std::array<double, 3> center = view.camera.cameraCenter();
+    const std::array<double, 3> center = view.camera->pose().center;
     float dx = static_cast<float>(center[0] - centroid[0]);
     float dy = static_cast<float>(center[1] - centroid[1]);
     float dz = static_cast<float>(center[2] - centroid[2]);
@@ -167,38 +168,37 @@ float cameraScore(const MeshColorView &view,
     {
         return -1.0f;
     }
-    dx /= length; dy /= length; dz /= length;
+    dx /= length;
+    dy /= length;
+    dz /= length;
     const float cosine = std::fabs(normal[0] * dx + normal[1] * dy + normal[2] * dz);
     if (cosine < 0.15f)
     {
         return -1.0f;
     }
-    const float residual_score = 1.0f /
-        std::pow(1.0f + residual / std::max(tolerance, 1.0e-8f), 2.0f);
-    return confidence * std::max(0.0f, view.qualityWeight) *
-           std::pow(cosine, 4.0f) * residual_score;
+    const float residual_score = 1.0f / std::pow(1.0f + residual / std::max(tolerance, 1.0e-8f), 2.0f);
+    return confidence * std::max(0.0f, view.qualityWeight) * std::pow(cosine, 4.0f) * residual_score;
 }
 
-bool projectFace(const MeshColorView &view,
-                 const std::array<std::array<double, 3>, 3> &vertices,
-                 std::array<std::array<double, 2>, 3> *pixels)
+bool projectFace(const MeshColorView& view,
+                 const std::array<std::array<double, 3>, 3>& vertices,
+                 std::array<std::array<double, 2>, 3>* pixels)
 {
-    if (!pixels)
+    if (!pixels || !view.camera)
     {
         return false;
     }
     for (int corner = 0; corner < 3; ++corner)
     {
-        double depth = 0.0;
-        if (!view.camera.projectWorldPointWithDepth(
-                vertices[corner].data(), (*pixels)[corner].data(), depth))
+        const auto projected = view.camera->groundToImage({view.camera->groundFrame(), vertices[corner]});
+        if (!projected || !projected.value().positiveDepth)
         {
             return false;
         }
+        (*pixels)[corner] = {projected.value().image.sample, projected.value().image.line};
         const double x = (*pixels)[corner][0];
         const double y = (*pixels)[corner][1];
-        if (x < 0.0 || y < 0.0 || x > view.colorBgr.cols - 1.0 ||
-            y > view.colorBgr.rows - 1.0)
+        if (x < 0.0 || y < 0.0 || x > view.colorBgr.cols - 1.0 || y > view.colorBgr.rows - 1.0)
         {
             return false;
         }
@@ -206,46 +206,41 @@ bool projectFace(const MeshColorView &view,
     return true;
 }
 
-bool faceProjectsInsideMask(const MeshColorView &view,
+bool faceProjectsInsideMask(const MeshColorView& view,
                             bool requireDepthEvidence,
-                            const std::array<std::array<double, 3>, 3> &vertices,
+                            const std::array<std::array<double, 3>, 3>& vertices,
                             float absoluteTolerance)
 {
-    if (view.supportMask.type() != CV_8UC1 ||
-        view.supportMask.size() != view.colorBgr.size())
+    if (!view.camera || view.supportMask.type() != CV_8UC1 || view.supportMask.size() != view.colorBgr.size())
     {
         return false;
     }
 
-    constexpr std::array<std::array<double, 3>, 7> kSampleWeights{{
-        {{1.0, 0.0, 0.0}},
-        {{0.0, 1.0, 0.0}},
-        {{0.0, 0.0, 1.0}},
-        {{0.5, 0.5, 0.0}},
-        {{0.0, 0.5, 0.5}},
-        {{0.5, 0.0, 0.5}},
-        {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}}
-    }};
-    for (const auto &weights : kSampleWeights)
+    constexpr std::array<std::array<double, 3>, 7> kSampleWeights{{{{1.0, 0.0, 0.0}},
+                                                                   {{0.0, 1.0, 0.0}},
+                                                                   {{0.0, 0.0, 1.0}},
+                                                                   {{0.5, 0.5, 0.0}},
+                                                                   {{0.0, 0.5, 0.5}},
+                                                                   {{0.5, 0.0, 0.5}},
+                                                                   {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}}}};
+    for (const auto& weights : kSampleWeights)
     {
         std::array<double, 3> sample{};
         for (int axis = 0; axis < 3; ++axis)
         {
-            sample[axis] = weights[0] * vertices[0][axis] +
-                           weights[1] * vertices[1][axis] +
-                           weights[2] * vertices[2][axis];
+            sample[axis] =
+                weights[0] * vertices[0][axis] + weights[1] * vertices[1][axis] + weights[2] * vertices[2][axis];
         }
-        double projected_pixel[2]{};
-        double camera_depth = 0.0;
-        if (!view.camera.projectWorldPointWithDepth(
-                sample.data(), projected_pixel, camera_depth))
+        const auto projected = view.camera->groundToImage({view.camera->groundFrame(), sample});
+        if (!projected || !projected.value().positiveDepth)
         {
             return false;
         }
-        const int column = static_cast<int>(std::lround(projected_pixel[0]));
-        const int row = static_cast<int>(std::lround(projected_pixel[1]));
-        if (row < 0 || column < 0 || row >= view.supportMask.rows ||
-            column >= view.supportMask.cols ||
+        const auto& projected_pixel = projected.value().image;
+        const double camera_depth = *projected.value().positiveDepth;
+        const int column = static_cast<int>(std::lround(projected_pixel.sample));
+        const int row = static_cast<int>(std::lround(projected_pixel.line));
+        if (row < 0 || column < 0 || row >= view.supportMask.rows || column >= view.supportMask.cols ||
             view.supportMask.at<std::uint8_t>(row, column) == 0)
         {
             return false;
@@ -254,12 +249,9 @@ bool faceProjectsInsideMask(const MeshColorView &view,
         {
             continue;
         }
-        if (view.depthValidMask.type() != CV_8UC1 ||
-            view.depth.type() != CV_32FC1 ||
-            view.confidence.type() != CV_32FC1 ||
-            view.depthValidMask.size() != view.supportMask.size() ||
-            view.depth.size() != view.supportMask.size() ||
-            view.confidence.size() != view.supportMask.size() ||
+        if (view.depthValidMask.type() != CV_8UC1 || view.depth.type() != CV_32FC1 ||
+            view.confidence.type() != CV_32FC1 || view.depthValidMask.size() != view.supportMask.size() ||
+            view.depth.size() != view.supportMask.size() || view.confidence.size() != view.supportMask.size() ||
             view.depthValidMask.at<std::uint8_t>(row, column) == 0)
         {
             return false;
@@ -267,12 +259,9 @@ bool faceProjectsInsideMask(const MeshColorView &view,
 
         const float observed_depth = view.depth.at<float>(row, column);
         const float confidence = view.confidence.at<float>(row, column);
-        const float tolerance = std::max(
-            absoluteTolerance,
-            0.012f * std::fabs(static_cast<float>(camera_depth)));
-        if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
-            !std::isfinite(confidence) || confidence < 0.25f ||
-            std::fabs(observed_depth - static_cast<float>(camera_depth)) > tolerance)
+        const float tolerance = std::max(absoluteTolerance, 0.012f * std::fabs(static_cast<float>(camera_depth)));
+        if (!std::isfinite(observed_depth) || observed_depth <= 0.0f || !std::isfinite(confidence) ||
+            confidence < 0.25f || std::fabs(observed_depth - static_cast<float>(camera_depth)) > tolerance)
         {
             return false;
         }
@@ -280,7 +269,7 @@ bool faceProjectsInsideMask(const MeshColorView &view,
     return true;
 }
 
-QColor fallbackTextureColor(const PlaPointCloud &mesh)
+QColor fallbackTextureColor(const PlaPointCloud& mesh)
 {
     if (!mesh.hasColors() || mesh.size() == 0)
     {
@@ -292,33 +281,35 @@ QColor fallbackTextureColor(const PlaPointCloud &mesh)
     for (std::size_t index = 0; index < mesh.size(); ++index)
     {
         const auto row = static_cast<plamatrix::Index>(index);
-        red += mesh.colors()->getValue(row, 0);
-        green += mesh.colors()->getValue(row, 1);
-        blue += mesh.colors()->getValue(row, 2);
+        red += mesh.colors()->coeff(row, 0);
+        green += mesh.colors()->coeff(row, 1);
+        blue += mesh.colors()->coeff(row, 2);
     }
     const std::uint64_t count = mesh.size();
-    return QColor(static_cast<int>(red / count),
-                  static_cast<int>(green / count),
-                  static_cast<int>(blue / count));
+    return QColor(static_cast<int>(red / count), static_cast<int>(green / count), static_cast<int>(blue / count));
 }
 
-float relaxedCameraScore(const MeshColorView &view,
-                         const std::array<double, 3> &centroid,
-                         const std::array<float, 3> &normal)
+float relaxedCameraScore(const MeshColorView& view,
+                         const std::array<double, 3>& centroid,
+                         const std::array<float, 3>& normal)
 {
-    double pixel[2]{};
-    double camera_depth = 0.0;
-    if (!view.camera.projectWorldPointWithDepth(centroid.data(), pixel, camera_depth))
+    if (!view.camera)
     {
         return -1.0f;
     }
-    const int column = static_cast<int>(std::lround(pixel[0]));
-    const int row = static_cast<int>(std::lround(pixel[1]));
+    const auto projected = view.camera->groundToImage({view.camera->groundFrame(), centroid});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return -1.0f;
+    }
+    const auto& pixel = projected.value().image;
+    const int column = static_cast<int>(std::lround(pixel.sample));
+    const int row = static_cast<int>(std::lround(pixel.line));
     if (row < 0 || column < 0 || row >= view.colorBgr.rows || column >= view.colorBgr.cols)
     {
         return -1.0f;
     }
-    const std::array<double, 3> center = view.camera.cameraCenter();
+    const std::array<double, 3> center = view.camera->pose().center;
     float dx = static_cast<float>(center[0] - centroid[0]);
     float dy = static_cast<float>(center[1] - centroid[1]);
     float dz = static_cast<float>(center[2] - centroid[2]);
@@ -327,7 +318,9 @@ float relaxedCameraScore(const MeshColorView &view,
     {
         return -1.0f;
     }
-    dx /= length; dy /= length; dz /= length;
+    dx /= length;
+    dy /= length;
+    dz /= length;
     const float cosine = std::fabs(normal[0] * dx + normal[1] * dy + normal[2] * dz);
     const bool supported = view.supportMask.type() == CV_8UC1 &&
         view.supportMask.at<std::uint8_t>(row, column) != 0;
@@ -428,7 +421,7 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
 
     auto *faces = mesh->faces();
     const int face_count = static_cast<int>(faces->rows());
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texture_indices(face_count, 3);
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> texture_indices(face_count, 3);
     std::vector<std::array<float, 2>> texture_coordinate_values;
     texture_coordinate_values.reserve(std::min<std::size_t>(
         static_cast<std::size_t>(face_count) * 3,
@@ -451,9 +444,9 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                                                     std::max(face_count, 1)));
         }
         const std::array<int, 3> indices{
-            faces->getValue(face_index, 0),
-            faces->getValue(face_index, 1),
-            faces->getValue(face_index, 2)};
+            faces->coeff(face_index, 0),
+            faces->coeff(face_index, 1),
+            faces->coeff(face_index, 2)};
         const std::array<std::array<double, 3>, 3> vertices{
             faceVertex(*mesh, indices[0]),
             faceVertex(*mesh, indices[1]),
@@ -529,7 +522,7 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         }
         for (int corner = 0; corner < 3; ++corner)
         {
-            const int vertex_index = faces->getValue(face_index, corner);
+            const int vertex_index = faces->coeff(face_index, corner);
             std::uint16_t &vote = vertex_view_votes[
                 static_cast<std::size_t>(vertex_index) * vote_stride +
                 static_cast<std::size_t>(view_index)];
@@ -549,9 +542,9 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                                                     std::max(face_count, 1)));
         }
         const std::array<int, 3> indices{
-            faces->getValue(face_index, 0),
-            faces->getValue(face_index, 1),
-            faces->getValue(face_index, 2)};
+            faces->coeff(face_index, 0),
+            faces->coeff(face_index, 1),
+            faces->coeff(face_index, 2)};
         FaceViewSelection &selection =
             face_selections[static_cast<std::size_t>(face_index)];
         int coherent_view = selection.viewIndex;
@@ -615,9 +608,9 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                                                     std::max(face_count, 1)));
         }
         const std::array<int, 3> indices{
-            faces->getValue(face_index, 0),
-            faces->getValue(face_index, 1),
-            faces->getValue(face_index, 2)};
+            faces->coeff(face_index, 0),
+            faces->coeff(face_index, 1),
+            faces->coeff(face_index, 2)};
         const std::array<std::array<double, 3>, 3> vertices{
             faceVertex(*mesh, indices[0]),
             faceVertex(*mesh, indices[1]),
@@ -668,7 +661,7 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                     std::clamp(v, 0.0f, 1.0f)});
                 texture_index_by_vertex_view.emplace(texture_key, texture_index);
             }
-            texture_indices.setValue(face_index, corner, texture_index);
+            texture_indices(face_index, corner) = texture_index;
         }
         if (best_view >= 0)
         {
@@ -680,14 +673,12 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
             ++unmapped_faces;
         }
     }
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
+    plamatrix::MatrixXf texture_coordinates(
         static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
     for (std::size_t index = 0; index < texture_coordinate_values.size(); ++index)
     {
-        texture_coordinates.setValue(static_cast<plamatrix::Index>(index), 0,
-                                     texture_coordinate_values[index][0]);
-        texture_coordinates.setValue(static_cast<plamatrix::Index>(index), 1,
-                                     texture_coordinate_values[index][1]);
+        texture_coordinates(static_cast<plamatrix::Index>(index), 0) = texture_coordinate_values[index][0];
+        texture_coordinates(static_cast<plamatrix::Index>(index), 1) = texture_coordinate_values[index][1];
     }
     mesh->setTextureCoords(std::move(texture_coordinates));
     mesh->setFaceTextureIndices(std::move(texture_indices));

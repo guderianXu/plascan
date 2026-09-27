@@ -1,7 +1,5 @@
 #include <gtest/gtest.h>
 
-#include "ProjectCameraIO.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "project/PlascanArchive.h"
 #include "project/ProjectChunkStore.h"
 #include "project/ProjectResourceStore.h"
@@ -13,7 +11,9 @@
 #include "project/ProjectSharedImageStore.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
-#include "camera/project/CameraProjectRecords.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QDir>
 #include <QDirIterator>
@@ -38,6 +38,8 @@
 
 #include <array>
 #include <atomic>
+#include <memory>
+#include <stdexcept>
 
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
@@ -436,29 +438,45 @@ namespace
         return records.isEmpty() ? QString() : records.at(0).toObject().value(pathKey).toString();
     }
 
-    QJsonObject canonicalFrameCamera(int width,
-                                     int height,
-                                     const std::array<double, 3>& center = {0.0, 0.0, 1.0})
+    placamera::CameraInstanceSet nativeFrameCameras(
+        const QJsonArray& images, int selectedCount, int width, int height, const std::array<double, 3>& center)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setPixelPitch(0.01);
-        camera.setIntrinsics(1200.0, 1200.0, width * 0.5, height * 0.5);
-        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, center);
-        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
-        result.insert(QStringLiteral("aligned"), true);
-        return result;
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("test-frame-definition"),
+                                                      {1200.0, 1200.0, width * 0.5, height * 0.5, 0.01, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        for (int index = 0; index < selectedCount; ++index)
+        {
+            const std::string image_id =
+                images.at(index).toObject().value(QStringLiteral("image_uuid")).toString().toStdString();
+            const auto model =
+                std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("test-frame-" + image_id),
+                    placamera::ImageId(image_id),
+                    definition,
+                    {width, height},
+                    placamera::Pose::create(frame, center, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+            if (!cameras.add(model).ok())
+            {
+                throw std::runtime_error("failed to create native frame camera fixture");
+            }
+        }
+        return cameras;
     }
 
     struct BundleAdjustStageFixture
     {
-        xjw::camera_project::CameraInstanceUpdates cameraUpdates;
+        placamera::CameraInstanceSet cameraInstances;
+        QMap<QString, QJsonObject> annotationsByImageId;
         QJsonObject result;
     };
 
-    BundleAdjustStageFixture prepareBundleAdjustStageFixture(ProjectData* project,
-                                                             const QString& directory,
-                                                             QString* errorMessage)
+    BundleAdjustStageFixture
+    prepareBundleAdjustStageFixture(ProjectData* project, const QString& directory, QString* errorMessage)
     {
         BundleAdjustStageFixture fixture;
         if (!project)
@@ -490,35 +508,37 @@ namespace
             return {};
         }
 
-        const QJsonObject camera = canonicalFrameCamera(1024, 768, {1.0, 2.0, 3.0});
+        const auto cameras = nativeFrameCameras(project->coreFilesMeta().value(QStringLiteral("images")).toArray(),
+                                                2,
+                                                1024,
+                                                768,
+                                                {1.0, 2.0, 3.0});
         int updatedCount = 0;
-        if (!project->setCameraInstances(
-                {{imagePaths.at(0), camera}, {imagePaths.at(1), camera}}, &updatedCount, errorMessage))
+        if (!project->upsertNativeCameraInstances(cameras, {}, &updatedCount, errorMessage))
         {
             return {};
         }
 
         const QJsonObject core = project->coreFilesMeta();
-        const QString worldFrame = core.value(QStringLiteral("camera_definitions"))
-                                       .toArray()
-                                       .at(0)
-                                       .toObject()
-                                       .value(QStringLiteral("frame"))
-                                       .toString();
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(core);
+        if (!loaded.ok())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = loaded.errors.join(QStringLiteral("; "));
+            }
+            return {};
+        }
+        fixture.cameraInstances = loaded.instances;
         for (const QJsonValue& value : core.value(QStringLiteral("images")).toArray())
         {
             const QJsonObject image = value.toObject();
             const QString imageId = image.value(QStringLiteral("image_uuid")).toString();
-            const QJsonObject instance =
-                xjw::camera_project::CameraProjectRecords::instanceForImage(core, imageId);
-            QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image);
-            update.insert(QStringLiteral("world_frame"), worldFrame);
-            update.insert(QStringLiteral("solution"), QStringLiteral("bundle-adjust-stage"));
-            fixture.cameraUpdates.push_back(
-                {xjw::camera_core::ImageId(imageId.toStdString()),
-                 xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
-                 xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
-                 update});
+            fixture.annotationsByImageId.insert(
+                imageId,
+                QJsonObject{{QStringLiteral("source"), QStringLiteral("bundle_adjust")},
+                            {QStringLiteral("metadata"),
+                             QJsonObject{{QStringLiteral("solution"), QStringLiteral("bundle-adjust-stage")}}}});
         }
         fixture.result = QJsonObject{{QStringLiteral("track_count"), 12},
                                      {QStringLiteral("mean_rms_after"), 0.25},
@@ -1596,9 +1616,8 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
         imageRecord[QStringLiteral("mask_path")] = mask;
         images[0] = imageRecord;
         metadata[QStringLiteral("images")] = images;
-        const QJsonObject cameraMetadata = canonicalFrameCamera(1280, 960, {0.0, 0.0, 10.0});
-        const auto cameraUpdate = xjw::camera_project::CameraProjectRecords::upsertByImagePath(
-            &metadata, QMap<QString, QJsonObject>{{externalImage, cameraMetadata}});
+        const auto cameras = nativeFrameCameras(images, 1, 1280, 960, {0.0, 0.0, 10.0});
+        const auto cameraUpdate = xjw::placamera_runtime::upsertProjectCameras(&metadata, cameras);
         ASSERT_TRUE(cameraUpdate.ok()) << cameraUpdate.errors.join(';').toStdString();
         metadata[QStringLiteral("image_match_results")] =
             QJsonArray{QJsonObject{{QStringLiteral("image"), externalImage},
@@ -1660,9 +1679,14 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
 
     const QJsonObject restored = reopened.metadata();
     const QJsonObject restoredImage = restored.value(QStringLiteral("images")).toArray().at(0).toObject();
-    const QJsonObject restoredCamera =
-        xjw::camera_project::CameraProjectRecords::modelParametersForImage(restored, restoredImage);
-    EXPECT_TRUE(restoredCamera.value(QStringLiteral("aligned")).toBool());
+    const auto restored_cameras = xjw::placamera_runtime::loadProjectCameras(restored);
+    ASSERT_TRUE(restored_cameras.ok()) << restored_cameras.errors.join(';').toStdString();
+    const auto restored_camera = restored_cameras.instances.forImage(
+        placamera::ImageId(restoredImage.value(QStringLiteral("image_uuid")).toString().toStdString()));
+    ASSERT_TRUE(restored_camera.ok());
+    const auto* restored_frame = dynamic_cast<const placamera::FramePinholeModel*>(restored_camera.value().get());
+    ASSERT_NE(restored_frame, nullptr);
+    EXPECT_DOUBLE_EQ(restored_frame->pose().center[2], 10.0);
     const QList<QPair<QString, QByteArray>> restoredFiles{
         {restoredImage.value(QStringLiteral("mask_path")).toString(), QByteArray("mask")},
         {resultPath(restored, QStringLiteral("image_match_results"), QStringLiteral("output")), QByteArray("match")},
@@ -2127,24 +2151,30 @@ TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSol
     const QStringList projectImages = project.getAllImages();
     ASSERT_EQ(projectImages.size(), 3);
 
-    const QJsonObject oldCamera = canonicalFrameCamera(32, 24, {0.0, 0.0, 0.0});
+    const QJsonArray image_records = project.coreFilesMeta().value(QStringLiteral("images")).toArray();
+    const auto old_cameras = nativeFrameCameras(image_records, 3, 32, 24, {0.0, 0.0, 0.0});
     int updatedCount = 0;
     QString error;
-    ASSERT_TRUE(project.setCameraInstances(
-        {{projectImages[0], oldCamera}, {projectImages[1], oldCamera}, {projectImages[2], oldCamera}},
-        &updatedCount,
-        &error))
-        << qPrintable(error);
+    ASSERT_TRUE(project.upsertNativeCameraInstances(old_cameras, {}, &updatedCount, &error)) << qPrintable(error);
     ASSERT_EQ(updatedCount, 3);
 
-    QJsonObject newCamera = canonicalFrameCamera(32, 24, {0.0, 0.0, 0.0});
-    newCamera.insert(QStringLiteral("solution"), QStringLiteral("current"));
+    const auto new_cameras = nativeFrameCameras(image_records, 2, 32, 24, {0.0, 0.0, 0.0});
+    std::vector<placamera::ImageId> target_ids;
+    QMap<QString, QJsonObject> annotations;
+    for (int index = 0; index < image_records.size(); ++index)
+    {
+        const QString image_id = image_records.at(index).toObject().value(QStringLiteral("image_uuid")).toString();
+        target_ids.emplace_back(image_id.toStdString());
+        if (index < 2)
+        {
+            annotations.insert(image_id,
+                               QJsonObject{{QStringLiteral("metadata"),
+                                            QJsonObject{{QStringLiteral("solution"), QStringLiteral("current")}}}});
+        }
+    }
     int clearedCount = 0;
-    ASSERT_TRUE(project.replaceCameraInstances(projectImages,
-                                               {{projectImages[0], newCamera}, {projectImages[1], newCamera}},
-                                               &updatedCount,
-                                               &clearedCount,
-                                               &error))
+    ASSERT_TRUE(project.replaceNativeCameraInstances(
+        target_ids, new_cameras, annotations, &updatedCount, &clearedCount, &error))
         << qPrintable(error);
     EXPECT_EQ(updatedCount, 2);
     EXPECT_EQ(clearedCount, 1);
@@ -2152,17 +2182,32 @@ TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSol
     const QJsonObject core = project.coreFilesMeta();
     const QJsonArray images = core.value(QStringLiteral("images")).toArray();
     ASSERT_EQ(images.size(), 3);
-    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, images.at(0).toObject())
-                  .value(QStringLiteral("solution"))
-                  .toString(),
-              QStringLiteral("current"));
-    EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, images.at(1).toObject())
-                  .value(QStringLiteral("solution"))
-                  .toString(),
-              QStringLiteral("current"));
-    EXPECT_TRUE(xjw::camera_project::CameraProjectRecords::instanceForImage(
-                    core, images.at(2).toObject().value(QStringLiteral("image_uuid")).toString())
-                    .isEmpty());
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString image_id = images.at(index).toObject().value(QStringLiteral("image_uuid")).toString();
+        QJsonObject matched;
+        for (const QJsonValue& value : core.value(QStringLiteral("camera_instances")).toArray())
+        {
+            const QJsonObject record = value.toObject();
+            if (record.value(QStringLiteral("image_uuid")).toString() == image_id)
+            {
+                matched = record;
+                break;
+            }
+        }
+        ASSERT_FALSE(matched.isEmpty());
+        EXPECT_EQ(matched.value(QStringLiteral("state"))
+                      .toObject()
+                      .value(QStringLiteral("metadata"))
+                      .toObject()
+                      .value(QStringLiteral("solution"))
+                      .toString(),
+                  QStringLiteral("current"));
+    }
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(core);
+    ASSERT_TRUE(loaded.ok()) << loaded.errors.join(';').toStdString();
+    EXPECT_EQ(loaded.instances.size(), 2U);
+    EXPECT_FALSE(loaded.instances.forImage(target_ids.at(2)).ok());
 }
 
 TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
@@ -2527,7 +2572,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRollbackIsSilentAndCommitPublishe
     ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba metadata stage")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     ASSERT_FALSE(project.isDirty());
     const QJsonObject before = project.metadataIncludingResults();
@@ -2542,7 +2587,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRollbackIsSilentAndCommitPublishe
 
     ProjectBundleAdjustMetadataStageToken rollbackToken;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &rollbackToken, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &rollbackToken, &errorMessage)) << qPrintable(errorMessage);
     ASSERT_TRUE(rollbackToken.isValid());
     EXPECT_EQ(metadataChangedCount, 0);
     EXPECT_EQ(dirtyChangedCount, 0);
@@ -2577,7 +2622,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRollbackIsSilentAndCommitPublishe
 
     ProjectBundleAdjustMetadataStageToken commitToken;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &commitToken, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &commitToken, &errorMessage)) << qPrintable(errorMessage);
     const auto committed = project.resolveBundleAdjustMetadataStage(
         commitToken, ProjectBundleAdjustMetadataStageDecision::Commit);
     EXPECT_EQ(committed.status, ProjectBundleAdjustMetadataStageStatus::Committed)
@@ -2603,7 +2648,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageLazyLoadFailureDoesNotMutateHisto
         ASSERT_TRUE(seed.createProject(projectPath, QStringLiteral("ba lazy stage")));
         QString errorMessage;
         fixture = prepareBundleAdjustStageFixture(&seed, dir.path(), &errorMessage);
-        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
         ASSERT_TRUE(seed.appendBundleAdjustResult(
             QJsonObject{{QStringLiteral("track_count"), 3}, {QStringLiteral("history"), true}}, &errorMessage));
         ASSERT_TRUE(seed.saveProject(&errorMessage)) << qPrintable(errorMessage);
@@ -2628,7 +2673,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageLazyLoadFailureDoesNotMutateHisto
     ProjectBundleAdjustMetadataStageToken token;
 
     EXPECT_FALSE(reopened.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage));
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage));
     EXPECT_FALSE(errorMessage.isEmpty());
     EXPECT_FALSE(token.isValid());
     EXPECT_EQ(reopened.coreFilesMeta(), beforeCore);
@@ -2655,16 +2700,16 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRejectsForeignTokenAndConflicting
     QString errorMessage;
     const BundleAdjustStageFixture fixture =
         prepareBundleAdjustStageFixture(&stagedProject, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     const BundleAdjustStageFixture replacementFixture =
         prepareBundleAdjustStageFixture(&replacementProject, dir.path(), &errorMessage);
-    ASSERT_FALSE(replacementFixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(replacementFixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(stagedProject.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
     ProjectBundleAdjustMetadataStageToken replacementToken;
     ASSERT_TRUE(replacementProject.stageBundleAdjustMetadata(
-        replacementFixture.cameraUpdates, replacementFixture.result, &replacementToken, &errorMessage))
+        replacementFixture.cameraInstances, replacementFixture.annotationsByImageId, replacementFixture.result, &replacementToken, &errorMessage))
         << qPrintable(errorMessage);
 
     const QJsonObject replacementBeforeResolve = replacementProject.metadataIncludingResults();
@@ -2712,7 +2757,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRecognizesCompleteExternalCommitW
     ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba external stage")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     for (const QString& key : {QStringLiteral("depth_map_results"),
                                QStringLiteral("dense_cloud_results"),
                                QStringLiteral("model_results"),
@@ -2724,7 +2769,7 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRecognizesCompleteExternalCommitW
     }
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
     int metadataChangedCount = 0;
     QObject::connect(&project,
                      &ProjectData::metadataChanged,
@@ -2785,10 +2830,10 @@ TEST(ProjectDataTest, BundleAdjustMetadataStageRejectsChunkReplacementWithoutOve
     ASSERT_TRUE(project.switchChunk(originalChunkId, &errorMessage)) << qPrintable(errorMessage);
 
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
 
     ASSERT_TRUE(project.openProjectFromSnapshot(replacementSnapshot, &errorMessage)) << qPrintable(errorMessage);
     ASSERT_EQ(project.activeChunkId(), replacementChunkId);
@@ -2814,7 +2859,7 @@ TEST(ProjectDataTest, BundleAdjustStageAndResourceCleanupPersistenceAreMutuallyE
     ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba cleanup exclusion")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
 
     const QJsonObject original = project.metadataIncludingResults();
     QJsonObject cleanupMetadata = original;
@@ -2824,14 +2869,14 @@ TEST(ProjectDataTest, BundleAdjustStageAndResourceCleanupPersistenceAreMutuallyE
     ASSERT_TRUE(cleanup.isValid());
     ProjectBundleAdjustMetadataStageToken blockedToken;
     EXPECT_FALSE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &blockedToken, &errorMessage));
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &blockedToken, &errorMessage));
     EXPECT_FALSE(blockedToken.isValid());
     EXPECT_FALSE(errorMessage.isEmpty());
     ASSERT_TRUE(project.finalizeResourceCleanupPersistence(cleanup, false, false));
 
     ProjectBundleAdjustMetadataStageToken stageToken;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &stageToken, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &stageToken, &errorMessage)) << qPrintable(errorMessage);
     EXPECT_FALSE(project.prepareResourceCleanupPersistence(cleanupMetadata).isValid());
     bool archiveCommitted = false;
     EXPECT_FALSE(project.commitResourceCleanupMetadata(cleanupMetadata, &errorMessage, &archiveCommitted));
@@ -2852,7 +2897,7 @@ TEST(ProjectDataTest, DirectCleanupReservationRejectsReentrantBundleAdjustAndNes
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("direct cleanup reservation")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
 
@@ -2881,7 +2926,7 @@ TEST(ProjectDataTest, DirectCleanupReservationRejectsReentrantBundleAdjustAndNes
                          nestedCleanupAccepted = project.commitResourceCleanupMetadata(
                              nestedMetadata, &nestedError, &nestedArchiveCommitted);
                          stageAccepted = project.stageBundleAdjustMetadata(
-                             fixture.cameraUpdates, fixture.result, &reentrantToken, &nestedError);
+                             fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &reentrantToken, &nestedError);
                          suspendedDuringSignal = ProjectDataPersistenceTestPeer::suspended(project);
                      });
 
@@ -2917,7 +2962,7 @@ TEST(ProjectDataTest, DirectCleanupReservationRejectsReentrantBundleAdjustAndNes
     }
     ProjectBundleAdjustMetadataStageToken legitimateToken;
     ASSERT_TRUE(
-        project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &legitimateToken, &errorMessage))
+        project.stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &legitimateToken, &errorMessage))
         << qPrintable(errorMessage);
     EXPECT_TRUE(legitimateToken.isValid());
     const auto rollback =
@@ -2935,7 +2980,7 @@ TEST(ProjectDataTest, DirectCleanupStaleGenerationReleasesReservationAndStartsPe
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("direct cleanup stale")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
 
@@ -2992,10 +3037,10 @@ TEST(ProjectDataTest, BundleAdjustCommitSignalReentryPreservesLiveConflictAndRel
     ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba commit signal conflict")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
 
     bool reentered = false;
     QObject::connect(&project,
@@ -3037,7 +3082,7 @@ TEST(ProjectDataTest, BundleAdjustStageBlocksDirectTemporarySaveAndRollbackReope
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba direct temporary barrier")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     const QJsonObject before = project.metadataIncludingResults();
@@ -3048,7 +3093,7 @@ TEST(ProjectDataTest, BundleAdjustStageBlocksDirectTemporarySaveAndRollbackReope
 
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
     EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(project));
     EXPECT_FALSE(project.saveTemporaryMetadata());
     EXPECT_EQ(readTestFile(ProjectIO::tempFilesPath(projectPath)), baselineCore);
@@ -3081,7 +3126,7 @@ TEST(ProjectDataTest, BundleAdjustStageDefersScheduledTemporarySaveUntilRollback
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba scheduled temporary barrier")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     const QJsonObject before = project.metadataIncludingResults();
@@ -3092,7 +3137,7 @@ TEST(ProjectDataTest, BundleAdjustStageDefersScheduledTemporarySaveUntilRollback
 
     ProjectBundleAdjustMetadataStageToken token;
     ASSERT_TRUE(project.stageBundleAdjustMetadata(
-        fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+        fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
     project.scheduleTemporaryMetadataSave();
 
     EXPECT_TRUE(ProjectDataPersistenceTestPeer::suspended(project));
@@ -3125,7 +3170,7 @@ TEST(ProjectDataTest, BundleAdjustRollbackMergesConfigWorkspaceResponsibilitiesA
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba rollback responsibilities")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     ASSERT_FALSE(project.isDirty());
@@ -3137,7 +3182,7 @@ TEST(ProjectDataTest, BundleAdjustRollbackMergesConfigWorkspaceResponsibilitiesA
     ProjectDataPersistenceTestPeer::startArchiveTimer(&project, 4000);
 
     ProjectBundleAdjustMetadataStageToken token;
-    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage))
         << qPrintable(errorMessage);
     QJsonObject config = ProjectDataPersistenceTestPeer::config(project);
     config[QStringLiteral("fix5_config_marker")] = QStringLiteral("during-stage");
@@ -3179,7 +3224,7 @@ TEST(ProjectDataTest, BundleAdjustRollbackPreservesUiOnlyResponsibilityWithoutDi
     ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba rollback ui responsibility")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     ASSERT_FALSE(project.isDirty());
@@ -3189,7 +3234,7 @@ TEST(ProjectDataTest, BundleAdjustRollbackPreservesUiOnlyResponsibilityWithoutDi
     project.scheduleTemporaryMetadataSave();
     ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(project));
     ProjectBundleAdjustMetadataStageToken token;
-    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage))
         << qPrintable(errorMessage);
     project.saveUiSettings(QJsonObject{{QStringLiteral("show_interest_points"), false}});
 
@@ -3232,12 +3277,12 @@ TEST(ProjectDataTest, BundleAdjustShutdownRollbackSuppressesArchiveTimer)
     ASSERT_TRUE(project.createProject(tempProjectPath(dir), QStringLiteral("ba shutdown timer")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(&project);
     ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::startArchiveTimer(&project, 4000);
     ProjectBundleAdjustMetadataStageToken token;
-    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+    ASSERT_TRUE(project.stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage))
         << qPrintable(errorMessage);
 
     ProjectDataPersistenceTestPeer::settleBundleAdjustForShutdown(&project);
@@ -3270,7 +3315,7 @@ TEST(ProjectDataTest, BundleAdjustStageDefersRunningWorkerAcrossEveryTerminalPat
         ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("ba worker handoff")));
         QString errorMessage;
         const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(&project, caseRoot, &errorMessage);
-        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
         ProjectDataPersistenceTestPeer::settle(&project);
         ASSERT_TRUE(project.saveProject(&errorMessage)) << qPrintable(errorMessage);
         const QJsonObject before = project.metadataIncludingResults();
@@ -3290,7 +3335,7 @@ TEST(ProjectDataTest, BundleAdjustStageDefersRunningWorkerAcrossEveryTerminalPat
 
         ProjectBundleAdjustMetadataStageToken token;
         ASSERT_TRUE(project.stageBundleAdjustMetadata(
-            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+            fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
         const QJsonObject staged = project.metadataIncludingResults();
         project.scheduleTemporaryMetadataSave();
         if (terminal == TerminalPath::Conflict)
@@ -3362,7 +3407,7 @@ TEST(ProjectDataTest, DestructorSettlesUnresolvedBundleAdjustStageBeforePersiste
         ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("ba destructor rollback")));
         QString errorMessage;
         const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
-        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
         ProjectDataPersistenceTestPeer::settle(project.get());
         QJsonObject marked = project->metadataIncludingResults();
         marked[QStringLiteral("fix3_pre_stage_marker")] = QStringLiteral("preserve-before-stage");
@@ -3372,7 +3417,7 @@ TEST(ProjectDataTest, DestructorSettlesUnresolvedBundleAdjustStageBeforePersiste
         before = project->metadataIncludingResults();
         ProjectBundleAdjustMetadataStageToken token;
         ASSERT_TRUE(project->stageBundleAdjustMetadata(
-            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+            fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
     }
 
     ProjectData reopened;
@@ -3398,12 +3443,12 @@ TEST(ProjectDataTest, DestructorPreservesCompleteExternalBundleAdjustState)
         ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("ba destructor external")));
         QString errorMessage;
         const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
-        ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+        ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
         ProjectDataPersistenceTestPeer::settle(project.get());
         ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
         ProjectBundleAdjustMetadataStageToken token;
         ASSERT_TRUE(project->stageBundleAdjustMetadata(
-            fixture.cameraUpdates, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
+            fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage)) << qPrintable(errorMessage);
         QJsonObject external = project->metadataIncludingResults();
         external[QStringLiteral("aerial_triangulation_results")] =
             QJsonArray{QJsonObject{{QStringLiteral("reconstruction_generation_id"),
@@ -3446,7 +3491,7 @@ TEST(ProjectDataTest, DestructorForceDrainPreservesLiveMarkerAfterRunningWorkerT
     ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("destructor forced running drain")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(project.get());
     ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
     originalDefinitions = project->coreFilesMeta().value(QStringLiteral("camera_definitions")).toArray();
@@ -3463,7 +3508,7 @@ TEST(ProjectDataTest, DestructorForceDrainPreservesLiveMarkerAfterRunningWorkerT
     ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(*project));
     ASSERT_FALSE(ProjectDataPersistenceTestPeer::hasPendingRequest(*project));
     ProjectBundleAdjustMetadataStageToken token;
-    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage))
         << qPrintable(errorMessage);
     const quint64 stagedGeneration = ProjectDataPersistenceTestPeer::persistenceGeneration(*project);
     blocker.releaseAfterGenerationAdvance(ProjectDataPersistenceTestPeer::coordinator(*project), stagedGeneration);
@@ -3508,7 +3553,7 @@ TEST(ProjectDataTest, DestructorBundleAdjustForceDrainDiscardsDeferredResultWith
     ASSERT_TRUE(project->createProject(projectPath, QStringLiteral("destructor deferred drain")));
     QString errorMessage;
     const BundleAdjustStageFixture fixture = prepareBundleAdjustStageFixture(project.get(), dir.path(), &errorMessage);
-    ASSERT_FALSE(fixture.cameraUpdates.empty()) << qPrintable(errorMessage);
+    ASSERT_FALSE(fixture.cameraInstances.empty()) << qPrintable(errorMessage);
     ProjectDataPersistenceTestPeer::settle(project.get());
     ASSERT_TRUE(project->saveProject(&errorMessage)) << qPrintable(errorMessage);
 
@@ -3517,7 +3562,7 @@ TEST(ProjectDataTest, DestructorBundleAdjustForceDrainDiscardsDeferredResultWith
     project->scheduleTemporaryMetadataSave();
     ASSERT_TRUE(ProjectDataPersistenceTestPeer::running(*project));
     ProjectBundleAdjustMetadataStageToken token;
-    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraUpdates, fixture.result, &token, &errorMessage))
+    ASSERT_TRUE(project->stageBundleAdjustMetadata(fixture.cameraInstances, fixture.annotationsByImageId, fixture.result, &token, &errorMessage))
         << qPrintable(errorMessage);
     QJsonObject config = ProjectDataPersistenceTestPeer::config(*project);
     config[QStringLiteral("fix5_deferred_force_marker")] = QStringLiteral("post-stage-live");

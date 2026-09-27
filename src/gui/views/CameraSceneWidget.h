@@ -34,7 +34,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 #include "CameraSceneViewMath.h"
 #include "CameraSceneImageCache.h"
@@ -46,7 +46,7 @@
 #include "TiePointVisualization.h"
 
 /// 渲染用点云类型别名
-using RenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using RenderCloud = plapoint::GeometryCloud<float>;
 
 class QWidget;
 class QPainter;

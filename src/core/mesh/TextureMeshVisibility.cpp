@@ -15,21 +15,27 @@ bool cancelled(const TextureMappingConfig &config)
     return config.isCancelled && config.isCancelled();
 }
 
-bool projectTriangle(const PreparedView &view,
-                     const FaceGeometry &face,
-                     std::array<std::array<double, 2>, 3> *pixels,
-                     std::array<double, 3> *depths)
+bool projectTriangle(const PreparedView& view,
+                     const FaceGeometry& face,
+                     std::array<std::array<double, 2>, 3>* pixels,
+                     std::array<double, 3>* depths)
 {
     for (int corner = 0; corner < 3; ++corner)
     {
-        if (!view.colorCamera.projectWorldPointWithDepth(
-                face.vertices[corner].data(),
-                (*pixels)[corner].data(),
-                (*depths)[corner]) ||
-            !std::isfinite((*pixels)[corner][0]) ||
-            !std::isfinite((*pixels)[corner][1]) ||
-            !std::isfinite((*depths)[corner]) ||
-            (*depths)[corner] <= 1.0e-8)
+        if (!view.colorCamera)
+        {
+            return false;
+        }
+        const auto projected =
+            view.colorCamera->groundToImage({view.colorCamera->groundFrame(), face.vertices[corner]});
+        if (!projected || !projected.value().positiveDepth)
+        {
+            return false;
+        }
+        (*pixels)[corner] = {projected.value().image.sample, projected.value().image.line};
+        (*depths)[corner] = *projected.value().positiveDepth;
+        if (!std::isfinite((*pixels)[corner][0]) || !std::isfinite((*pixels)[corner][1]) ||
+            !std::isfinite((*depths)[corner]) || (*depths)[corner] <= 1.0e-8)
         {
             return false;
         }
@@ -37,9 +43,7 @@ bool projectTriangle(const PreparedView &view,
     return true;
 }
 
-std::uint64_t rasterizeView(const PipelineData &data,
-                            PreparedView *view,
-                            const TextureMappingConfig &config)
+std::uint64_t rasterizeView(const PipelineData& data, PreparedView* view, const TextureMappingConfig& config)
 {
     const int rows = view->colorBgr.rows;
     const int columns = view->colorBgr.cols;
@@ -267,9 +271,7 @@ bool buildFinalMeshVisibility(const TextureMappingConfig &config,
     return true;
 }
 
-bool isFinalMeshFaceVisible(const PreparedView &view,
-                            int face_index,
-                            const std::array<double, 3> &world)
+bool isFinalMeshFaceVisible(const PreparedView& view, int face_index, const std::array<double, 3>& world)
 {
     if (view.finalMeshFaceIds.empty())
     {
@@ -279,14 +281,19 @@ bool isFinalMeshFaceVisible(const PreparedView &view,
     {
         return false;
     }
-    double pixel[2]{};
-    double depth = 0.0;
-    if (!view.colorCamera.projectWorldPointWithDepth(
-            world.data(), pixel, depth) ||
-        !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-        !std::isfinite(depth) || depth <= 0.0 ||
-        pixel[0] < 0.0 || pixel[1] < 0.0 ||
-        pixel[0] > view.finalMeshFaceIds.cols - 1.0 ||
+    if (!view.colorCamera)
+    {
+        return false;
+    }
+    const auto projected = view.colorCamera->groundToImage({view.colorCamera->groundFrame(), world});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return false;
+    }
+    const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+    const double depth = *projected.value().positiveDepth;
+    if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(depth) || depth <= 0.0 ||
+        pixel[0] < 0.0 || pixel[1] < 0.0 || pixel[0] > view.finalMeshFaceIds.cols - 1.0 ||
         pixel[1] > view.finalMeshFaceIds.rows - 1.0)
     {
         return false;

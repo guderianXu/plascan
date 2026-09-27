@@ -203,12 +203,23 @@ namespace xjw::mvs
 
         std::string preparationError;
         cv::Mat prepared_valid_mask;
+        const auto& source_camera = view.camera;
+        if (!source_camera || source_camera->imageSize().samples != frame->gray.cols ||
+            source_camera->imageSize().lines != frame->gray.rows)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = "影像 MVS 预处理缺少 PlaCamera 模型或模型尺寸与影像不一致";
+            }
+            return false;
+        }
+        std::shared_ptr<const placamera::FramePinholeModel> prepared_camera;
         if (!prepareMvsImageAndMask(frame->gray,
                                     frame->validMask,
-                                    view.camera,
+                                    *source_camera,
                                     &frame->preparedGray,
                                     &prepared_valid_mask,
-                                    &frame->preparedCamera,
+                                    &prepared_camera,
                                     &preparationError))
         {
             if (errorMessage)

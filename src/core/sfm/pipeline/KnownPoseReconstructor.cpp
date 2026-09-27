@@ -1,9 +1,7 @@
 #include "KnownPoseReconstructor.h"
 #include "IncrementalSfmDetail.h"
-#include "FramePinholeTsaiIO.h"
 #include "SfmBundleAdjustCoordinator.h"
 #include "geometry/OpenCvCameraAdapter.h"
-#include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/ReferenceTrackBuilder.h"
 
@@ -50,14 +48,14 @@ namespace xjw
         int registeredCount = 0;
         for (ImageId imageId : imageIds)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-            if (!getCamera(imageId, camera))
+            const auto* camera = getCamera(imageId);
+            if (!camera)
             {
                 result.summary = "Failed to load known camera pose for image " + std::to_string(imageId);
                 return result;
             }
 
-            _reconstruction->registerImage(imageId, camera);
+            _reconstruction->registerImage(imageId, *camera);
             ++registeredCount;
 
             if (!reportProgress(registeredCount, totalImages, "Registered known camera pose", progressCb))
@@ -82,7 +80,7 @@ namespace xjw
                                       triangulationPolicy.acceptedWithAdapted);
         }
 
-        Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+        Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
         int createdPoints = 0;
         int continuedObservations = 0;
         int completedObservations = 0;
@@ -263,7 +261,8 @@ namespace xjw
             refineKnownCameraPosesWithPnp();
             SfmBundleAdjustCoordinator(*this).run(false);
 
-            Triangulator baTriangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator baTriangulator(
+                *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             baRetriangulated =
                 baTriangulator.retriangulatePoints(triangulationPolicy.triangulatorOptions.maxReprojError);
             baCompletedObservations = baTriangulator.completeTracks(triangulationPolicy.triangulatorOptions);
@@ -429,48 +428,29 @@ namespace xjw
         return result;
     }
 
-    // ============================================================
-    // 内部：加载相机
-    // ============================================================
-
-    bool IncrementalSfm::loadCamera(const std::string& cameraPath,
-                                    xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const
+    const placamera::FramePinholeNumericState* IncrementalSfm::getCamera(ImageId imageId) const
     {
-        return xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(cameraPath, &cam);
-    }
-
-    bool IncrementalSfm::getCamera(ImageId imageId,
-                                   xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const
-    {
-        // 优先使用预设相机对象
         auto pit = _preloadedCameras.find(imageId);
         if (pit != _preloadedCameras.end())
         {
-            cam = pit->second;
-            return true;
+            return &pit->second;
         }
-        // 其次从 .tsai 文件加载
-        auto cit = _cameraPaths.find(imageId);
-        if (cit != _cameraPaths.end() && !cit->second.empty())
-        {
-            return loadCamera(cit->second, cam);
-        }
-        return false;
+        return nullptr;
     }
 
-    std::vector<BACameraPosePrior>
+    std::vector<std::optional<plabundle::CameraPosePrior>>
     IncrementalSfm::buildCameraPosePriorsFromInputCameras(const std::vector<ImageId>& imageIds) const
     {
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> inputCameras;
+        std::vector<const placamera::FramePinholeNumericState*> inputCameras;
         inputCameras.reserve(imageIds.size());
         std::vector<std::array<double, 3>> inputCenters;
         inputCenters.reserve(imageIds.size());
         for (ImageId imageId : imageIds)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
-            if (getCamera(imageId, inputCamera))
+            const auto* inputCamera = getCamera(imageId);
+            if (inputCamera)
             {
-                inputCenters.push_back(inputCamera.cameraCenter());
+                inputCenters.push_back(inputCamera->pose().center);
             }
             inputCameras.push_back(inputCamera);
         }
@@ -479,28 +459,28 @@ namespace xjw
         const double adaptivePositionSigmaMeters =
             std::max(0.25, inputExtent * 0.01 * std::max(1e-6, _sfmOptions.knownPosePriorPositionSigmaScale));
 
-        std::vector<BACameraPosePrior> priors;
+        std::vector<std::optional<plabundle::CameraPosePrior>> priors;
         priors.reserve(imageIds.size());
         for (size_t i = 0; i < imageIds.size(); ++i)
         {
-            BACameraPosePrior prior;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& inputCamera = inputCameras[i];
-            if (inputCamera.isValid())
+            std::optional<plabundle::CameraPosePrior> prior;
+            const auto* inputCamera = inputCameras[i];
+            if (inputCamera)
             {
-                prior.enabled = true;
-                prior.cameraToWorldRotation = inputCamera.cameraToWorldRotation();
-                prior.cameraCenter = inputCamera.cameraCenter();
-                prior.positionSigmaMeters = std::max(1e-6, adaptivePositionSigmaMeters);
-                prior.rotationSigmaDegrees = std::max(1e-6, _sfmOptions.knownPosePriorRotationSigmaDegrees);
+                prior = plabundle::CameraPosePrior{};
+                prior->cameraToWorldRotation = inputCamera->pose().cameraToWorldRotation;
+                prior->cameraCenter = inputCamera->pose().center;
+                prior->positionSigmaMeters = std::max(1e-6, adaptivePositionSigmaMeters);
+                prior->rotationSigmaDegrees = std::max(1e-6, _sfmOptions.knownPosePriorRotationSigmaDegrees);
             }
             priors.push_back(prior);
         }
         return priors;
     }
 
-    void IncrementalSfm::alignReconstructionToKnownPosePriors(
-        const std::vector<ImageId>& imageIds,
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras)
+    void
+    IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<ImageId>& imageIds,
+                                                         std::vector<placamera::FramePinholeNumericState>* baCameras)
     {
         if (!baCameras || imageIds.size() != baCameras->size() || imageIds.size() < 3)
         {
@@ -513,13 +493,13 @@ namespace xjw
         inputCenters.reserve(imageIds.size());
         for (size_t i = 0; i < imageIds.size(); ++i)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
-            if (!getCamera(imageIds[i], inputCamera))
+            const auto* inputCamera = getCamera(imageIds[i]);
+            if (!inputCamera)
             {
                 continue;
             }
-            currentCenters.push_back((*baCameras)[i].cameraCenter());
-            inputCenters.push_back(inputCamera.cameraCenter());
+            currentCenters.push_back((*baCameras)[i].pose().center);
+            inputCenters.push_back(inputCamera->pose().center);
         }
 
         if (currentCenters.size() < 3)
@@ -609,9 +589,11 @@ namespace xjw
             {
                 continue;
             }
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _reconstruction->camera(imageId);
-            camera.setPose(multiplyRotation(transform.rotation, camera.cameraToWorldRotation()),
-                           transformPoint(transform, camera.cameraCenter()));
+            placamera::FramePinholeNumericState& camera = _reconstruction->camera(imageId);
+            camera.setPose(
+                placamera::Pose::create(camera.groundFrame(),
+                                        transformPoint(transform, camera.pose().center),
+                                        multiplyRotation(transform.rotation, camera.pose().cameraToWorldRotation)));
         }
 
         for (Point3DId pointId : _reconstruction->allPoint3DIds())
@@ -650,17 +632,17 @@ namespace xjw
 
         // 输入相机和相机中心范围在整轮 PnP 中保持不变。一次加载可避免 .tsai
         // 路径在逐影像循环中被重复打开，并将原来的 O(N^2) 相机读取降为 O(N)。
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> inputCameras;
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState> inputCameras;
         inputCameras.reserve(imageIds.size());
         std::vector<std::array<double, 3>> inputCenters;
         inputCenters.reserve(imageIds.size());
         for (ImageId imageId : imageIds)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState inputCamera;
-            if (getCamera(imageId, inputCamera))
+            const auto* inputCamera = getCamera(imageId);
+            if (inputCamera)
             {
-                inputCenters.push_back(inputCamera.cameraCenter());
-                inputCameras.emplace(imageId, std::move(inputCamera));
+                inputCenters.push_back(inputCamera->pose().center);
+                inputCameras.emplace(imageId, *inputCamera);
             }
         }
         const double inputExtent = centerExtent(inputCenters);
@@ -741,23 +723,28 @@ namespace xjw
             pnpOptions.minNumInliers = std::min(pnpOptions.minNumInliers, static_cast<int>(worldPoints.size()));
             pnpOptions.minInlierRatio = std::min(pnpOptions.minInlierRatio, 0.10);
 
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState before = _reconstruction->camera(imageId);
-            const PnpResult pnp = PnpSolver::solveWithCamera(worldPoints, imagePoints, before, pnpOptions);
+            const placamera::FramePinholeNumericState before = _reconstruction->camera(imageId);
+            const PnpResult pnp = PnpSolver::solveCalibrated(worldPoints,
+                                                             imagePoints,
+                                                             before.intrinsics(),
+                                                             before.distortion(),
+                                                             before.depthAxisFlipped(),
+                                                             pnpOptions);
             if (!pnp.success)
             {
                 continue;
             }
 
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState candidate = before;
-            candidate.setPose(pnp.R, pnp.C);
+            placamera::FramePinholeNumericState candidate = before;
+            candidate.setPose(placamera::Pose::create(candidate.groundFrame(), pnp.C, pnp.R));
             const auto inputCameraIt = inputCameras.find(imageId);
             if (inputCameraIt != inputCameras.end() &&
-                pointDistance(candidate.cameraCenter(), inputCameraIt->second.cameraCenter()) > maxAcceptedMove)
+                pointDistance(candidate.pose().center, inputCameraIt->second.pose().center) > maxAcceptedMove)
             {
                 Logger::instance()->warnf(
                     "[SFM] Known-pose PnP refinement rejected for image %u: move from prior %.3f > %.3f",
                     imageId,
-                    pointDistance(candidate.cameraCenter(), inputCameraIt->second.cameraCenter()),
+                    pointDistance(candidate.pose().center, inputCameraIt->second.pose().center),
                     maxAcceptedMove);
                 continue;
             }

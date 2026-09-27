@@ -17,6 +17,7 @@
 #include "GroundBackProjector.h"
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -77,9 +78,8 @@ struct OverlapImageInput
     // 影像文件路径（用于错误信息报告，不做实际读取）
     std::string imagePath;
 
-    // 该影像对应的已校验数值相机状态（内参 + 外参）。
-    // 旧 IO/JSON 相机不得直接进入重叠几何。
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    // 已绑定影像身份、尺寸和世界坐标系的 PlaCamera 模型。
+    std::shared_ptr<const placamera::FramePinholeModel> camera;
 
     // 影像宽度（像素），用于计算中心像素坐标及四角坐标
     int width = 0;

@@ -1,7 +1,7 @@
 #include "MeshTypes.h"
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/ply_io.h>
 
 #include <fstream>
@@ -48,22 +48,22 @@ namespace xjw
                     MeshVertex& vertex = mesh->vertices[index];
                     if (mesh->hasVertexConfidence)
                     {
-                        vertex.confidence = cloud->scalarFields()->getValue(row, confidence_field);
+                        vertex.confidence = cloud->scalarFields()->coeff(row, confidence_field);
                     }
-                    vertex.x = cloud->points().getValue(row, 0);
-                    vertex.y = cloud->points().getValue(row, 1);
-                    vertex.z = cloud->points().getValue(row, 2);
+                    vertex.x = cloud->points().coeff(row, 0);
+                    vertex.y = cloud->points().coeff(row, 1);
+                    vertex.z = cloud->points().coeff(row, 2);
                     if (cloud->hasNormals())
                     {
-                        vertex.nx = cloud->normals()->getValue(row, 0);
-                        vertex.ny = cloud->normals()->getValue(row, 1);
-                        vertex.nz = cloud->normals()->getValue(row, 2);
+                        vertex.nx = cloud->normals()->coeff(row, 0);
+                        vertex.ny = cloud->normals()->coeff(row, 1);
+                        vertex.nz = cloud->normals()->coeff(row, 2);
                     }
                     if (cloud->hasColors())
                     {
-                        vertex.r = cloud->colors()->getValue(row, 0);
-                        vertex.g = cloud->colors()->getValue(row, 1);
-                        vertex.b = cloud->colors()->getValue(row, 2);
+                        vertex.r = cloud->colors()->coeff(row, 0);
+                        vertex.g = cloud->colors()->coeff(row, 1);
+                        vertex.b = cloud->colors()->coeff(row, 2);
                     }
                 }
 
@@ -84,7 +84,7 @@ namespace xjw
                     Triangle& triangle = mesh->faces[static_cast<std::size_t>(row)];
                     for (int column = 0; column < 3; ++column)
                     {
-                        const int vertex_index = faces->getValue(row, column);
+                        const int vertex_index = faces->coeff(row, column);
                         if (vertex_index < 0 || static_cast<std::size_t>(vertex_index) >= mesh->vertices.size())
                         {
                             if (errorMsg)
@@ -125,9 +125,9 @@ namespace xjw
                 xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path)).parent_path());
             try
             {
-                using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-                plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(vertices.size(), 3);
-                plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(vertices.size(), 3);
+                using PlaCloud = plapoint::GeometryCloud<float>;
+                plamatrix::MatrixXf points(vertices.size(), 3);
+                plamatrix::MatrixXf normals(vertices.size(), 3);
                 for (std::size_t i = 0; i < vertices.size(); ++i)
                 {
                     const auto row = static_cast<plamatrix::Index>(i);
@@ -140,7 +140,7 @@ namespace xjw
                     normals(row, 2) = vertex.nz;
                 }
 
-                plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faceMatrix(faces.size(), 3);
+                plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faceMatrix(faces.size(), 3);
                 for (std::size_t i = 0; i < faces.size(); ++i)
                 {
                     const auto row = static_cast<plamatrix::Index>(i);
@@ -153,7 +153,7 @@ namespace xjw
                 cloud.setNormals(std::move(normals));
                 if (hasVertexColors)
                 {
-                    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(vertices.size(), 3);
+                    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(vertices.size(), 3);
                     for (std::size_t i = 0; i < vertices.size(); ++i)
                     {
                         const auto row = static_cast<plamatrix::Index>(i);
@@ -167,7 +167,7 @@ namespace xjw
                 cloud.setFaces(std::move(faceMatrix));
                 if (hasVertexConfidence)
                 {
-                    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> confidence(vertices.size(), 1);
+                    plamatrix::MatrixXf confidence(vertices.size(), 1);
                     for (std::size_t i = 0; i < vertices.size(); ++i)
                     {
                         confidence(static_cast<plamatrix::Index>(i), 0) = vertices[i].confidence;

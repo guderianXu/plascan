@@ -276,11 +276,11 @@ void ProjectLifecycleService::openProjectFromPath(const QString& requestedPath)
         });
 }
 
-void ProjectLifecycleService::saveProject()
+bool ProjectLifecycleService::saveProject()
 {
     if (!_projectData || !_projectData->hasProject())
     {
-        return;
+        return false;
     }
     if (_saveInProgress)
     {
@@ -288,20 +288,20 @@ void ProjectLifecycleService::saveProject()
         {
             _messages->information(_parentWidget, QStringLiteral("保存项目"), QStringLiteral("项目正在保存，请稍候。"));
         }
-        return;
+        return false;
     }
     if (rejectLifecycleChange(QStringLiteral("保存项目")))
     {
-        return;
+        return false;
     }
     if (!beginOperation(QStringLiteral("保存项目")))
     {
-        return;
+        return false;
     }
     emit saveStarted();
     _saveInProgress = true;
     _saveSessionContext = _session ? _session->context() : xjw::gui::project::ProjectSessionContext{};
-    _projectData->saveProjectAsync();
+    return _projectData->saveProjectAsync();
 }
 
 void ProjectLifecycleService::exportPortableProject()

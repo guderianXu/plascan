@@ -46,8 +46,8 @@ bool isUsableOpenClPatchMatchDevice(bool availabilityQuerySucceeded,
 bool PatchMatchDepthEstimator::estimate(
     const cv::Mat& refGray,
     const std::vector<cv::Mat>& srcGrays,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+    const placamera::FramePinholeModel& refCam,
+    const std::vector<placamera::FramePinholeModel>& srcCams,
     float zNear,
     float zFar,
     const PatchMatchConfig& config,
@@ -109,13 +109,34 @@ bool PatchMatchDepthEstimator::estimate(
             }
         }
     }
-    if (!refCam.isValid())
+    const auto camera_usable = [](const placamera::FramePinholeModel& camera, const cv::Mat& image)
     {
-        if (errorMsg) *errorMsg = "reference camera parameters are invalid";
+        const auto& definition = camera.pinholeDefinition();
+        const auto& intrinsics = definition.intrinsics();
+        const auto& distortion = definition.distortion();
+        return camera.imageSize().samples == image.cols && camera.imageSize().lines == image.rows &&
+               definition.pixelConvention() == placamera::PixelConvention::PixelCenter &&
+               !definition.depthAxisFlipped() && intrinsics.uAxisSign == 1 && intrinsics.vAxisSign == 1 &&
+               distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
+               distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
+    };
+    if (!camera_usable(refCam, refGray))
+    {
+        if (errorMsg)
+            *errorMsg = "reference camera must match its image and use undistorted positive-Z pixel-centre geometry";
         return false;
     }
+    for (std::size_t index = 0; index < srcCams.size(); ++index)
+    {
+        if (srcCams[index].groundFrame() != refCam.groundFrame() || !camera_usable(srcCams[index], srcGrays[index]))
+        {
+            if (errorMsg)
+                *errorMsg = "source camera frame, image size or pinhole geometry is incompatible with PatchMatch";
+            return false;
+        }
+    }
     zNear = std::max(zNear, 0.01f);
-    zFar  = std::max(zFar, zNear + 0.1f);
+    zFar = std::max(zFar, zNear + 0.1f);
 
     bool cuda_available = false;
     bool opencl_available = false;
@@ -124,11 +145,10 @@ bool PatchMatchDepthEstimator::estimate(
         cuda_available = isCudaAvailable();
         opencl_available = !cuda_available && isOpenClAvailable();
     }
-    const PatchMatchBackend backend = resolvePatchMatchEstimatorBackend(
-        config.backend, cuda_available, opencl_available);
-    const bool has_geometric_guidance_input = auxiliaryInput &&
-        auxiliaryInput->sourceDepthMaps &&
-        !auxiliaryInput->sourceDepthMaps->empty();
+    const PatchMatchBackend backend =
+        resolvePatchMatchEstimatorBackend(config.backend, cuda_available, opencl_available);
+    const bool has_geometric_guidance_input =
+        auxiliaryInput && auxiliaryInput->sourceDepthMaps && !auxiliaryInput->sourceDepthMaps->empty();
     if (backend == PatchMatchBackend::OpenCl && has_geometric_guidance_input)
     {
         if (errorMsg)

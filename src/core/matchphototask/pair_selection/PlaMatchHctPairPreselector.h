@@ -2,7 +2,7 @@
 
 #include "MatchPhotosOptions.h"
 #include "PairTypes.h"
-#include "camera/reference/geometry/ReferenceCameraGeometry.h"
+#include "placamera/reference/ReferenceCameraGeometry.h"
 #include "sift/SiftBackendType.h"
 
 #include <QString>
@@ -42,8 +42,8 @@ namespace xjw::matchphotos
         static bool select(const QStringList& images,
                            const MatchPhotosFeatureCache& featureCache,
                            const MatchPhotosOptions& options,
-                           const std::vector<camera_core::ImageId>& imageIds,
-                           const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                           const std::vector<placamera::ImageId>& imageIds,
+                           const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
                            image_matching::SiftComputeBackend backend,
                            int deviceIndex,
                            PairSelectionResult* output,
@@ -54,9 +54,9 @@ namespace xjw::matchphotos
         static bool selectWithPositions(const QStringList& images,
                                         const MatchPhotosFeatureCache& featureCache,
                                         const MatchPhotosOptions& options,
-                                        const std::vector<camera_core::ImageId>& imageIds,
-                                        const camera_reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
-                                        const camera_reference::ReferenceCameraPositionMap& referencePositions,
+                                        const std::vector<placamera::ImageId>& imageIds,
+                                        const placamera::reference::ReferenceCameraGeometryMap& referenceCameraGeometries,
+                                        const placamera::reference::ReferenceCameraPositionMap& referencePositions,
                                         image_matching::SiftComputeBackend backend,
                                         int deviceIndex,
                                         PairSelectionResult* output,

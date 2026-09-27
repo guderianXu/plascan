@@ -13,7 +13,7 @@ add_library(aerial_triangulation_engine STATIC
 )
 target_include_directories(aerial_triangulation_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(aerial_triangulation_engine
-    PUBLIC camera sfm_core plascan_common_json_io
+    PUBLIC placamera::placamera sfm_core plascan_common_json_io
 )
 target_compile_features(aerial_triangulation_engine PUBLIC cxx_std_20)
 
@@ -27,6 +27,8 @@ add_library(aerial_triangulation STATIC
     workflow/AerialTriangulationPipeline.h
     preparation/MatchResultCatalog.cpp
     preparation/MatchResultCatalog.h
+    preparation/CameraIntrinsicPrior.cpp
+    preparation/CameraIntrinsicPrior.h
     preparation/TiePointPreparation.cpp
     preparation/TiePointPreparation.h
     reconstruction/MarkerPriorLoader.cpp
@@ -62,10 +64,9 @@ target_link_libraries(aerial_triangulation
     PUBLIC
         Qt6::Core
         camera
-        camera_project
-        camera_reference_geometry
-        camera_models_registry
-        coordinate_system_types
+        plascan::placamera_runtime
+        placamera::reference
+        placoordinate::types
         aerial_triangulation_engine
         sfm
         matchphototask

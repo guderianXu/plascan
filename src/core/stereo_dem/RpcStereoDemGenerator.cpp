@@ -5,10 +5,11 @@
 #include "DemDomIO.h"
 #include "DemGenerator.h"
 #include "DemGridAggregator.h"
-#include "RpcRasterIO.h"
-#include "camera/models/rpc/RpcIntersectionService.h"
+#include <placamera/rpc_raster.h>
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
+
+#include <placamera/rpc_adjustment.h>
 
 #include <opencv2/features.hpp>
 #include <opencv2/geometry.hpp>
@@ -22,7 +23,7 @@
 
 #include <opencv2/imgcodecs.hpp>
 
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <algorithm>
 #include <cmath>
@@ -38,7 +39,7 @@ namespace xjw
 
         struct StereoPoint
         {
-            camera_models::rpc::RpcDefinition::GeodeticCoordinate geodetic{};
+            placamera::GeodeticCoordinate geodetic{};
             double reprojectionErrorPixels = 0.0;
             float intensity = 0.0f;
         };
@@ -97,27 +98,25 @@ namespace xjw
             return true;
         }
 
-        std::shared_ptr<const camera_models::rpc::RpcInstance>
+        std::shared_ptr<const placamera::RpcModel>
         loadCamera(const QString& path, const std::string& identity, QString* errorMessage)
         {
-            std::string error;
-            auto camera = camera_models::rpc::importRpcRasterInstance(
-                common::io::toUtf8Path(path),
-                camera_core::CameraDefinitionId("rpc-stereo-definition-" + identity),
-                camera_core::CameraInstanceId("rpc-stereo-instance-" + identity),
-                camera_core::ImageId("rpc-stereo-image-" + identity),
-                xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
-                &error);
+            auto camera =
+                placamera::importRpcRasterModel(common::io::toUtf8Path(path),
+                                                placamera::CameraDefinitionId("rpc-stereo-definition-" + identity),
+                                                placamera::CameraInstanceId("rpc-stereo-instance-" + identity),
+                                                placamera::ImageId("rpc-stereo-image-" + identity),
+                                                placamera::FrameId("EPSG:4978"));
             if (!camera)
             {
                 if (errorMessage)
                 {
-                    *errorMessage =
-                        QStringLiteral("读取 RPC 相机失败 (%1): %2").arg(path, QString::fromUtf8(error.c_str()));
+                    *errorMessage = QStringLiteral("读取 RPC 相机失败 (%1): %2")
+                                        .arg(path, QString::fromStdString(camera.message()));
                 }
                 return nullptr;
             }
-            return camera;
+            return camera.takeValue();
         }
 
         std::vector<cv::DMatch>
@@ -274,8 +273,10 @@ namespace xjw
         }
 
         reportProgress(progress, QStringLiteral("执行 RPC 双像前方交会"), 35);
-        camera_models::rpc::RpcIntersectionOptions intersectionOptions;
-        intersectionOptions.pixelTolerance = 1.0e-4;
+        placamera::RpcIntersectionOptions intersectionOptions;
+        // Observed tie points contain image-matching noise.  The solver's
+        // convergence contract must match this workflow's acceptance gate.
+        intersectionOptions.pixelTolerance = options.maximumReprojectionErrorPixels;
         intersectionOptions.positionToleranceMeters = 1.0e-3;
         intersectionOptions.maximumIterations = 40;
         std::vector<StereoPoint> stereoPoints;
@@ -294,24 +295,27 @@ namespace xjw
             ++fundamentalInliers;
             const cv::Point2f& left = leftPoints[index];
             const cv::Point2f& right = rightPoints[index];
-            camera_models::rpc::RpcIntersectionResult intersection;
-            const bool converged = camera_models::rpc::RpcIntersectionService::intersect(
-                *leftCamera,
-                {left.x, left.y},
-                *rightCamera,
-                {right.x, right.y},
-                &intersection,
-                intersectionOptions);
-            if ((!converged && intersection.iterations <= 0) || !std::isfinite(intersection.reprojectionRmsPixels) ||
-                intersection.reprojectionRmsPixels > options.maximumReprojectionErrorPixels ||
-                std::hypot(intersection.ecefMeters[0],
-                           std::hypot(intersection.ecefMeters[1], intersection.ecefMeters[2])) < 1.0e6)
+            const auto intersection = placamera::intersectRpc(*leftCamera,
+                                                              placamera::ImageCoordinate{left.x, left.y},
+                                                              *rightCamera,
+                                                              placamera::ImageCoordinate{right.x, right.y},
+                                                              intersectionOptions);
+            if (!intersection)
+            {
+                continue;
+            }
+            const auto& intersectionValue = intersection.value();
+            if (!std::isfinite(intersectionValue.reprojectionRmsPixels) ||
+                intersectionValue.reprojectionRmsPixels > options.maximumReprojectionErrorPixels ||
+                std::hypot(intersectionValue.cartesian.position[0],
+                           std::hypot(intersectionValue.cartesian.position[1],
+                                      intersectionValue.cartesian.position[2])) < 1.0e6)
             {
                 continue;
             }
             StereoPoint point;
-            point.geodetic = intersection.geodetic;
-            point.reprojectionErrorPixels = intersection.reprojectionRmsPixels;
+            point.geodetic = intersectionValue.geodetic;
+            point.reprojectionErrorPixels = intersectionValue.reprojectionRmsPixels;
             const int intensityRow = std::clamp(cvRound(left.y), 0, leftImage.rows - 1);
             const int intensityCol = std::clamp(cvRound(left.x), 0, leftImage.cols - 1);
             point.intensity = leftImage.at<uchar>(intensityRow, intensityCol);
@@ -331,7 +335,7 @@ namespace xjw
         heights.reserve(stereoPoints.size());
         for (const StereoPoint& point : stereoPoints)
         {
-            heights.push_back(point.geodetic[2]);
+            heights.push_back(point.geodetic.heightMeters);
         }
         const double medianHeight = median(heights);
         std::vector<double> deviations;
@@ -345,9 +349,10 @@ namespace xjw
         std::erase_if(stereoPoints,
                       [&](const StereoPoint& point)
                       {
-                          return !std::isfinite(point.geodetic[0]) || !std::isfinite(point.geodetic[1]) ||
-                                 !std::isfinite(point.geodetic[2]) ||
-                                 std::abs(point.geodetic[2] - medianHeight) > heightTolerance;
+                          return !std::isfinite(point.geodetic.longitudeDegrees) ||
+                                 !std::isfinite(point.geodetic.latitudeDegrees) ||
+                                 !std::isfinite(point.geodetic.heightMeters) ||
+                                 std::abs(point.geodetic.heightMeters - medianHeight) > heightTolerance;
                       });
         if (stereoPoints.size() < static_cast<std::size_t>(options.minimumAcceptedPoints))
         {
@@ -360,14 +365,14 @@ namespace xjw
 
         std::vector<double> longitudes;
         std::vector<double> latitudes;
-        std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate> geodetic;
+        std::vector<placamera::GeodeticCoordinate> geodetic;
         longitudes.reserve(stereoPoints.size());
         latitudes.reserve(stereoPoints.size());
         geodetic.reserve(stereoPoints.size());
         for (const StereoPoint& point : stereoPoints)
         {
-            longitudes.push_back(point.geodetic[0]);
-            latitudes.push_back(point.geodetic[1]);
+            longitudes.push_back(point.geodetic.longitudeDegrees);
+            latitudes.push_back(point.geodetic.latitudeDegrees);
             geodetic.push_back(point.geodetic);
         }
 
@@ -387,8 +392,8 @@ namespace xjw
             return false;
         }
         reportProgress(progress, QStringLiteral("栅格化摄影测量点云"), 70);
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> coordinates(projected.size(), 3);
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(projected.size(), 3);
+        plamatrix::MatrixXf coordinates(projected.size(), 3);
+        plamatrix::Matrix<uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(projected.size(), 3);
         for (std::size_t index = 0; index < projected.size(); ++index)
         {
             coordinates(index, 0) = static_cast<float>(projected[index][0]);

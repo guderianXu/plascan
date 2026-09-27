@@ -225,58 +225,64 @@ bool DepthGeometryHypothesisRerankMaps::compatible(const cv::Size &size) const
         decisionAction.type() == CV_8UC1 && decisionAction.size() == size;
 }
 
-ProjectedDepthEvidence projectSourceDepthEvidenceToReference(
-    const cv::Mat& source_depth,
-    const cv::Mat& source_confidence,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
-    const cv::Size& reference_size,
-    float maximum_projection_distance_pixels,
-    int baseline_sector,
-    std::uint64_t* projected_candidate_count,
-    int row_worker_count,
-    const std::atomic<bool>* cancelled)
+ProjectedDepthEvidence projectSourceDepthEvidenceToReference(const cv::Mat& source_depth,
+                                                             const cv::Mat& source_confidence,
+                                                             const placamera::FramePinholeModel& source_camera,
+                                                             const placamera::FramePinholeModel& reference_camera,
+                                                             const cv::Size& reference_size,
+                                                             float maximum_projection_distance_pixels,
+                                                             int baseline_sector,
+                                                             std::uint64_t* projected_candidate_count,
+                                                             int row_worker_count,
+                                                             const std::atomic<bool>* cancelled)
 {
-    if (projected_candidate_count) *projected_candidate_count = 0;
+    if (projected_candidate_count)
+        *projected_candidate_count = 0;
     ProjectedDepthEvidence result;
     result.baselineSector = baseline_sector;
-    if (source_depth.type() != CV_32FC1 || source_depth.empty() ||
-        source_confidence.type() != CV_32FC1 ||
+    if (source_depth.type() != CV_32FC1 || source_depth.empty() || source_confidence.type() != CV_32FC1 ||
         source_confidence.size() != source_depth.size() ||
-        !source_camera.isValid() || !reference_camera.isValid() ||
-        reference_size.width <= 0 || reference_size.height <= 0)
+        source_camera.groundFrame() != reference_camera.groundFrame() ||
+        source_camera.imageSize().samples != source_depth.cols ||
+        source_camera.imageSize().lines != source_depth.rows ||
+        reference_camera.imageSize().samples != reference_size.width ||
+        reference_camera.imageSize().lines != reference_size.height || reference_size.width <= 0 ||
+        reference_size.height <= 0)
     {
         return result;
     }
 
-    const float maximum_distance = std::clamp(
-        maximum_projection_distance_pixels, 0.25f, 1.5f);
+    const float maximum_distance = std::clamp(maximum_projection_distance_pixels, 0.25f, 1.5f);
     cv::Mat packed(reference_size, CV_64FC1, cv::Scalar(0.0));
     std::atomic<std::uint64_t> candidate_count{0};
-    parallelRows(source_depth.rows, row_worker_count, cancelled,
+    parallelRows(
+        source_depth.rows,
+        row_worker_count,
+        cancelled,
         [&](int source_row)
         {
             std::uint64_t row_count = 0;
-            const float *depth_values = source_depth.ptr<float>(source_row);
-            const float *confidence_values = source_confidence.ptr<float>(source_row);
+            const float* depth_values = source_depth.ptr<float>(source_row);
+            const float* confidence_values = source_confidence.ptr<float>(source_row);
             for (int source_column = 0; source_column < source_depth.cols; ++source_column)
             {
-                if ((source_column & 63) == 0 && cancelled &&
-                    cancelled->load(std::memory_order_relaxed)) break;
+                if ((source_column & 63) == 0 && cancelled && cancelled->load(std::memory_order_relaxed))
+                    break;
                 const float source_value = depth_values[source_column];
-                if (!validDepth(source_value)) continue;
-                const double source_pixel[2] = {
-                    static_cast<double>(source_column), static_cast<double>(source_row)};
-                double world[3] = {};
-                if (!source_camera.unprojectPixel(source_pixel, source_value, world)) continue;
-                double reference_pixel[2] = {};
-                double reference_value = 0.0;
-                if (!reference_camera.projectWorldPointWithDepth(
-                        world, reference_pixel, reference_value) ||
-                    !std::isfinite(reference_value) || reference_value <= 0.0)
+                if (!validDepth(source_value))
+                    continue;
+                const auto ground = source_camera.imageToGroundAtDepth(
+                    {static_cast<double>(source_column), static_cast<double>(source_row)}, source_value);
+                if (!ground)
+                    continue;
+                const auto projection = reference_camera.groundToImage(ground.value());
+                if (!projection || !projection.value().positiveDepth ||
+                    !std::isfinite(*projection.value().positiveDepth) || *projection.value().positiveDepth <= 0.0)
                 {
                     continue;
                 }
+                const double reference_pixel[2] = {projection.value().image.sample, projection.value().image.line};
+                const double reference_value = *projection.value().positiveDepth;
                 const int first_column = static_cast<int>(std::floor(reference_pixel[0]));
                 const int first_row = static_cast<int>(std::floor(reference_pixel[1]));
                 for (int delta_row = 0; delta_row <= 1; ++delta_row)
@@ -286,11 +292,13 @@ ProjectedDepthEvidence projectSourceDepthEvidenceToReference(
                         const int column = first_column + delta_column;
                         const int row = first_row + delta_row;
                         if (column < 0 || column >= reference_size.width ||
-                            row < 0 || row >= reference_size.height) continue;
+                            row < 0 || row >= reference_size.height)
+                            continue;
                         const float offset_x = static_cast<float>(reference_pixel[0] - column);
                         const float offset_y = static_cast<float>(reference_pixel[1] - row);
                         const float error = std::sqrt(offset_x * offset_x + offset_y * offset_y);
-                        if (error > maximum_distance) continue;
+                        if (error > maximum_distance)
+                            continue;
                         const std::uint64_t candidate = packEvidence(
                             static_cast<float>(reference_value),
                             confidence_values[source_column],

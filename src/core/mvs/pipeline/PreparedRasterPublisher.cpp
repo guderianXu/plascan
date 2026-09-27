@@ -32,7 +32,7 @@ namespace xjw::mvs
             _preparedRasterArtifacts.assign(_views.size(), MvsPreparedRasterArtifact{});
         }
         MvsPreparedRasterArtifact& cached = _preparedRasterArtifacts[static_cast<std::size_t>(frameIndex)];
-        if (!cached.imagePath.empty() && !cached.validMaskPath.empty() && cached.camera.isValid() &&
+        if (!cached.imagePath.empty() && !cached.validMaskPath.empty() && cached.camera &&
             QFileInfo::exists(xjw::common::io::fromUtf8Path(cached.imagePath)) &&
             QFileInfo::exists(xjw::common::io::fromUtf8Path(cached.validMaskPath)))
         {
@@ -45,7 +45,17 @@ namespace xjw::mvs
         }
 
         const CameraView& view = _views[static_cast<std::size_t>(frameIndex)];
-        if (!view.preparedImagePath.empty() && !view.preparedValidMaskPath.empty() && view.camera.isValid())
+        const auto& source_camera = view.camera;
+        if (!source_camera || source_camera->imageSize().samples != view.imageWidth ||
+            source_camera->imageSize().lines != view.imageHeight)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("第 %1 帧 PlaCamera 模型缺失或与影像尺寸不一致").arg(frameIndex);
+            }
+            return false;
+        }
+        if (!view.preparedImagePath.empty() && !view.preparedValidMaskPath.empty())
         {
             const cv::Mat prepared_valid_mask =
                 xjw::common::io::readImage(view.preparedValidMaskPath, cv::IMREAD_GRAYSCALE);
@@ -54,7 +64,7 @@ namespace xjw::mvs
             if (prepared_valid_mask.empty() ||
                 !saveMvsPreparedRasterArtifact(
                     mvsRasterPath(view),
-                    view.camera,
+                    *source_camera,
                     prepared_valid_mask,
                     xjw::common::io::toUtf8Path(QFileInfo(_workspaceManifestPath).absolutePath()),
                     frameIndex,
@@ -105,7 +115,7 @@ namespace xjw::mvs
             std::string save_error;
             if (!saveMvsPreparedRasterArtifact(
                     mvsRasterPath(view),
-                    view.camera,
+                    *source_camera,
                     recovered_valid_mask,
                     xjw::common::io::toUtf8Path(QFileInfo(_workspaceManifestPath).absolutePath()),
                     frameIndex,
@@ -146,7 +156,7 @@ namespace xjw::mvs
         std::string save_error;
         if (!saveMvsPreparedRasterArtifact(
                 mvsRasterPath(view),
-                view.camera,
+                *source_camera,
                 image_lease->validMask,
                 xjw::common::io::toUtf8Path(QFileInfo(_workspaceManifestPath).absolutePath()),
                 frameIndex,

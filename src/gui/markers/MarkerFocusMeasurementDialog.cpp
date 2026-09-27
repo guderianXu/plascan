@@ -4,12 +4,12 @@
 #include "MarkerWorkspaceController.h"
 #include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
-#include "ProjectCameraIO.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "project/ProjectMatchCatalog.h"
-#include "project/ProjectMetadata.h"
 #include "geometry/MarkerProjectionPredictor.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "io/PathIO.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -19,11 +19,11 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
-#include <QImageReader>
 #include <QPushButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -153,58 +153,45 @@ namespace xjw::gui::markers
         if (!_controller || !_projectData)
             return;
 
-        QVector<control_points::MarkerCamera> cameras;
-        const QJsonArray images = _projectData->coreFilesMeta().value(QStringLiteral("images")).toArray();
-        cameras.reserve(images.size());
+        QVector<control_points::MarkerImageView> views;
+        const QJsonObject project_files = _projectData->coreFilesMeta();
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(project_files);
+        if (!loaded.ok())
+        {
+            return;
+        }
+        const QJsonArray images = project_files.value(QStringLiteral("images")).toArray();
+        views.reserve(images.size());
         for (const QJsonValue& value : images)
         {
             const QJsonObject image = value.toObject();
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera_model;
-            const QJsonObject camera_json =
-                xjw::common::project::projectCameraModelParameters(_projectData->coreFilesMeta(), image);
-            if (!xjw::common::project::decodeFramePinholeNumericState(camera_json, &camera_model))
-                continue;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState positive =
-                camera_model.normalizedForPositiveDepth();
-            if (!positive.validateNumericalState())
-                continue;
-
-            control_points::MarkerCamera camera;
-            camera.imageId = image.value(QStringLiteral("image_uuid")).toString();
-            camera.imagePath = image.value(QStringLiteral("path")).toString();
-            camera.intrinsics = cv::Matx33d(positive.focalX(),
-                                            0.0,
-                                            positive.principalX(),
-                                            0.0,
-                                            positive.focalY(),
-                                            positive.principalY(),
-                                            0.0,
-                                            0.0,
-                                            1.0);
-            const std::array<double, 9> rotation = positive.worldToCameraRotation();
-            const std::array<double, 3> translation = positive.worldToCameraTranslation();
-            for (int row = 0; row < 3; ++row)
+            const QString image_id = image.value(QStringLiteral("image_uuid")).toString();
+            if (image_id.isEmpty())
             {
-                for (int column = 0; column < 3; ++column)
-                {
-                    camera.rotation(row, column) = rotation[row * 3 + column];
-                }
-                camera.translation[row] = translation[row];
+                continue;
             }
-            QSize image_size(camera_json.value(QStringLiteral("image_width")).toInt(),
-                             camera_json.value(QStringLiteral("image_height")).toInt());
-            if (!image_size.isValid())
-                image_size = QImageReader(camera.imagePath).size();
-            camera.imageSize = image_size;
+            const auto instance = loaded.instances.forImage(placamera::ImageId(image_id.toStdString()));
+            if (!instance)
+            {
+                continue;
+            }
+            auto camera_model = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(instance.value());
+            if (!camera_model)
+            {
+                continue;
+            }
+            control_points::MarkerImageView view;
+            view.imagePath = image.value(QStringLiteral("path")).toString();
+            view.camera = std::move(camera_model);
 
             const QString mask_path =
-                xjw::common::project::ProjectIO::findMaskForImage(_projectData->currentProjectPath(), camera.imagePath);
+                xjw::common::project::ProjectIO::findMaskForImage(_projectData->currentProjectPath(), view.imagePath);
             if (!mask_path.isEmpty())
             {
                 const cv::Mat mask = xjw::common::io::readImage(mask_path, cv::IMREAD_GRAYSCALE);
                 if (!mask.empty())
                 {
-                    camera.acceptsPixel = [mask](const QPointF& pixel)
+                    view.acceptsPixel = [mask](const QPointF& pixel)
                     {
                         const int column = qRound(pixel.x());
                         const int row = qRound(pixel.y());
@@ -213,13 +200,13 @@ namespace xjw::gui::markers
                     };
                 }
             }
-            cameras.push_back(std::move(camera));
+            views.push_back(std::move(view));
         }
 
-        if (cameras.size() < 2)
+        if (views.size() < 2)
             return;
         const auto prediction =
-            control_points::MarkerProjectionPredictor::predict(_controller->markerSet().marker(_markerId), cameras);
+            control_points::MarkerProjectionPredictor::predict(_controller->markerSet().marker(_markerId), views);
         if (!prediction.triangulation.success || prediction.predictions.isEmpty())
             return;
         QString error;

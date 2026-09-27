@@ -1,16 +1,37 @@
-#include "geometry/OpenCvCameraAdapter.h"
+#include <array>
 
 #include <gtest/gtest.h>
 
+#include "geometry/OpenCvCameraAdapter.h"
+
+namespace
+{
+    placamera::FramePinholeModel
+    makeCamera(placamera::FrameIntrinsics intrinsics, bool depth_axis_flipped, std::array<double, 3> center)
+    {
+        const placamera::FrameId frame("opencv-adapter-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("opencv-adapter-definition"),
+                                                      intrinsics,
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame,
+                                                      depth_axis_flipped);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("opencv-adapter-instance"),
+            placamera::ImageId("opencv-adapter-image"),
+            definition,
+            placamera::ImageSize{100, 80},
+            placamera::Pose::create(frame, center, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+    }
+} // namespace
+
 TEST(OpenCvCameraAdapterTest, BuildsSignedAndPositiveDepthIntrinsics)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
-    camera.setAxisDirections(-1, 1);
-    camera.setDepthAxisFlipped(true);
+    const auto camera = makeCamera({100.0, 200.0, 10.0, 20.0, 1.0, -1, 1}, true, {0.0, 0.0, 0.0});
 
-    const cv::Mat signedMatrix = xjw::openCvCameraMatrix(camera, false);
-    const cv::Mat positiveDepthMatrix = xjw::openCvCameraMatrix(camera, true);
+    const cv::Mat signedMatrix = xjw::openCvCameraMatrix(camera.pinholeDefinition(), false);
+    const cv::Mat positiveDepthMatrix = xjw::openCvCameraMatrix(camera.pinholeDefinition(), true);
 
     EXPECT_DOUBLE_EQ(signedMatrix.at<double>(0, 0), -100.0);
     EXPECT_DOUBLE_EQ(signedMatrix.at<double>(1, 1), 200.0);
@@ -22,12 +43,7 @@ TEST(OpenCvCameraAdapterTest, BuildsSignedAndPositiveDepthIntrinsics)
 
 TEST(OpenCvCameraAdapterTest, BuildsPhysicalSignedProjectionMatrix)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
-    camera.setPose({1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0},
-                   {1.0, 2.0, 3.0});
+    const auto camera = makeCamera({100.0, 200.0, 10.0, 20.0}, false, {1.0, 2.0, 3.0});
 
     const cv::Mat projection = xjw::openCvProjectionMatrix(camera);
 

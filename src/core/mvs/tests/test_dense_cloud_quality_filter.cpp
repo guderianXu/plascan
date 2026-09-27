@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <cmath>
 
@@ -19,8 +19,8 @@ DensePointCloud makeTerrainWithVerticalSpikes()
     constexpr int stablePoints = grid * grid * samplesPerCell;
     constexpr int spikePoints = 2;
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(stablePoints + spikePoints, 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(stablePoints + spikePoints, 3);
+    plamatrix::MatrixXf points(stablePoints + spikePoints, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(stablePoints + spikePoints, 3);
 
     int row = 0;
     for (int y = 0; y < grid; ++y)
@@ -69,9 +69,9 @@ DensePointCloud makeSlopedTerrainWithPlaneResidualSpike()
     constexpr int stablePoints = width * height;
     constexpr int spikePoints = 1;
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(stablePoints + spikePoints, 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(stablePoints + spikePoints, 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(stablePoints + spikePoints, 3);
+    plamatrix::MatrixXf points(stablePoints + spikePoints, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(stablePoints + spikePoints, 3);
+    plamatrix::MatrixXf normals(stablePoints + spikePoints, 3);
 
     int row = 0;
     for (int y = 0; y < height; ++y)
@@ -206,13 +206,13 @@ TEST(DenseCloudQualityFilter, TerrainHeightSpikeFilterRemovesVerticalSpikesAndPr
     EXPECT_LE(report.p95CellZRangeAfter, report.p95CellZRangeBefore);
     ASSERT_TRUE(filtered.hasColors());
     ASSERT_NE(filtered.colors(), nullptr);
-    EXPECT_EQ(filtered.colors()->getValue(0, 0), 1);
-    EXPECT_EQ(filtered.colors()->getValue(0, 1), 2);
-    EXPECT_EQ(filtered.colors()->getValue(0, 2), 3);
+    EXPECT_EQ(filtered.colors()->coeff(0, 0), 1);
+    EXPECT_EQ(filtered.colors()->coeff(0, 1), 2);
+    EXPECT_EQ(filtered.colors()->coeff(0, 2), 3);
 
     for (std::size_t i = 0; i < filtered.size(); ++i)
     {
-        EXPECT_LT(std::abs(filtered.points().getValue(static_cast<plamatrix::Index>(i), 2)), 0.20f);
+        EXPECT_LT(std::abs(filtered.points().coeff(static_cast<plamatrix::Index>(i), 2)), 0.20f);
     }
 }
 
@@ -245,9 +245,9 @@ TEST(DenseCloudQualityFilter, LocalPlaneFilterRemovesResidualSpikeAndPreservesAt
     for (std::size_t i = 0; i < filtered.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        const float x = filtered.points().getValue(row, 0);
-        const float y = filtered.points().getValue(row, 1);
-        const float z = filtered.points().getValue(row, 2);
+        const float x = filtered.points().coeff(row, 0);
+        const float y = filtered.points().coeff(row, 1);
+        const float z = filtered.points().coeff(row, 2);
         EXPECT_NEAR(z, 0.15f * x + 0.08f * y, 1.0e-4f);
     }
 }

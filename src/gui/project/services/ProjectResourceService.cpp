@@ -8,7 +8,7 @@
 #include "ReferenceDatasetWorkflow.h"
 #include "camera/SurveyControlDialog.h"
 #include "Logger.h"
-#include "ProjectCameraIO.h"
+#include <placamera/rpc_raster.h>
 #include "project/ProjectAssetImporter.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectSessionModel.h"
@@ -22,11 +22,17 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
 #include <QSet>
 #include <QThread>
+#include <QUuid>
+
+#include <placamera/rpc_camera.h>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <memory>
 #include <string>
 
 namespace xjw::gui::project
@@ -179,6 +185,100 @@ namespace xjw::gui::project
             return {};
         }
 
+        bool bindImportedRpcCameras(const QJsonObject& core,
+                                    const QString& projectPath,
+                                    const QMap<QString, placamera::RpcRasterData>& rasters,
+                                    placamera::CameraInstanceSet* cameras,
+                                    QMap<QString, QJsonObject>* annotations,
+                                    QString* error)
+        {
+            if (!cameras || !annotations || rasters.isEmpty())
+            {
+                if (error)
+                {
+                    *error = QStringLiteral("没有可绑定的 RPC 相机");
+                }
+                return false;
+            }
+            QMap<QString, QString> imageIdsByPath;
+            for (const QJsonValue& value : core.value(QStringLiteral("images")).toArray())
+            {
+                const QJsonObject image = value.toObject();
+                const QString storedPath = image.value(QStringLiteral("path")).toString().trimmed();
+                if (storedPath.isEmpty())
+                {
+                    continue;
+                }
+                const QString path = QDir::cleanPath(
+                    xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, storedPath));
+                if (rasters.contains(path))
+                {
+                    if (imageIdsByPath.contains(path))
+                    {
+                        if (error)
+                        {
+                            *error = QStringLiteral("RPC 影像路径对应多个工程记录: %1").arg(path);
+                        }
+                        return false;
+                    }
+                    imageIdsByPath.insert(path, image.value(QStringLiteral("image_uuid")).toString().trimmed());
+                }
+            }
+
+            placamera::CameraInstanceSet pending;
+            QMap<QString, QJsonObject> pendingAnnotations;
+            for (auto it = rasters.constBegin(); it != rasters.constEnd(); ++it)
+            {
+                const QString imageId = imageIdsByPath.value(it.key());
+                if (imageId.isEmpty())
+                {
+                    if (error)
+                    {
+                        *error = QStringLiteral("RPC 影像未在当前工程注册: %1").arg(it.key());
+                    }
+                    return false;
+                }
+                try
+                {
+                    const auto definition = placamera::RpcDefinition::create(
+                        placamera::CameraDefinitionId("rpc-import-" +
+                                                      QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString()),
+                        placamera::FrameId("EPSG:4978"),
+                        it.value().parameters);
+                    const auto model = std::make_shared<const placamera::RpcModel>(
+                        placamera::RpcModel::create(placamera::CameraInstanceId("caminst-" + imageId.toStdString()),
+                                                    placamera::ImageId(imageId.toStdString()),
+                                                    definition,
+                                                    it.value().imageSize));
+                    const auto added = pending.add(model);
+                    if (!added.ok())
+                    {
+                        if (error)
+                        {
+                            *error = QStringLiteral("RPC 影像身份重复: %1").arg(it.key());
+                        }
+                        return false;
+                    }
+                    pendingAnnotations.insert(imageId,
+                                              QJsonObject{{QStringLiteral("source"), QStringLiteral("rpc_raster")},
+                                                          {QStringLiteral("metadata"),
+                                                           QJsonObject{{QStringLiteral("source_file"), it.key()}}}});
+                }
+                catch (const std::exception& exception)
+                {
+                    if (error)
+                    {
+                        *error = QStringLiteral("RPC 相机生成失败: %1 (%2)")
+                                     .arg(it.key(), QString::fromUtf8(exception.what()));
+                    }
+                    return false;
+                }
+            }
+            *cameras = std::move(pending);
+            *annotations = std::move(pendingAnnotations);
+            return true;
+        }
+
     } // namespace
 
     ProjectResourceService::ProjectResourceService(ProjectSession* session,
@@ -199,7 +299,7 @@ namespace xjw::gui::project
 
     ProjectResourceService::~ProjectResourceService()
     {
-        cancelTask();
+        cancelActiveTask();
         if (_taskFuture.isRunning())
         {
             _taskFuture.waitForFinished();
@@ -242,7 +342,7 @@ namespace xjw::gui::project
         struct ImageImportWork
         {
             QStringList newPaths;
-            QMap<QString, QJsonObject> rpcCameras;
+            QMap<QString, placamera::RpcRasterData> rpcCameras;
             int skipped = 0;
             QString error;
             bool cancelled = false;
@@ -321,11 +421,10 @@ namespace xjw::gui::project
                          normalized.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive)) &&
                         !cancellation.isCancellationRequested())
                     {
-                        QJsonObject camera;
-                        if (xjw::common::project::parseRpcCameraRaster(normalized, &camera, nullptr) &&
-                            !camera.isEmpty())
+                        auto camera = placamera::readRpcRasterData(xjw::common::io::toUtf8Path(normalized));
+                        if (camera)
                         {
-                            work.rpcCameras.insert(normalized, camera);
+                            work.rpcCameras.insert(normalized, camera.takeValue());
                         }
                     }
                     if (cancellation.isCancellationRequested())
@@ -393,7 +492,16 @@ namespace xjw::gui::project
                 if (!work.rpcCameras.isEmpty())
                 {
                     QString rpcError;
-                    if (!self->_session->setCameraInstances(work.rpcCameras, &importedRpcCameras, &rpcError) &&
+                    placamera::CameraInstanceSet cameras;
+                    QMap<QString, QJsonObject> annotations;
+                    const bool bound = bindImportedRpcCameras(self->_session->coreMetadata(),
+                                                              self->_session->projectPath(),
+                                                              work.rpcCameras,
+                                                              &cameras,
+                                                              &annotations,
+                                                              &rpcError);
+                    if ((!bound || !self->_session->upsertNativeCameraInstances(
+                                       sessionContext, cameras, annotations, &importedRpcCameras, &rpcError)) &&
                         self->_messages && !rpcError.isEmpty())
                     {
                         self->_messages->warning(
@@ -1592,6 +1700,16 @@ namespace xjw::gui::project
     bool ProjectResourceService::isBusy() const
     {
         return _taskActive || (_session && _session->isBusy());
+    }
+
+    bool ProjectResourceService::hasPendingWork() const
+    {
+        return _taskActive || (_taskFuture.isValid() && !_taskFuture.isFinished());
+    }
+
+    void ProjectResourceService::cancelActiveTask()
+    {
+        cancelTask();
     }
 
     QString ProjectResourceService::readLastDir(const QString& key) const

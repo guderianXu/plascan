@@ -244,20 +244,29 @@ cv::Mat normalizedFilterGuidance(const cv::Mat &referenceGuide,
 
 } // namespace
 
-std::array<float, 16>
-buildPatchMatchSourceCameraData(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
-                                int downsampleFactor)
+std::array<float, 16> buildPatchMatchSourceCameraData(const placamera::FramePinholeModel& reference,
+                                                      const placamera::FramePinholeModel& source,
+                                                      int downsampleFactor)
 {
-    const float scale = 1.0f /
-        static_cast<float>(std::max(1, downsampleFactor));
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = source.intrinsics();
-    const std::array<double, 9> reference_rotation =
-        reference.worldToCameraRotation();
-    const std::array<double, 9> source_rotation =
-        source.worldToCameraRotation();
-    const std::array<double, 3> reference_center = reference.cameraCenter();
-    const std::array<double, 3> source_center = source.cameraCenter();
+    const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
+    const placamera::FrameIntrinsics& intrinsics = source.pinholeDefinition().intrinsics();
+    const auto world_to_camera = [](const placamera::FramePinholeModel& camera)
+    {
+        const auto& rotation = camera.pose().cameraToWorldRotation;
+        return std::array<double, 9>{rotation[0],
+                                     rotation[3],
+                                     rotation[6],
+                                     rotation[1],
+                                     rotation[4],
+                                     rotation[7],
+                                     rotation[2],
+                                     rotation[5],
+                                     rotation[8]};
+    };
+    const std::array<double, 9> reference_rotation = world_to_camera(reference);
+    const std::array<double, 9> source_rotation = world_to_camera(source);
+    const std::array<double, 3>& reference_center = reference.pose().center;
+    const std::array<double, 3>& source_center = source.pose().center;
 
     std::array<float, 16> result{};
     result[0] = static_cast<float>(intrinsics.focalX) * scale;

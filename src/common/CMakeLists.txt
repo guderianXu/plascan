@@ -59,6 +59,10 @@ add_library(plascan_common_model STATIC
 )
 
 add_library(plascan_common_project STATIC
+  project/camera_reference/CameraReferenceSet.cpp
+  project/camera_reference/CameraReferenceSetJson.cpp
+  project/camera_reference/CameraReferenceSetJsonDecode.cpp
+  project/camera_reference/CameraReferenceSetStore.cpp
   project/AspMatchPointReader.cpp
   project/PlascanArchive.cpp
   project/ProjectArtifactIO.cpp
@@ -69,6 +73,10 @@ add_library(plascan_common_project STATIC
   project/ProjectChunkIndex.cpp
   project/ProjectDocumentModel.cpp
   project/ProjectExporter.cpp
+  project/ProjectCameraIO.cpp
+  project/ProjectCameraIO.h
+  project/ProjectFramePinholeMetadataIO.cpp
+  project/ProjectFramePinholeMetadataIO.h
   project/ProjectConfigManager.cpp
   project/ProjectIO.cpp
   project/ProjectLock.cpp
@@ -151,6 +159,9 @@ target_link_libraries(plascan_common_project PUBLIC
   plascan_common_plafs
   plascan_common_json
   plascan_common_log
+  plascan::placamera_runtime
+  placamera::placamera
+  placamera::reference
   ${PLASCAN_LIBZIP_TARGET}
 )
 

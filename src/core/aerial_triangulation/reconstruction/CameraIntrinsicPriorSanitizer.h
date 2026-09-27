@@ -7,50 +7,36 @@
 
 #include <QJsonObject>
 
-#include "camera/core/types/CameraIds.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
+#include <placamera/frame_camera.h>
+
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 namespace xjw::aerial_triangulation
 {
 
-// 仅显式导入、人工设置或来自有效 EXIF 的内参可作为下一次空三的先验。
-// SfM 自标定结果和旧工程中缺少来源信息的相机都必须重新进入焦距搜索。
-bool isTrustedProjectCameraIntrinsic(const QJsonObject &cameraObject);
+    // 仅显式导入、人工设置或来自有效 EXIF 的内参可作为下一次空三的先验。
+    // SfM 自标定结果和旧工程中缺少来源信息的相机都必须重新进入焦距搜索。
+    bool isTrustedProjectCameraIntrinsic(const QJsonObject& instanceState);
 
-struct CameraIntrinsicPriorSanitizationResult
-{
-    int inspectedCameraCount = 0; ///< 检查到可解析相机 JSON 的影像数。
-    int dominantGroupCount = 0; ///< 鲁棒主焦距组样本数。
-    int normalizedCameraCount = 0; ///< 被替换为主组焦距的离群相机数。
-    double dominantMedianFocalPixels = 0.0; ///< 主组焦距中位数，像素。
-    std::vector<camera_core::ImageId> normalizedImageIds; ///< 实际修改的 canonical 影像身份。
-};
+    struct CameraIntrinsicPriorSanitizationResult
+    {
+        int inspectedCameraCount = 0;                         ///< 检查到可解析相机 JSON 的影像数。
+        int dominantGroupCount = 0;                           ///< 鲁棒主焦距组样本数。
+        int normalizedCameraCount = 0;                        ///< 被替换为主组焦距的离群相机数。
+        double dominantMedianFocalPixels = 0.0;               ///< 主组焦距中位数，像素。
+        std::vector<placamera::ImageId> normalizedImageIds; ///< 实际修改的 canonical 影像身份。
+    };
 
-using CameraIntrinsicsByImageId =
-    std::unordered_map<camera_core::ImageId, QJsonObject>;
+    using FramePinholeModelsByImageId =
+        std::unordered_map<placamera::ImageId, std::shared_ptr<const placamera::FramePinholeModel>>;
 
-using FramePinholeStatesByImageId =
-    std::unordered_map<camera_core::ImageId,
-                       camera_models::frame_pinhole::FramePinholeNumericState>;
-
-// 无外部相机文件时，工程中可能保留上次 SfM 的错误焦距。
-// 对同一组影像的显著焦距离群值做鲁棒回归，避免错误自标定污染新的空三初始化。
-CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
-    const std::vector<camera_core::ImageId> &imageIds,
-    CameraIntrinsicsByImageId *cameraByImageId);
-
-/**
- * Normalize a canonical, already validated frame-pinhole state collection.
- *
- * This overload keeps solver inputs typed all the way through the prior
- * sanitizer.  It must be used after CameraProjectRuntime capability planning;
- * it never reconstructs a numeric camera from project JSON.
- */
-CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
-    const std::vector<camera_core::ImageId> &imageIds,
-    FramePinholeStatesByImageId *cameraByImageId);
+    // 无外部相机文件时，工程中可能保留上次 SfM 的错误焦距。
+    // 对同一组影像的显著焦距离群值做鲁棒回归，避免错误自标定污染新的空三初始化。
+    CameraIntrinsicPriorSanitizationResult
+    sanitizeProjectCameraIntrinsicPriors(const std::vector<placamera::ImageId>& imageIds,
+                                         FramePinholeModelsByImageId* cameraByImageId);
 
 } // namespace xjw::aerial_triangulation

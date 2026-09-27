@@ -356,7 +356,6 @@ namespace
     }
 
     void appendImagesWithoutCameraRecords(const QJsonArray& images,
-                                          const QJsonObject& projectMetadata,
                                           QVector<xjw::gui::camera_calibration::CameraCalibrationRecord>* records)
     {
         if (!records)
@@ -380,7 +379,6 @@ namespace
                 continue;
             }
 
-            const QJsonObject camera = xjw::common::project::projectCameraModelParameters(projectMetadata, image);
             xjw::gui::camera_calibration::CameraCalibrationRecord record;
             record.path = path;
             record.name = QFileInfo(path).fileName();
@@ -388,11 +386,10 @@ namespace
             {
                 record.name = path;
             }
-            record.model = camera.value(QStringLiteral("model")).toString();
             record.imageWidth =
-                camera.value(QStringLiteral("image_width")).toInt(image.value(QStringLiteral("width")).toInt());
+                image.value(QStringLiteral("width")).toInt(image.value(QStringLiteral("samples")).toInt());
             record.imageHeight =
-                camera.value(QStringLiteral("image_height")).toInt(image.value(QStringLiteral("height")).toInt());
+                image.value(QStringLiteral("height")).toInt(image.value(QStringLiteral("lines")).toInt());
             records->append(record);
             existingPaths.insert(pathKey);
         }
@@ -418,8 +415,17 @@ CameraCalibrationDialog::CameraCalibrationDialog(const QJsonObject& projectMetad
     const QJsonObject report =
         xjw::gui::camera_calibration::readLatestCameraCalibrationReport(projectAssetsDir, &_reportError);
     _reportTimestamp = report.value(QStringLiteral("timestamp")).toString();
-    _records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(projectFiles, report);
-    appendImagesWithoutCameraRecords(projectImages, projectFiles, &_records);
+    QString cameraError;
+    _records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(projectFiles, report, &cameraError);
+    if (!cameraError.isEmpty())
+    {
+        if (!_reportError.isEmpty())
+        {
+            _reportError += QLatin1Char('\n');
+        }
+        _reportError += tr("工程相机记录无效：%1").arg(cameraError);
+    }
+    appendImagesWithoutCameraRecords(projectImages, &_records);
 
     buildInterface();
     buildGroups();
@@ -522,15 +528,16 @@ void CameraCalibrationDialog::buildInterface()
     auto* cameraActions = new QHBoxLayout();
     _importSelectedButton = new QPushButton(tr("为所选影像导入相机…"), this);
     _importSelectedButton->setObjectName(QStringLiteral("cameraCalibrationImportSelectedButton"));
-    _batchImportButton = new QPushButton(tr("按文件名批量导入…"), this);
-    _batchImportButton->setObjectName(QStringLiteral("cameraCalibrationBatchImportButton"));
+    _importProjectButton = new QPushButton(tr("导入相机工程…"), this);
+    _importProjectButton->setObjectName(QStringLiteral("cameraCalibrationImportProjectButton"));
+    _importProjectButton->setToolTip(tr("直接导入 Middlebury、EPFL、COLMAP 或 Metashape 相机工程"));
     _initializeIntrinsicsButton = new QPushButton(tr("输入真实内参…"), this);
     _initializeIntrinsicsButton->setObjectName(QStringLiteral("cameraCalibrationInitializeIntrinsicsButton"));
     _initializeIntrinsicsButton->setToolTip(tr("输入 fx/fy、主点和 Brown 畸变参数，应用到项目全部影像"));
     _clearSelectedButton = new QPushButton(tr("清除所选相机"), this);
     _clearSelectedButton->setObjectName(QStringLiteral("cameraCalibrationClearSelectedButton"));
     cameraActions->addWidget(_importSelectedButton);
-    cameraActions->addWidget(_batchImportButton);
+    cameraActions->addWidget(_importProjectButton);
     cameraActions->addWidget(_initializeIntrinsicsButton);
     cameraActions->addWidget(_clearSelectedButton);
     cameraActions->addStretch(1);
@@ -547,7 +554,7 @@ void CameraCalibrationDialog::buildInterface()
             &CameraCalibrationDialog::updateCameraActionAvailability);
     connect(
         _importSelectedButton, &QPushButton::clicked, this, &CameraCalibrationDialog::requestImportForSelectedPhoto);
-    connect(_batchImportButton, &QPushButton::clicked, this, &CameraCalibrationDialog::requestBatchImport);
+    connect(_importProjectButton, &QPushButton::clicked, this, &CameraCalibrationDialog::requestCameraProjectImport);
     connect(_initializeIntrinsicsButton,
             &QPushButton::clicked,
             this,
@@ -812,20 +819,31 @@ void CameraCalibrationDialog::updateCameraActionAvailability()
     const QStringList selectedPaths = selectedPhotoPaths();
     if (_importSelectedButton)
     {
-        _importSelectedButton->setEnabled(_hasProject && selectedPaths.size() == 1);
+        _importSelectedButton->setEnabled(!_cameraTaskRunning && _hasProject && selectedPaths.size() == 1);
     }
-    if (_batchImportButton)
+    if (_importProjectButton)
     {
-        _batchImportButton->setEnabled(_hasProject && _hasProjectImages);
+        _importProjectButton->setEnabled(!_cameraTaskRunning && _hasProject && _hasProjectImages);
     }
     if (_initializeIntrinsicsButton)
     {
-        _initializeIntrinsicsButton->setEnabled(_hasProject && _hasProjectImages);
+        _initializeIntrinsicsButton->setEnabled(!_cameraTaskRunning && _hasProject && _hasProjectImages);
     }
     if (_clearSelectedButton)
     {
-        _clearSelectedButton->setEnabled(_hasProject && !selectedConfiguredPhotoPaths().isEmpty());
+        _clearSelectedButton->setEnabled(!_cameraTaskRunning && _hasProject &&
+                                         !selectedConfiguredPhotoPaths().isEmpty());
     }
+}
+
+void CameraCalibrationDialog::setCameraTaskRunning(bool running)
+{
+    if (_cameraTaskRunning == running)
+    {
+        return;
+    }
+    _cameraTaskRunning = running;
+    updateCameraActionAvailability();
 }
 
 void CameraCalibrationDialog::requestImportForSelectedPhoto()
@@ -837,11 +855,11 @@ void CameraCalibrationDialog::requestImportForSelectedPhoto()
     }
 }
 
-void CameraCalibrationDialog::requestBatchImport()
+void CameraCalibrationDialog::requestCameraProjectImport()
 {
     if (_hasProject && _hasProjectImages)
     {
-        emit batchImportRequested();
+        emit importCameraProjectRequested();
     }
 }
 

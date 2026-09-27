@@ -1,5 +1,7 @@
 #pragma once
 
+#include <placamera/instance_set.h>
+
 #include <QJsonObject>
 #include <QMap>
 #include <QSet>
@@ -7,10 +9,43 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
+#include <functional>
 #include <optional>
 
 namespace xjw::gui::project
 {
+
+    enum class CameraInitializationMode
+    {
+        ExifOrDefault,
+        Intrinsics
+    };
+
+    struct CameraInitializationRequest
+    {
+        QStringList images;
+        QJsonObject projectMetadata;
+        QJsonObject settings;
+        CameraInitializationMode mode = CameraInitializationMode::ExifOrDefault;
+        QString source;
+    };
+
+    struct CameraInitializationResult
+    {
+        placamera::CameraInstanceSet cameras;
+        QMap<QString, QJsonObject> annotationsByImageId;
+        QSet<QString> existingImages;
+        int skippedExisting = 0;
+        int exifCount = 0;
+        int fallbackCount = 0;
+        int invalidSizeCount = 0;
+        int autoPrincipalPointCount = 0;
+        bool cancelled = false;
+        QString error;
+    };
+
+    using CameraInitializationProgress = std::function<void(int completed, int total)>;
 
     std::optional<double> parsePossiblyFractionalNumber(const QString& text);
 
@@ -19,22 +54,14 @@ namespace xjw::gui::project
 
     QStringList resolveInitTargets(const QStringList& allImages, const QJsonObject& settings, QString* errorMsg);
 
-    QSet<QString> existingCameraImages(const QJsonObject& meta);
+    bool withPreparedCameras(const QJsonObject& baseMeta,
+                             const CameraInitializationResult& prepared,
+                             bool overwriteExisting,
+                             QJsonObject* output,
+                             QString* error = nullptr);
 
-    QJsonObject withPreparedCameras(const QJsonObject& baseMeta,
-                                    const QMap<QString, QJsonObject>& preparedCameraByImage,
-                                    bool overwriteExisting);
-
-    QJsonObject makeInitializedCameraMeta(double fx,
-                                          double fy,
-                                          double cx,
-                                          double cy,
-                                          double k1,
-                                          double k2,
-                                          double p1,
-                                          double p2,
-                                          const QString& source,
-                                          const QString& distortionModel,
-                                          const QSize& imageSize);
+    CameraInitializationResult prepareCameraInitializations(const CameraInitializationRequest& request,
+                                                            const std::atomic<bool>* cancelFlag = nullptr,
+                                                            const CameraInitializationProgress& progress = {});
 
 } // namespace xjw::gui::project

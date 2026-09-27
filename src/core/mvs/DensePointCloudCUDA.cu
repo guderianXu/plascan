@@ -115,10 +115,9 @@ namespace xjw::mvs
             valid[index] = 1;
         }
 
-        bool hasZeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+        bool hasZeroDistortion(const placamera::FramePinholeModel& camera)
         {
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.pinholeDefinition().distortion();
             return distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
                    distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
         }
@@ -171,7 +170,7 @@ namespace xjw::mvs
     std::vector<DensePoint>
     DensePointCloudCUDA::unprojectGPU(const cv::Mat& depth,
                                       const cv::Mat& mask,
-                                      const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                      const placamera::FramePinholeModel& camera,
                                       const cv::Mat& colorImage,
                                       float minimumDepth,
                                       float maximumDepth,
@@ -315,15 +314,15 @@ namespace xjw::mvs
         }
 
         CameraParameters parameters;
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = camera.pose();
+        const placamera::FrameIntrinsics& intrinsics = camera.pinholeDefinition().intrinsics();
+        const placamera::Pose& pose = camera.pose();
         parameters.focalX = static_cast<float>(intrinsics.focalX);
         parameters.focalY = static_cast<float>(intrinsics.focalY);
         parameters.principalX = static_cast<float>(intrinsics.principalX);
         parameters.principalY = static_cast<float>(intrinsics.principalY);
         parameters.uAxisSign = intrinsics.uAxisSign;
         parameters.vAxisSign = intrinsics.vAxisSign;
-        parameters.depthSign = pose.depthAxisFlipped ? -1 : 1;
+        parameters.depthSign = camera.pinholeDefinition().depthAxisFlipped() ? -1 : 1;
         for (int index = 0; index < 9; ++index)
         {
             parameters.cameraToWorld[index] =
@@ -331,7 +330,7 @@ namespace xjw::mvs
         }
         for (int index = 0; index < 3; ++index)
         {
-            parameters.cameraCenter[index] = static_cast<float>(pose.cameraCenter[static_cast<std::size_t>(index)]);
+            parameters.cameraCenter[index] = static_cast<float>(pose.center[static_cast<std::size_t>(index)]);
         }
 
         const int subsample = std::max(1, effectiveOptions.subsample);

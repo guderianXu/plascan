@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/project/CameraInstanceUpdate.h"
+#include <placamera/instance_set.h>
 
 #include <QMap>
 #include <QJsonObject>
@@ -18,7 +18,9 @@ namespace xjw::gui::project
 
     struct InitPoseFinalizeResult
     {
-        xjw::camera_project::CameraInstanceUpdates cameraUpdates;
+        placamera::CameraInstanceSet cameraInstances;
+        QMap<QString, QJsonObject> cameraAnnotationsByImageId;
+        QString errorMessage;
         QString sparseCloudPath;
         int sparsePointCount = 0;
         QStringList selectedImages;

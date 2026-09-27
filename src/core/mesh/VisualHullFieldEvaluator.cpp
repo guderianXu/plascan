@@ -90,12 +90,19 @@ namespace xjw::mesh::detail
                 continue;
             }
             const VisualHullView& view = *prepared.view;
-            double pixel[2] = {};
-            double camera_depth = 0.0;
-            if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+            if (!view.camera)
             {
                 continue;
             }
+            const auto projected = view.camera->groundToImage(
+                {view.camera->groundFrame(), {world[0], world[1], world[2]}});
+            if (!projected || !projected.value().positiveDepth)
+            {
+                continue;
+            }
+            const auto& image = projected.value().image;
+            const double pixel[2]{image.sample, image.line};
+            const double camera_depth = *projected.value().positiveDepth;
 
             float signed_pixel_distance = 0.0f;
             if (!bilinearSample(prepared.signedSilhouetteDistance, pixel, &signed_pixel_distance))
@@ -103,7 +110,8 @@ namespace xjw::mesh::detail
                 continue;
             }
 
-            const double mean_focal = 0.5 * (std::abs(view.camera.focalX()) + std::abs(view.camera.focalY()));
+            const placamera::FrameIntrinsics& intrinsics = view.camera->pinholeDefinition().intrinsics();
+            const double mean_focal = 0.5 * (std::abs(intrinsics.focalX) + std::abs(intrinsics.focalY));
             if (!(mean_focal > 1.0e-9) || !std::isfinite(camera_depth))
             {
                 continue;
@@ -162,16 +170,19 @@ namespace xjw::mesh::detail
         const double world[3] = {worldX, worldY, worldZ};
         for (const VisualHullView& view : views)
         {
-            if (!view.camera.isValid() || view.silhouetteMask.empty() || view.silhouetteMask.type() != CV_8UC1)
+            if (!view.camera || view.silhouetteMask.empty() || view.silhouetteMask.type() != CV_8UC1)
             {
                 continue;
             }
-            double pixel[2] = {};
-            double camera_depth = 0.0;
-            if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+            const auto projected = view.camera->groundToImage(
+                {view.camera->groundFrame(), {world[0], world[1], world[2]}});
+            if (!projected || !projected.value().positiveDepth)
             {
                 continue;
             }
+            const auto& image = projected.value().image;
+            const double pixel[2]{image.sample, image.line};
+            const double camera_depth = *projected.value().positiveDepth;
 
             const int column = static_cast<int>(std::lround(pixel[0]));
             const int row = static_cast<int>(std::lround(pixel[1]));

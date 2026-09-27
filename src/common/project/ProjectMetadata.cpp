@@ -1,6 +1,5 @@
 #include "ProjectMetadata.h"
 
-#include "camera/project/CameraProjectRecords.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -183,26 +182,6 @@ namespace xjw::common::project
             result.insert(image_path, image);
         }
         return result;
-    }
-
-    QJsonObject projectCameraModelParameters(const QJsonObject& metadata, const QJsonObject& image)
-    {
-        return xjw::camera_project::CameraProjectRecords::modelParametersForImage(projectFilesRootObject(metadata),
-                                                                                  image);
-    }
-
-    QJsonObject projectCameraModelParametersForPath(const QJsonObject& metadata, const QString& image_path)
-    {
-        const QString normalized = normalizePath(image_path);
-        for (const QJsonValue& value : projectImageEntries(metadata))
-        {
-            const QJsonObject image = value.toObject();
-            if (normalizePath(image.value(QStringLiteral("path")).toString()) == normalized)
-            {
-                return projectCameraModelParameters(metadata, image);
-            }
-        }
-        return {};
     }
 
     QString resolveProjectImagePathFromToken(const QString& token, const QJsonObject& metadata)

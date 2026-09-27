@@ -31,3 +31,18 @@ if(TARGET triangulate_cli)
     add_dependencies(test_triangulate_cli triangulate_cli)
     gtest_discover_tests(test_triangulate_cli DISCOVERY_MODE PRE_TEST)
 endif()
+
+if(TARGET rectify_cli)
+    add_executable(test_rectify_cli test_rectify_cli.cpp)
+    target_link_libraries(test_rectify_cli PRIVATE
+        Qt6::Core
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+    target_compile_definitions(test_rectify_cli PRIVATE
+        PLASCAN_RECTIFY_CLI_PATH="$<TARGET_FILE:rectify_cli>"
+        PLASCAN_RECTIFY_TEST_TMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/placamera-rectify-cli"
+    )
+    add_dependencies(test_rectify_cli rectify_cli)
+    gtest_discover_tests(test_rectify_cli DISCOVERY_MODE PRE_TEST)
+endif()

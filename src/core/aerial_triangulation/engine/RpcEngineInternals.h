@@ -11,5 +11,5 @@ namespace xjw::aerial_triangulation::engine::detail
                            double maximumRmsPixels,
                            RpcPoint* point,
                            std::map<ImageId, CameraResidualAccumulator>* cameraResiduals);
-    camera_models::rpc::RpcDefinition::GeodeticCoordinate assignRpcLocalEnu(std::vector<RpcPoint>* points);
+    RpcGeodeticCoordinate assignRpcLocalEnu(std::vector<RpcPoint>* points);
 } // namespace xjw::aerial_triangulation::engine::detail

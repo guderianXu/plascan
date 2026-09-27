@@ -1,16 +1,35 @@
 #include "project/BaTrackBuilder.h"
+#include "project/MarkerBaAdapter.h"
+#include "model/MarkerSet.h"
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
+
+#include <memory>
+#include <string>
+#include <utility>
 
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(const std::array<double, 3>& center)
+    std::shared_ptr<const placamera::FramePinholeModel> makeNativeCamera(const std::array<double, 3>& center,
+                                                                          int index)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, center);
-        return camera;
+        const placamera::FrameId frame("ba-track-world");
+        auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("ba-track-definition-" + std::to_string(index)),
+            {100.0, 100.0, 0.0, 0.0, 1.0, 1, 1},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("ba-track-instance-" + std::to_string(index)),
+            placamera::ImageId("ba-track-image-" + std::to_string(index)),
+            std::move(definition),
+            {64, 48},
+            placamera::Pose::create(frame,
+                                    center,
+                                    {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
     }
 
 } // namespace
@@ -18,11 +37,12 @@ namespace
 TEST(BaTrackBuilderTest, IndexedTrackTriesLaterObservationPairWhenFirstPairIsDegenerate)
 {
     xjw::core::project::ProjectMatchInput input;
-    input.cameras = {
-        makeCamera({0.0, 0.0, 0.0}),
-        makeCamera({0.0, 0.0, 0.0}),
-        makeCamera({1.0, 0.0, 0.0}),
-    };
+    input.cameraInstances = {makeNativeCamera({0.0, 0.0, 0.0}, 0),
+                             makeNativeCamera({0.0, 0.0, 0.0}, 1),
+                             makeNativeCamera({1.0, 0.0, 0.0}, 2)};
+    input.imageIdByIndex = {placamera::ImageId("ba-track-image-0"),
+                            placamera::ImageId("ba-track-image-1"),
+                            placamera::ImageId("ba-track-image-2")};
 
     xjw::core::project::ProjectMatchPair firstPair;
     firstPair.cameraIndexA = 0;
@@ -38,7 +58,7 @@ TEST(BaTrackBuilderTest, IndexedTrackTriesLaterObservationPairWhenFirstPairIsDeg
     input.pairs = {firstPair, secondPair};
 
     xjw::core::project::BaInputBuildResult result;
-    xjw::core::project::appendBaTracks(input, &result);
+    ASSERT_TRUE(xjw::core::project::appendBaTracks(input, &result));
 
     ASSERT_EQ(result.tracks.size(), 1u);
     ASSERT_EQ(result.tracks.front().observations.size(), 3u);
@@ -50,11 +70,12 @@ TEST(BaTrackBuilderTest, IndexedTrackTriesLaterObservationPairWhenFirstPairIsDeg
 TEST(BaTrackBuilderTest, IndexedTrackUsesReferenceDuplicateObservationCleanup)
 {
     xjw::core::project::ProjectMatchInput input;
-    input.cameras = {
-        makeCamera({0.0, 0.0, 0.0}),
-        makeCamera({1.0, 0.0, 0.0}),
-        makeCamera({2.0, 0.0, 0.0}),
-    };
+    input.cameraInstances = {makeNativeCamera({0.0, 0.0, 0.0}, 0),
+                             makeNativeCamera({1.0, 0.0, 0.0}, 1),
+                             makeNativeCamera({2.0, 0.0, 0.0}, 2)};
+    input.imageIdByIndex = {placamera::ImageId("ba-track-image-0"),
+                            placamera::ImageId("ba-track-image-1"),
+                            placamera::ImageId("ba-track-image-2")};
 
     xjw::core::project::ProjectMatchPair pair01;
     pair01.cameraIndexA = 0;
@@ -76,13 +97,52 @@ TEST(BaTrackBuilderTest, IndexedTrackUsesReferenceDuplicateObservationCleanup)
     input.pairs = {pair01, pair02, pair12};
 
     xjw::core::project::BaInputBuildResult result;
-    xjw::core::project::appendBaTracks(input, &result);
+    ASSERT_TRUE(xjw::core::project::appendBaTracks(input, &result));
 
     ASSERT_EQ(result.multiViewTrackCount, 1);
     ASSERT_EQ(result.tracks.size(), 1u);
     ASSERT_EQ(result.tracks.front().observations.size(), 2u);
     EXPECT_EQ(result.tracks.front().observations[0].cameraIndex, 1);
     EXPECT_EQ(result.tracks.front().observations[1].cameraIndex, 2);
+}
+
+TEST(BaTrackBuilderTest, RejectsMissingPlaCameraInstanceForCanonicalImageId)
+{
+    xjw::core::project::ProjectMatchInput input;
+    input.cameraInstances = {makeNativeCamera({0.0, 0.0, 0.0}, 0)};
+    input.imageIdByIndex = {placamera::ImageId("ba-track-image-0"), placamera::ImageId("ba-track-image-1")};
+
+    xjw::core::project::BaInputBuildResult result;
+    EXPECT_FALSE(xjw::core::project::appendBaTracks(input, &result));
+    EXPECT_TRUE(result.tracks.empty());
+    EXPECT_TRUE(result.matchDiagnostics.firstCameraError.contains(QStringLiteral("数量不一致")));
+}
+
+TEST(BaTrackBuilderTest, RejectsPlaCameraImageIdentityMismatch)
+{
+    xjw::core::project::ProjectMatchInput input;
+    input.cameraInstances = {makeNativeCamera({0.0, 0.0, 0.0}, 0),
+                             makeNativeCamera({1.0, 0.0, 0.0}, 1)};
+    input.imageIdByIndex = {placamera::ImageId("ba-track-image-0"),
+                            placamera::ImageId("wrong-image")};
+
+    xjw::core::project::BaInputBuildResult result;
+    EXPECT_FALSE(xjw::core::project::appendBaTracks(input, &result));
+    EXPECT_TRUE(result.tracks.empty());
+    EXPECT_TRUE(result.matchDiagnostics.firstCameraError.contains(QStringLiteral("ImageId 不一致")));
+}
+
+TEST(MarkerBaAdapterTest, RejectsPlaCameraImageIdentityMismatch)
+{
+    xjw::control_points::MarkerSet markers;
+    xjw::core::project::MarkerBaInput input;
+    input.markerSet = &markers;
+    xjw::core::project::BaInputBuildResult result;
+    result.cameraInstances = {makeNativeCamera({0.0, 0.0, 0.0}, 0)};
+    result.imageIdByIndex = {placamera::ImageId("wrong-image")};
+
+    xjw::core::project::appendMarkerBaInput(&input, {}, &result);
+    EXPECT_TRUE(result.firstControlInputError.contains(QStringLiteral("ImageId 不一致")));
 }
 
 TEST(ProjectMatchInputReaderTest, ResolvesRelocatedImageByUniqueFileName)

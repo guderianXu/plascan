@@ -59,27 +59,42 @@ namespace xjw::mvs
             throw std::invalid_argument("recovered depth quality must be highest, high, medium, low, or lowest");
         }
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState
-        recoveredPublicCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
-                              std::uint32_t downscale)
+        placamera::FramePinholeModel recoveredPublicCamera(const placamera::FramePinholeModel& source,
+                                                           std::uint32_t downscale,
+                                                           placamera::ImageSize output_size)
         {
-            const auto original = source.normalizedForPositiveDepth();
-            const auto intrinsics = original.intrinsics();
+            const auto original = source.normalizedForPositiveDepth(
+                placamera::CameraDefinitionId(source.instanceId().value() + "-recovered-normalized-definition"),
+                source.instanceId());
+            auto intrinsics = original.pinholeDefinition().intrinsics();
             const double scale = static_cast<double>(downscale);
-            auto result = original.scaledIntrinsics(1.0 / scale, 1.0 / scale);
-            result.setIntrinsics(intrinsics.focalY / scale,
-                                 intrinsics.focalY / scale,
-                                 intrinsics.principalX / scale,
-                                 intrinsics.principalY / scale);
-            result.setDistortion(xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion{});
-            return result;
+            intrinsics.focalX = intrinsics.focalY / scale;
+            intrinsics.focalY /= scale;
+            intrinsics.principalX /= scale;
+            intrinsics.principalY /= scale;
+            const auto definition = placamera::FramePinholeDefinition::create(
+                placamera::CameraDefinitionId(source.instanceId().value() + "-recovered-public-definition-" +
+                                              std::to_string(downscale)),
+                intrinsics,
+                placamera::BrownConradyDistortion{},
+                placamera::PixelConvention::PixelCenter,
+                original.groundFrame());
+            return placamera::FramePinholeModel::create(original.instanceId(),
+                                                        original.imageId(),
+                                                        definition,
+                                                        output_size,
+                                                        original.pose(),
+                                                        original.captureTime());
         }
     } // namespace
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
-    recoveredPublicD4Camera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source)
+    placamera::FramePinholeModel recoveredPublicD4Camera(const placamera::FramePinholeModel& source)
     {
-        return recoveredPublicCamera(source, 4U);
+        const auto& size = source.imageSize();
+        return recoveredPublicCamera(source,
+                                     4U,
+                                     {std::max(1, static_cast<int>(std::lround(size.samples / 4.0))),
+                                      std::max(1, static_cast<int>(std::lround(size.lines / 4.0)))});
     }
 
     bool prepareRecoveredSourceMask(const CameraView& view, RecoveredSourceMask* result, std::string* errorMessage)
@@ -178,9 +193,10 @@ namespace xjw::mvs
         bool makeScene(const std::vector<CameraView>& views,
                        const SparseCloud& sparseCloud,
                        Scene* scene,
+                       std::vector<placamera::FramePinholeModel>* sourceCameras,
                        std::string* errorMessage)
         {
-            if (!scene || views.size() < 2 || sparseCloud.points.empty() ||
+            if (!scene || !sourceCameras || views.size() < 2 || sparseCloud.points.empty() ||
                 sparseCloud.trackIds.size() != sparseCloud.points.size() ||
                 sparseCloud.observingViewIndices.size() != sparseCloud.points.size())
             {
@@ -189,18 +205,28 @@ namespace xjw::mvs
             }
             Scene converted;
             converted.cameras.reserve(views.size());
+            std::vector<placamera::FramePinholeModel> native_cameras;
+            native_cameras.reserve(views.size());
             for (std::size_t index = 0; index < views.size(); ++index)
             {
                 const CameraView& view = views[index];
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-                    view.camera.normalizedForPositiveDepth();
-                if (!camera.isValid() || view.imageWidth <= 0 || view.imageHeight <= 0)
+                if (view.imageWidth <= 0 || view.imageHeight <= 0)
                 {
                     setError(errorMessage, "recovered depth camera is invalid or has no raster dimensions");
                     return false;
                 }
-                const auto intrinsics = camera.intrinsics();
-                const auto distortion = camera.distortion();
+                const auto& source_camera = view.camera;
+                if (!source_camera || source_camera->imageSize().samples != view.imageWidth ||
+                    source_camera->imageSize().lines != view.imageHeight)
+                {
+                    setError(errorMessage, "recovered depth PlaCamera model is missing or raster dimensions differ");
+                    return false;
+                }
+                const auto camera = source_camera->normalizedForPositiveDepth(
+                    placamera::CameraDefinitionId(source_camera->instanceId().value() + "-recovered-scene-definition"),
+                    source_camera->instanceId());
+                const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+                const auto& distortion = camera.pinholeDefinition().distortion();
                 Camera output;
                 output.index = index;
                 output.name = std::filesystem::path(view.imagePath).stem().string();
@@ -215,9 +241,25 @@ namespace xjw::mvs
                 output.model.k3 = distortion.radialK3;
                 output.model.p1 = distortion.tangentialP1;
                 output.model.p2 = distortion.tangentialP2;
-                const auto rotation = camera.worldToCameraRotation();
-                const auto translation = camera.worldToCameraTranslation();
-                const auto center = camera.cameraCenter();
+                const auto& camera_to_world = camera.pose().cameraToWorldRotation;
+                const std::array<double, 9> rotation{camera_to_world[0],
+                                                     camera_to_world[3],
+                                                     camera_to_world[6],
+                                                     camera_to_world[1],
+                                                     camera_to_world[4],
+                                                     camera_to_world[7],
+                                                     camera_to_world[2],
+                                                     camera_to_world[5],
+                                                     camera_to_world[8]};
+                const auto& center = camera.pose().center;
+                std::array<double, 3> translation{};
+                for (int row = 0; row < 3; ++row)
+                {
+                    translation[static_cast<std::size_t>(row)] =
+                        -(rotation[static_cast<std::size_t>(row * 3)] * center[0] +
+                          rotation[static_cast<std::size_t>(row * 3 + 1)] * center[1] +
+                          rotation[static_cast<std::size_t>(row * 3 + 2)] * center[2]);
+                }
                 output.pose.rotation.v = rotation;
                 output.pose.translation = {translation[0], translation[1], translation[2]};
                 output.pose.center = metalign::Vec3{center[0], center[1], center[2]};
@@ -231,6 +273,7 @@ namespace xjw::mvs
                 }
                 output.source_mask = std::move(source_mask.bytes);
                 converted.cameras.push_back(std::move(output));
+                native_cameras.push_back(*source_camera);
             }
             converted.sparse_points.reserve(sparseCloud.points.size());
             for (std::size_t index = 0; index < sparseCloud.points.size(); ++index)
@@ -275,6 +318,7 @@ namespace xjw::mvs
                     std::max(1.0e-6, static_cast<double>(sparseCloud.maxPt[2] - sparseCloud.minPt[2]))};
             }
             *scene = std::move(converted);
+            *sourceCameras = std::move(native_cameras);
             return true;
         }
 
@@ -321,7 +365,8 @@ namespace xjw::mvs
                 }
             });
         Scene scene;
-        if (!makeScene(views, sparseCloud, &scene, errorMessage))
+        std::vector<placamera::FramePinholeModel> source_cameras;
+        if (!makeScene(views, sparseCloud, &scene, &source_cameras, errorMessage))
         {
             return false;
         }
@@ -444,7 +489,8 @@ namespace xjw::mvs
                 }
             }
             frame.photometricSourceMask.setTo(0, frame.validMask == 0);
-            frame.camera = recoveredPublicCamera(views[camera_index].camera, base_downscale);
+            frame.cameraModel = std::make_shared<const placamera::FramePinholeModel>(
+                recoveredPublicCamera(source_cameras[camera_index], base_downscale, {width, height}));
             if (!views[camera_index].preparedValidMaskPath.empty())
             {
                 const std::string& prepared_source = views[camera_index].preparedValidMaskSource;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "BinaryGridMinCutSolver.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 
 #include <opencv2/core/mat.hpp>
 
@@ -16,7 +16,7 @@ namespace xjw::mesh
 
 struct VisibilityOccupancyFrameView
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState* camera = nullptr;
+    const placamera::FramePinholeNumericState* camera = nullptr;
     const cv::Mat *depth = nullptr;
     const cv::Mat *confidence = nullptr;
     const cv::Mat *depthValidMask = nullptr;

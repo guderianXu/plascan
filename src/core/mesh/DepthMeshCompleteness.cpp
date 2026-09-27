@@ -61,7 +61,7 @@ DepthMeshCompletenessStatistics DepthMeshCompleteness::evaluate(
         {
             continue;
         }
-        if (!frame.camera.isValid() || frame.depth.empty() ||
+        if (!frame.camera || frame.depth.empty() ||
             frame.depth.type() != CV_32FC1 ||
             frame.depthValidMask.type() != CV_8UC1 ||
             frame.supportMask.type() != CV_8UC1)
@@ -93,18 +93,15 @@ DepthMeshCompletenessStatistics DepthMeshCompleteness::evaluate(
                 {
                     continue;
                 }
-                const double pixel[2] = {
-                    static_cast<double>(column),
-                    static_cast<double>(row)
-                };
-                double world[3]{};
-                if (!frame.camera.unprojectPixel(pixel, depth, world))
+                const auto ground = frame.camera->imageToGroundAtDepth(
+                    {static_cast<double>(column), static_cast<double>(row)}, depth);
+                if (!ground)
                 {
                     continue;
                 }
                 ++frame_result.sampledDepthPointCount;
                 if (triangle_index.nearestDistanceSquared(
-                        {world[0], world[1], world[2]}) <=
+                        ground.value().position) <=
                     tolerance_squared)
                 {
                     ++frame_result.explainedDepthPointCount;

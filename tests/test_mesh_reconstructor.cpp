@@ -39,12 +39,12 @@
 
 #include <plapoint/filters/preprocessing.h>
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/mesh/marching_cubes.h>
-#include <plapoint/opencl/opencl_runtime.h>
+#include <plapoint/core/processing_policy.h>
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -65,6 +65,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -78,6 +79,58 @@ xjw::common::OperationResult writeDepthMatStorage(const QString &path, const cv:
 
 namespace
 {
+
+std::shared_ptr<const placamera::FramePinholeModel> makeDepthFrameCamera(
+    int index,
+    double focal_x,
+    double focal_y,
+    double principal_x,
+    double principal_y,
+    int width,
+    int height,
+    std::array<double, 3> center = {0.0, 0.0, 0.0},
+    std::string frame_name = "mesh-depth-test-world")
+{
+    const placamera::FrameId ground_frame(std::move(frame_name));
+    const std::string suffix = std::to_string(index);
+    placamera::FrameIntrinsics intrinsics;
+    intrinsics.focalX = focal_x;
+    intrinsics.focalY = focal_y;
+    intrinsics.principalX = principal_x;
+    intrinsics.principalY = principal_y;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("mesh-depth-definition-" + suffix),
+        intrinsics,
+        {},
+        placamera::PixelConvention::PixelCenter,
+        ground_frame);
+    const auto pose = placamera::Pose::create(
+        ground_frame,
+        center,
+        {1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0});
+    return std::make_shared<const placamera::FramePinholeModel>(
+        placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("mesh-depth-instance-" + suffix),
+            placamera::ImageId("mesh-depth-image-" + suffix),
+            definition,
+            placamera::ImageSize{width, height},
+            pose));
+}
+
+placamera::FramePinholeNumericState makeMeshColorCamera(double focal_x,
+                                                        double focal_y,
+                                                        double principal_x,
+                                                        double principal_y,
+                                                        int width,
+                                                        int height,
+                                                        std::array<double, 3> center = {0.0, 0.0, 0.0},
+                                                        std::string frame_name = "mesh-depth-test-world")
+{
+    return placamera::FramePinholeNumericState::fromModel(*makeDepthFrameCamera(
+        10000, focal_x, focal_y, principal_x, principal_y, width, height, center, std::move(frame_name)));
+}
 
 bool meshContainsEdge(const xjw::mesh::TriMesh &mesh, int first, int second)
 {
@@ -101,13 +154,12 @@ std::filesystem::path writeTextureTestTriangle(
     const std::filesystem::path &root)
 {
     const std::filesystem::path path = root / "texture_triangle.ply";
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    plamatrix::MatrixXf points(3, 3);
     points(0, 0) = -0.4f; points(0, 1) = -0.3f; points(0, 2) = 2.0f;
     points(1, 0) = 0.4f;  points(1, 1) = -0.3f; points(1, 2) = 2.0f;
     points(2, 0) = -0.4f; points(2, 1) = 0.3f;  points(2, 2) = 2.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(
-        std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(1, 3);
     faces(0, 0) = 0;
     faces(0, 1) = 1;
     faces(0, 2) = 2;
@@ -120,7 +172,7 @@ std::filesystem::path writeTextureTestTriangle(
 std::filesystem::path writeTextureRecoveryQuad(const std::filesystem::path& root)
 {
     const std::filesystem::path path = root / "texture_recovery_quad.ply";
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    plamatrix::MatrixXf points(4, 3);
     points(0, 0) = -0.4f;
     points(0, 1) = -0.3f;
     points(0, 2) = 2.0f;
@@ -133,8 +185,8 @@ std::filesystem::path writeTextureRecoveryQuad(const std::filesystem::path& root
     points(3, 0) = 0.4f;
     points(3, 1) = 0.3f;
     points(3, 2) = 2.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(2, 3);
     faces(0, 0) = 0;
     faces(0, 1) = 1;
     faces(0, 2) = 2;
@@ -149,9 +201,7 @@ std::filesystem::path writeTextureRecoveryQuad(const std::filesystem::path& root
 xjw::mesh::MeshColorView makeTextureTestView(const cv::Scalar& color)
 {
     xjw::mesh::MeshColorView view;
-    view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.camera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36);
     view.colorBgr = cv::Mat(36, 48, CV_8UC3, color);
     view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
@@ -209,11 +259,8 @@ QVector<xjw::mesh::DepthTsdfFrame> makeSyntheticPlaneFrames(bool addRejections)
         const double centerX = (index - 1) * 0.1;
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                   0.0, 1.0, 0.0,
-                                                   0.0, 0.0, 1.0},
-                             std::array<double, 3>{centerX, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36,
+                                           {centerX, 0.0, 0.0});
         frame.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
         frame.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
         frame.geometrySupportCount = cv::Mat(36, 48, CV_16UC1, cv::Scalar(3));
@@ -285,16 +332,9 @@ QVector<xjw::mesh::DepthTsdfFrame> makeDepthRefinementFrames(
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{
-                frame_index == 1 ? secondCameraCenterX : 0.0,
-                0.0,
-                0.0});
+        frame.camera = makeDepthFrameCamera(
+            frame_index, 100.0, 100.0, 64.0, 64.0, 128, 128,
+            {frame_index == 1 ? secondCameraCenterX : 0.0, 0.0, 0.0});
         frame.depth = cv::Mat(128, 128, CV_32FC1, cv::Scalar(0.0f));
         frame.confidence = cv::Mat(
             128, 128, CV_32FC1, cv::Scalar(0.9f));
@@ -313,13 +353,12 @@ QVector<xjw::mesh::DepthTsdfFrame> makeDepthRefinementFrames(
         for (std::size_t index = 0; index < mesh.vertices.size(); ++index)
         {
             const xjw::mesh::MeshVertex &vertex = mesh.vertices[index];
-            const double world[3]{vertex.x, vertex.y, vertex.z};
-            double pixel[2]{};
-            double projected_depth = 0.0;
-            EXPECT_TRUE(frame.camera.projectWorldPointWithDepth(
-                world, pixel, projected_depth));
-            const int column = static_cast<int>(std::lround(pixel[0]));
-            const int row = static_cast<int>(std::lround(pixel[1]));
+            const auto projected = frame.camera->groundToImage(
+                {frame.camera->groundFrame(), {vertex.x, vertex.y, vertex.z}});
+            EXPECT_TRUE(projected);
+            const auto& pixel = projected.value().image;
+            const int column = static_cast<int>(std::lround(pixel.sample));
+            const int row = static_cast<int>(std::lround(pixel.line));
             const cv::Rect patch(column - 1, row - 1, 3, 3);
             frame.depth(patch).setTo(targetDepths[index]);
             frame.depthValidMask(patch).setTo(255);
@@ -1745,13 +1784,7 @@ TEST(VisualHullDepthRefinerTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36);
         frame.depth =
             cv::Mat(
                 36,
@@ -1842,13 +1875,7 @@ TEST(VisualHullDepthRefinerTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36);
         frame.depth = cv::Mat(
             36,
             48,
@@ -1925,13 +1952,7 @@ TEST(VisualHullDepthRefinerTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.4, 18.4);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 40.0, 40.0, 24.4, 18.4, 48, 36);
         frame.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(1.20f));
         frame.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
         frame.depthValidMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
@@ -1948,14 +1969,13 @@ TEST(VisualHullDepthRefinerTest,
             : (frame_index == 1 ? 1.04f : 1.18f);
         for (const xjw::mesh::MeshVertex &vertex : mesh.vertices)
         {
-            const double world[3]{vertex.x, vertex.y, vertex.z};
-            double pixel[2]{};
-            double projected_depth = 0.0;
-            ASSERT_TRUE(frame.camera.projectWorldPointWithDepth(
-                world, pixel, projected_depth));
+            const auto projected = frame.camera->groundToImage(
+                {frame.camera->groundFrame(), {vertex.x, vertex.y, vertex.z}});
+            ASSERT_TRUE(projected);
+            const auto& pixel = projected.value().image;
             frame.depth.at<float>(
-                static_cast<int>(std::lround(pixel[1])),
-                static_cast<int>(std::lround(pixel[0]))) = measured_depth;
+                static_cast<int>(std::lround(pixel.line)),
+                static_cast<int>(std::lround(pixel.sample))) = measured_depth;
         }
         frame.auxiliarySurfaceOnly = frame_index == 2;
         frames.push_back(std::move(frame));
@@ -2035,13 +2055,7 @@ TEST(VisualHullDepthRefinerTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36);
         frame.depth = cv::Mat(
             36,
             48,
@@ -2112,13 +2126,7 @@ TEST(VisualHullDepthRefinerTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36);
         frame.depth = cv::Mat(
             36,
             48,
@@ -2827,20 +2835,14 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         ASSERT_TRUE(cv::imwrite(supportMaskPath.toStdString(), supportMask));
         ASSERT_TRUE(cv::imwrite(repairedMaskPath.toStdString(), repairedMask));
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(30.0, 30.0, 16.0, 12.0);
-        camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                             0.0, 1.0, 0.0,
-                                             0.0, 0.0, 1.0},
-                       std::array<double, 3>{0.05 * index, 0.0, 0.0});
+        const auto camera = makeDepthFrameCamera(
+            index, 30.0, 30.0, 16.0, 12.0, 32, 24, {0.05 * index, 0.0, 0.0}, "depth-artifact-world");
 
         xjw::mesh::DepthFrameArtifact artifact;
         artifact.refIndex = index;
         artifact.status = QStringLiteral("completed");
-        artifact.acceptance = index == 3
-            ? QStringLiteral("validation_only")
-            : (index == 4 ? QStringLiteral("rejected")
-                          : QStringLiteral("accepted"));
+        artifact.acceptance = index == 3 ? QStringLiteral("validation_only")
+                                         : (index == 4 ? QStringLiteral("rejected") : QStringLiteral("accepted"));
         artifact.fusionEligible = index < 3;
         artifact.fusionEligibilityKnown = true;
         artifact.role = xjw::mvs::qualifyDepthFrameRole(
@@ -2887,7 +2889,6 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         artifact.validMaskPath = depthMaskPath;
         artifact.supportMaskPath = supportMaskPath;
         artifact.cameraModel = camera;
-        artifact.hasCameraModel = true;
         artifacts.push_back(artifact);
     }
 
@@ -3055,6 +3056,9 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
             {QStringLiteral("grid_width"), 32},
             {QStringLiteral("grid_height"), 24},
             {QStringLiteral("camera_model"), QJsonObject{
+                {QStringLiteral("instance_id"), QStringLiteral("auxiliary-%1").arg(index)},
+                {QStringLiteral("image_id"), QStringLiteral("auxiliary-image-%1").arg(index)},
+                {QStringLiteral("world_frame"), QStringLiteral("auxiliary-world")},
                 {QStringLiteral("fx"), 30.0},
                 {QStringLiteral("fy"), 30.0},
                 {QStringLiteral("cx"), 16.0},
@@ -3172,6 +3176,9 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
             {QStringLiteral("grid_width"), 32},
             {QStringLiteral("grid_height"), 24},
             {QStringLiteral("camera_model"), QJsonObject{
+                {QStringLiteral("instance_id"), QStringLiteral("orbital-%1").arg(artifact.refIndex)},
+                {QStringLiteral("image_id"), QStringLiteral("orbital-image-%1").arg(artifact.refIndex)},
+                {QStringLiteral("world_frame"), QStringLiteral("orbital-world")},
                 {QStringLiteral("fx"), 30.0},
                 {QStringLiteral("fy"), 30.0},
                 {QStringLiteral("cx"), 16.0},
@@ -3225,7 +3232,7 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_TRUE(loaded.frames.front().adaptiveGeometryConflictRatio.empty());
     EXPECT_EQ(loaded.frames.front().depthValidMask.type(), CV_8UC1);
     EXPECT_EQ(loaded.frames.front().supportMask.type(), CV_8UC1);
-    EXPECT_TRUE(loaded.frames.front().camera.isValid());
+    EXPECT_NE(loaded.frames.front().camera, nullptr);
 
 
     const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(loaded.frames);
@@ -3267,24 +3274,16 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.sceneProfile = QStringLiteral("aerial_terrain");
         artifact.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
         artifact.depthPath = depth_path;
-        artifact.sourceIndices = {
-            (index + 1) % 3,
-            (index + 2) % 3};
-        artifact.cameraModel.setIntrinsics(20.0, 20.0, 1.5, 1.0);
-        artifact.cameraModel.setPose(
-            std::array<double, 9>{1.0, 0.0, 0.0,
-                                  0.0, 1.0, 0.0,
-                                  0.0, 0.0, 1.0},
-            std::array<double, 3>{0.1 * index, 0.0, 0.0});
-        artifact.hasCameraModel = true;
+        artifact.sourceIndices = {(index + 1) % 3, (index + 2) % 3};
+        artifact.cameraModel =
+            makeDepthFrameCamera(index, 20.0, 20.0, 1.5, 1.0, 4, 3, {0.1 * index, 0.0, 0.0}, "zero-source-world");
         artifacts.push_back(std::move(artifact));
     }
 
-    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
-        artifacts, 1);
+    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts, 1);
     ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
     ASSERT_EQ(loaded.frames.size(), 3);
-    for (const xjw::mesh::DepthTsdfFrame &frame : loaded.frames)
+    for (const xjw::mesh::DepthTsdfFrame& frame : loaded.frames)
     {
         EXPECT_TRUE(frame.geometrySourceIndices.empty());
         EXPECT_EQ(cv::countNonZero(frame.geometrySourceMask), 0);
@@ -3298,21 +3297,42 @@ TEST(DepthTsdfSurfaceBuilderTest,
         QStringLiteral("must either both be present or both be omitted")));
 }
 
-TEST(DepthTsdfSurfaceBuilderTest,
-     BoundsUseOnlyPrimaryFramesWhenAuxiliaryDepthIsExtreme)
+TEST(DepthTsdfSurfaceBuilderTest, RejectsMissingDepthCameraAtLoadBoundary)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString depth_path = directory.filePath(QStringLiteral("depth.bin"));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(depth_path, cv::Mat(3, 4, CV_32FC1, cv::Scalar(2.0f))).ok);
+
+    xjw::mesh::DepthFrameArtifact artifact;
+    artifact.refIndex = 0;
+    artifact.status = QStringLiteral("completed");
+    artifact.acceptance = QStringLiteral("accepted");
+    artifact.fusionEligibilityKnown = true;
+    artifact.fusionEligible = true;
+    artifact.role = xjw::mvs::DepthFrameRole::Primary;
+    artifact.sceneProfile = QStringLiteral("aerial_terrain");
+    artifact.depthPath = depth_path;
+    const auto loaded =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(QVector<xjw::mesh::DepthFrameArtifact>{artifact}, 1);
+    EXPECT_FALSE(loaded.ok);
+    EXPECT_TRUE(loaded.errorMessage.contains(QStringLiteral("camera is missing")));
+
+    artifact.cameraModel = makeDepthFrameCamera(0, 20.0, 20.0, 1.5, 1.0, 5, 3);
+    const auto mismatched =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(QVector<xjw::mesh::DepthFrameArtifact>{artifact}, 1);
+    EXPECT_FALSE(mismatched.ok);
+    EXPECT_TRUE(mismatched.errorMessage.contains(QStringLiteral("does not match depth grid")));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, BoundsUseOnlyPrimaryFramesWhenAuxiliaryDepthIsExtreme)
 {
     QVector<xjw::mesh::DepthTsdfFrame> frames;
     for (int frame_index = 0; frame_index < 3; ++frame_index)
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(40.0, 40.0, 16.0, 16.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 40.0, 40.0, 16.0, 16.0, 32, 32);
         frame.depth = cv::Mat(
             32,
             32,
@@ -3355,13 +3375,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(100.0, 100.0, 60.0, 60.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 100.0, 100.0, 60.0, 60.0, 120, 120);
         frame.depth = cv::Mat(120, 120, CV_32FC1, cv::Scalar(2.0f));
         frame.depthValidMask = cv::Mat(120, 120, CV_8UC1, cv::Scalar(255));
         frame.supportMask = cv::Mat(120, 120, CV_8UC1, cv::Scalar(255));
@@ -3412,13 +3426,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(100.0, 100.0, 60.0, 60.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 100.0, 100.0, 60.0, 60.0, 120, 120);
         frame.depth = cv::Mat(120, 120, CV_32FC1, cv::Scalar(2.0f));
         if (frame_index < 3)
         {
@@ -3455,13 +3463,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(40.0, 40.0, 16.0, 16.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 40.0, 40.0, 16.0, 16.0, 32, 32);
         frame.depth = cv::Mat(32, 32, CV_32FC1, cv::Scalar(0.5f));
         frame.depthValidMask = cv::Mat(32, 32, CV_8UC1, cv::Scalar(255));
         frame.supportMask = cv::Mat(32, 32, CV_8UC1, cv::Scalar(255));
@@ -3497,13 +3499,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     {
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = frame_index;
-        frame.camera.setIntrinsics(50.0, 50.0, 24.0, 24.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame_index, 50.0, 50.0, 24.0, 24.0, 48, 48);
         frame.depth = cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.5f));
         frame.depthValidMask = cv::Mat(48, 48, CV_8UC1, cv::Scalar(255));
         frame.supportMask = cv::Mat(48, 48, CV_8UC1, cv::Scalar(255));
@@ -3604,16 +3600,10 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.inverseDepthSpreadPath = inverse_depth_spread_path;
         artifact.crossViewRepairedMaskPath = repaired_mask_path;
         artifact.adaptiveGeometrySupportWeightPath = adaptive_support_path;
-        artifact.adaptiveGeometryEffectiveViewCountPath =
-            adaptive_effective_views_path;
+        artifact.adaptiveGeometryEffectiveViewCountPath = adaptive_effective_views_path;
         artifact.adaptiveGeometryConflictRatioPath = adaptive_conflict_ratio_path;
-        artifact.cameraModel.setIntrinsics(20.0, 20.0, 1.0, 1.0);
-        artifact.cameraModel.setPose(
-            std::array<double, 9>{1.0, 0.0, 0.0,
-                                  0.0, 1.0, 0.0,
-                                  0.0, 0.0, 1.0},
-            std::array<double, 3>{0.1 * index, 0.0, 0.0});
-        artifact.hasCameraModel = true;
+        artifact.cameraModel =
+            makeDepthFrameCamera(index, 20.0, 20.0, 1.0, 1.0, 2, 2, {0.1 * index, 0.0, 0.0}, "adaptive-evidence-world");
         artifacts.push_back(std::move(artifact));
     }
 
@@ -4413,23 +4403,14 @@ TEST(DepthTsdfSurfaceBuilderTest,
     artifact.fusionEligible = false;
     artifact.fusionEligibilityKnown = true;
     artifact.role = xjw::mvs::qualifyDepthFrameRole(
-        artifact.acceptance,
-        artifact.fusionEligibilityKnown,
-        artifact.fusionEligible,
-        artifact.status);
+        artifact.acceptance, artifact.fusionEligibilityKnown, artifact.fusionEligible, artifact.status);
     artifact.sceneProfile = QStringLiteral(" Orbital_Object ");
     artifact.algorithmRevision = 11;
     artifact.depthPath = depth_path;
-    artifact.cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
-    artifact.cameraModel.setPose(
-        std::array<double, 9>{1.0, 0.0, 0.0,
-                              0.0, 1.0, 0.0,
-                              0.0, 0.0, 1.0},
-        std::array<double, 3>{0.0, 0.0, 0.0});
-    artifact.hasCameraModel = true;
+    artifact.cameraModel = makeDepthFrameCamera(0, 20.0, 20.0, 4.0, 4.0, 8, 8);
 
-    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(
-        QVector<xjw::mesh::DepthFrameArtifact>{artifact});
+    const auto loaded =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(QVector<xjw::mesh::DepthFrameArtifact>{artifact});
 
     EXPECT_FALSE(loaded.ok);
     EXPECT_TRUE(loaded.errorMessage.contains(
@@ -4463,13 +4444,8 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.depthProducer = QStringLiteral("recovered_scene_d4");
         artifact.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
         artifact.depthPath = depth_path;
-        artifact.cameraModel.setIntrinsics(20.0, 20.0, 4.0, 4.0);
-        artifact.cameraModel.setPose(
-            std::array<double, 9>{1.0, 0.0, 0.0,
-                                  0.0, 1.0, 0.0,
-                                  0.0, 0.0, 1.0},
-            std::array<double, 3>{static_cast<double>(index), 0.0, 0.0});
-        artifact.hasCameraModel = true;
+        artifact.cameraModel = makeDepthFrameCamera(
+            index, 20.0, 20.0, 4.0, 4.0, 8, 8, {static_cast<double>(index), 0.0, 0.0}, "recovered-world");
         artifacts.push_back(std::move(artifact));
     }
 
@@ -4906,12 +4882,8 @@ TEST(DepthTsdfSurfaceBuilderTest,
         const double center_y = 0.1 * std::sin(angle);
         xjw::mesh::DepthTsdfFrame frame;
         frame.refIndex = index;
-        frame.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{1.0, 0.0, 0.0,
-                                  0.0, 1.0, 0.0,
-                                  0.0, 0.0, 1.0},
-            std::array<double, 3>{-center_x, -center_y, 0.0});
+        frame.camera = makeDepthFrameCamera(index, 40.0, 40.0, 24.0, 18.0, 48, 36,
+                                           {-center_x, -center_y, 0.0});
         frame.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
         frame.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
         frame.geometrySupportCount =
@@ -5476,9 +5448,9 @@ TEST(MeshIoTest, PlyExportOmitsDisabledVertexColorsAndPreservesEnabledColors)
     const auto colored = plapoint::io::readPly<float>(colored_path.toStdString());
     ASSERT_NE(colored, nullptr);
     ASSERT_TRUE(colored->hasColors());
-    EXPECT_EQ(colored->colors()->getValue(0, 0), 17);
-    EXPECT_EQ(colored->colors()->getValue(0, 1), 29);
-    EXPECT_EQ(colored->colors()->getValue(0, 2), 43);
+    EXPECT_EQ(colored->colors()->coeff(0, 0), 17);
+    EXPECT_EQ(colored->colors()->coeff(0, 1), 29);
+    EXPECT_EQ(colored->colors()->coeff(0, 2), 43);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -5580,13 +5552,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
         makeSyntheticPlaneFrames(false);
     for (xjw::mesh::DepthTsdfFrame &frame : frames)
     {
-        frame.camera.setIntrinsics(60.0, 60.0, 24.0, 18.0);
-        frame.camera.setPose(
-            std::array<double, 9>{
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.camera = makeDepthFrameCamera(frame.refIndex, 60.0, 60.0, 24.0, 18.0, 48, 36);
     }
 
     xjw::mesh::DepthTsdfOptions options;
@@ -6423,17 +6389,15 @@ TEST(MeshColorizerTest, ExposureCompensationAlsoAppliesToBestViewFallback)
         vertex.nz = 1.0f;
     }
     xjw::mesh::Triangle face;
-    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    face.v[0] = 0;
+    face.v[1] = 1;
+    face.v[2] = 2;
     mesh.faces.push_back(face);
 
     auto make_view = [](std::uint8_t value)
     {
         xjw::mesh::MeshColorView view;
-        view.camera.setIntrinsics(40.0, 40.0, 8.0, 8.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                   0.0, 1.0, 0.0,
-                                                   0.0, 0.0, 1.0},
-                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.camera = makeMeshColorCamera(40.0, 40.0, 8.0, 8.0, 16, 16);
         view.colorBgr = cv::Mat(16, 16, CV_8UC3, cv::Scalar(value, value, value));
         view.depth = cv::Mat(16, 16, CV_32FC1, cv::Scalar(2.0f));
         view.confidence = cv::Mat(16, 16, CV_32FC1, cv::Scalar(0.9f));
@@ -6490,17 +6454,15 @@ TEST(MeshColorizerTest, CoherentFaceColorUsesOnePrimaryViewForTheWholeFace)
         vertex.nz = 1.0f;
     }
     xjw::mesh::Triangle face;
-    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    face.v[0] = 0;
+    face.v[1] = 1;
+    face.v[2] = 2;
     mesh.faces.push_back(face);
 
-    auto make_view = [](const cv::Scalar &color, float quality)
+    auto make_view = [](const cv::Scalar& color, float quality)
     {
         xjw::mesh::MeshColorView view;
-        view.camera.setIntrinsics(40.0, 40.0, 8.0, 8.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                   0.0, 1.0, 0.0,
-                                                   0.0, 0.0, 1.0},
-                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.camera = makeMeshColorCamera(40.0, 40.0, 8.0, 8.0, 16, 16);
         view.colorBgr = cv::Mat(16, 16, CV_8UC3, color);
         view.depth = cv::Mat(16, 16, CV_32FC1, cv::Scalar(2.0f));
         view.confidence = cv::Mat(16, 16, CV_32FC1, cv::Scalar(0.9f));
@@ -6544,17 +6506,15 @@ TEST(MeshColorizerTest, RejectsDarkStudioBackgroundBeforeVertexAndFaceColoring)
         vertex.nz = 1.0f;
     }
     xjw::mesh::Triangle face;
-    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    face.v[0] = 0;
+    face.v[1] = 1;
+    face.v[2] = 2;
     mesh.faces.push_back(face);
 
     auto make_view = []()
     {
         xjw::mesh::MeshColorView view;
-        view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                   0.0, 1.0, 0.0,
-                                                   0.0, 0.0, 1.0},
-                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.camera = makeMeshColorCamera(80.0, 80.0, 32.0, 32.0, 64, 64);
         view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(2.0f));
         view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.9f));
         view.depthValidMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
@@ -6564,10 +6524,7 @@ TEST(MeshColorizerTest, RejectsDarkStudioBackgroundBeforeVertexAndFaceColoring)
 
     xjw::mesh::MeshColorView studio_view = make_view();
     studio_view.colorBgr = cv::Mat::zeros(64, 64, CV_8UC3);
-    cv::rectangle(studio_view.colorBgr,
-                  cv::Rect(3, 20, 16, 25),
-                  cv::Scalar(200, 200, 200),
-                  cv::FILLED);
+    cv::rectangle(studio_view.colorBgr, cv::Rect(3, 20, 16, 25), cv::Scalar(200, 200, 200), cv::FILLED);
     studio_view.qualityWeight = 5.0f;
     xjw::mesh::MeshColorView valid_view = make_view();
     valid_view.colorBgr = cv::Mat(
@@ -6606,24 +6563,19 @@ TEST(MeshColorizerTest, UsesScaledColorCameraForFullResolutionPhotographs)
         vertex.nz = 1.0f;
     }
     xjw::mesh::Triangle face;
-    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    face.v[0] = 0;
+    face.v[1] = 1;
+    face.v[2] = 2;
     mesh.faces.push_back(face);
 
     xjw::mesh::MeshColorView view;
-    view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                               0.0, 1.0, 0.0,
-                                               0.0, 0.0, 1.0},
-                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.camera = makeMeshColorCamera(80.0, 80.0, 32.0, 32.0, 64, 64);
     view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.9f));
     view.depthValidMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
     view.supportMask = cv::Mat(64, 64, CV_8UC1, cv::Scalar(255));
     view.colorBgr = cv::Mat(128, 128, CV_8UC3, cv::Scalar(80, 80, 80));
-    cv::rectangle(view.colorBgr,
-                  cv::Rect(55, 55, 19, 19),
-                  cv::Scalar(10, 20, 230),
-                  cv::FILLED);
+    cv::rectangle(view.colorBgr, cv::Rect(55, 55, 19, 19), cv::Scalar(10, 20, 230), cv::FILLED);
 
     xjw::mesh::MeshColorOptions options;
     options.maximumVoxelSize = 0.01f;
@@ -6653,27 +6605,21 @@ TEST(MeshColorizerTest, ColorsVisibleSparseCompletionFromMultipleContentMasks)
         vertex.nz = 1.0f;
     }
     xjw::mesh::Triangle face;
-    face.v[0] = 0; face.v[1] = 1; face.v[2] = 2;
+    face.v[0] = 0;
+    face.v[1] = 1;
+    face.v[2] = 2;
     mesh.faces.push_back(face);
 
     auto make_view = []()
     {
         xjw::mesh::MeshColorView view;
-        view.camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                   0.0, 1.0, 0.0,
-                                                   0.0, 0.0, 1.0},
-                            std::array<double, 3>{0.0, 0.0, 0.0});
-        view.colorBgr = cv::Mat(
-            64, 64, CV_8UC3, cv::Scalar(20, 90, 210));
+        view.camera = makeMeshColorCamera(80.0, 80.0, 32.0, 32.0, 64, 64);
+        view.colorBgr = cv::Mat(64, 64, CV_8UC3, cv::Scalar(20, 90, 210));
         view.depth = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.0f));
         view.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(0.0f));
         view.depthValidMask = cv::Mat::zeros(64, 64, CV_8UC1);
         view.supportMask = cv::Mat::zeros(64, 64, CV_8UC1);
-        cv::rectangle(view.supportMask,
-                      cv::Rect(12, 12, 40, 40),
-                      cv::Scalar(255),
-                      cv::FILLED);
+        cv::rectangle(view.supportMask, cv::Rect(12, 12, 40, 40), cv::Scalar(255), cv::FILLED);
         return view;
     };
 
@@ -6684,16 +6630,12 @@ TEST(MeshColorizerTest, ColorsVisibleSparseCompletionFromMultipleContentMasks)
     options.allowVisibilityOnlyFallback = true;
     options.minimumVisibilityOnlyViews = 2;
     const QVector<xjw::mesh::MeshColorView> views{make_view(), make_view()};
-    double projected_pixel[2]{};
-    double projected_depth = 0.0;
-    const double projected_world[3] = {
-        mesh.vertices[0].x, mesh.vertices[0].y, mesh.vertices[0].z};
-    ASSERT_TRUE(views[0].camera.projectWorldPointWithDepth(
-        projected_world, projected_pixel, projected_depth));
-    EXPECT_NEAR(projected_pixel[0], 28.0, 1.0e-6);
-    EXPECT_NEAR(projected_pixel[1], 28.0, 1.0e-6);
-    const auto statistics = xjw::mesh::MeshColorizer::colorize(
-        &mesh, views, options);
+    const std::array<double, 3> projected_world{mesh.vertices[0].x, mesh.vertices[0].y, mesh.vertices[0].z};
+    const auto projected = views[0].camera->groundToImage({views[0].camera->groundFrame(), projected_world});
+    ASSERT_TRUE(projected);
+    EXPECT_NEAR(projected.value().image.sample, 28.0, 1.0e-6);
+    EXPECT_NEAR(projected.value().image.line, 28.0, 1.0e-6);
+    const auto statistics = xjw::mesh::MeshColorizer::colorize(&mesh, views, options);
 
     EXPECT_TRUE(statistics.visibilityOnlyFallbackEnabled);
     EXPECT_EQ(statistics.colorForegroundViewCount, 2);
@@ -6728,7 +6670,7 @@ std::filesystem::path writeNoNormalsPointCloud(const std::filesystem::path &root
     const fs::path plyPath = root / "dense_no_normals.ply";
 
     constexpr int N = 24;
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(N * N, 3);
+    plamatrix::MatrixXf points(N * N, 3);
     for (int y = 0; y < N; ++y)
     {
         for (int x = 0; x < N; ++x)
@@ -6742,7 +6684,7 @@ std::filesystem::path writeNoNormalsPointCloud(const std::filesystem::path &root
         }
     }
 
-    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::GeometryCloud<float> cloud(std::move(points));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
     return plyPath;
 }
@@ -6760,9 +6702,9 @@ std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::pa
     constexpr int rings = 16;
     constexpr int segments = 16;
     constexpr int pointCount = rings * segments;
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(pointCount, 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(pointCount, 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(pointCount, 3);
+    plamatrix::MatrixXf points(pointCount, 3);
+    plamatrix::MatrixXf normals(pointCount, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(pointCount, 3);
 
     int row = 0;
     for (int ring = 0; ring < rings; ++ring)
@@ -6815,7 +6757,7 @@ std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::pa
         }
     }
 
-    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::GeometryCloud<float> cloud(std::move(points));
     cloud.setNormals(std::move(normals));
     cloud.setColors(std::move(colors));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
@@ -6830,8 +6772,8 @@ std::filesystem::path writeDenseGridPointCloud(const std::filesystem::path &root
     const fs::path plyPath = root / "dense_grid.ply";
 
     constexpr int N = 32;
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(N * N, 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(N * N, 3);
+    plamatrix::MatrixXf points(N * N, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(N * N, 3);
     for (int y = 0; y < N; ++y)
     {
         for (int x = 0; x < N; ++x)
@@ -6848,7 +6790,7 @@ std::filesystem::path writeDenseGridPointCloud(const std::filesystem::path &root
         }
     }
 
-    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::GeometryCloud<float> cloud(std::move(points));
     cloud.setColors(std::move(colors));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
     return plyPath;
@@ -6865,8 +6807,8 @@ std::filesystem::path writeFlatGridPointCloudWithSparseVerticalSpikes(const std:
     constexpr int baseSamples = 5;
     constexpr int spikeSamples = 1;
     constexpr int perCellSamples = baseSamples + spikeSamples;
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(N * N * perCellSamples, 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(N * N * perCellSamples, 3);
+    plamatrix::MatrixXf points(N * N * perCellSamples, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(N * N * perCellSamples, 3);
 
     int row = 0;
     for (int y = 0; y < N; ++y)
@@ -6896,7 +6838,7 @@ std::filesystem::path writeFlatGridPointCloudWithSparseVerticalSpikes(const std:
         }
     }
 
-    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::GeometryCloud<float> cloud(std::move(points));
     cloud.setColors(std::move(colors));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
     return plyPath;
@@ -6918,35 +6860,35 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
     return config;
 }
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeLookAtCamera(const std::array<float, 3>& center)
+std::shared_ptr<const placamera::FramePinholeModel> makeLookAtCamera(const std::array<float, 3>& center)
 {
-    auto normalize = [](std::array<float, 3> value)
+    auto normalize = [](std::array<double, 3> value)
     {
-        const float length = std::sqrt(value[0] * value[0] +
-                                       value[1] * value[1] +
-                                       value[2] * value[2]);
-        for (float &component : value)
+        const double length = std::sqrt(value[0] * value[0] +
+                                        value[1] * value[1] +
+                                        value[2] * value[2]);
+        for (double &component : value)
         {
             component /= length;
         }
         return value;
     };
-    auto cross = [](const std::array<float, 3> &lhs, const std::array<float, 3> &rhs)
+    auto cross = [](const std::array<double, 3> &lhs, const std::array<double, 3> &rhs)
     {
-        return std::array<float, 3>{
+        return std::array<double, 3>{
             lhs[1] * rhs[2] - lhs[2] * rhs[1],
             lhs[2] * rhs[0] - lhs[0] * rhs[2],
             lhs[0] * rhs[1] - lhs[1] * rhs[0]};
     };
 
-    const std::array<float, 3> forward = normalize({-center[0], -center[1], -center[2]});
-    const std::array<float, 3> provisional_up = std::fabs(forward[1]) > 0.9f
-        ? std::array<float, 3>{0.0f, 0.0f, 1.0f}
-        : std::array<float, 3>{0.0f, 1.0f, 0.0f};
-    const std::array<float, 3> right = normalize(cross(forward, provisional_up));
-    const std::array<float, 3> down = normalize(cross(forward, right));
+    const std::array<double, 3> forward = normalize({-center[0], -center[1], -center[2]});
+    const std::array<double, 3> provisional_up = std::fabs(forward[1]) > 0.9
+        ? std::array<double, 3>{0.0, 0.0, 1.0}
+        : std::array<double, 3>{0.0, 1.0, 0.0};
+    const std::array<double, 3> right = normalize(cross(forward, provisional_up));
+    const std::array<double, 3> down = normalize(cross(forward, right));
 
-    const std::array<std::array<float, 3>, 3> rows{right, down, forward};
+    const std::array<std::array<double, 3>, 3> rows{right, down, forward};
     std::array<double, 9> cameraToWorld{};
     for (int row = 0; row < 3; ++row)
     {
@@ -6956,11 +6898,27 @@ xjw::camera_models::frame_pinhole::FramePinholeNumericState makeLookAtCamera(con
                 rows[static_cast<std::size_t>(row)][column];
         }
     }
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
-    camera.setPose(cameraToWorld,
-                   {center[0], center[1], center[2]});
-    return camera;
+    const placamera::FrameId world_frame("visual-hull-test-world");
+    placamera::FrameIntrinsics intrinsics;
+    intrinsics.focalX = 100.0;
+    intrinsics.focalY = 100.0;
+    intrinsics.principalX = 64.0;
+    intrinsics.principalY = 64.0;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("visual-hull-test-definition"),
+        intrinsics,
+        {},
+        placamera::PixelConvention::PixelCenter,
+        world_frame);
+    const std::string suffix = std::to_string(center[0]) + "-" +
+                               std::to_string(center[1]) + "-" + std::to_string(center[2]);
+    return std::make_shared<const placamera::FramePinholeModel>(
+        placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("visual-hull-instance-" + suffix),
+            placamera::ImageId("visual-hull-image-" + suffix),
+            definition,
+            {128, 128},
+            placamera::Pose::create(world_frame, {center[0], center[1], center[2]}, cameraToWorld)));
 }
 
 } // namespace
@@ -7038,10 +6996,9 @@ TEST(VisualHullReconstructorTest,
     const auto field_at_pixel =
         [&view, &prepared, &config](double column)
     {
-        const double pixel[2] = {column, 64.0};
-        double world[3] = {};
-        EXPECT_TRUE(view.camera.unprojectPixel(
-            pixel, 3.0, world));
+        const auto ground = view.camera->imageToGroundAtDepth({column, 64.0}, 3.0);
+        EXPECT_TRUE(ground);
+        const auto& world = ground.value().position;
         return xjw::mesh::detail::
             evaluateContinuousVisualHullField(
                 static_cast<float>(world[0]),
@@ -7274,7 +7231,7 @@ TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
 
 TEST(MeshReconstructorTest, ExplicitOpenClPoissonSolverProducesMesh)
 {
-    if (!plapoint::opencl::hasUsableOpenClDevice())
+    if (!plapoint::isProcessingDeviceAvailable(plapoint::ProcessingDevice::OpenCL))
     {
         GTEST_SKIP() << "No usable OpenCL GPU";
     }
@@ -8463,6 +8420,64 @@ TEST(DepthTsdfSurfaceBuilderTest,
             .value(QStringLiteral("visibility_occupancy_input_frame_count"))
             .toInt(),
         3);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, NarrowBandActivationUsesPlaCameraIdentity)
+{
+    const QVector<xjw::mesh::DepthTsdfFrame> frames = makeSyntheticPlaneFrames(false);
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+    options.enableNarrowBandActivation = true;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.statistics.effectiveNarrowBandActivation);
+    EXPECT_GT(result.statistics.narrowBandActivationValidSourceSampleCount, 0U);
+    EXPECT_GT(result.statistics.narrowBandActivationMarkedRaySampleCount, 0U);
+    EXPECT_GT(result.statistics.narrowBandActivationActiveBlockCount, 0U);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, RejectsMixedPlaCameraGroundFrames)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames = makeSyntheticPlaneFrames(false);
+    frames[1].camera = makeDepthFrameCamera(
+        1, 40.0, 40.0, 24.0, 18.0, 48, 36,
+        {0.0, 0.0, 0.0}, "different-ground-frame");
+
+    const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames);
+    EXPECT_FALSE(bounds.ok);
+    EXPECT_TRUE(bounds.errorMessage.contains(QStringLiteral("different ground frame")));
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("different ground frame")));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, NarrowBandActivationRejectsMissingCamera)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames = makeSyntheticPlaneFrames(false);
+    frames.front().camera.reset();
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.calculateVertexColors = false;
+    options.workerCount = 1;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+    options.enableNarrowBandActivation = true;
+
+    const auto result = xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("invalid camera")))
+        << result.errorMessage.toStdString();
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)
@@ -9894,6 +9909,9 @@ TEST(DepthMapMeshBuilderTest, FallsBackToHighestResolutionManifestPyramidArtifac
             "grid_width": 640,
             "grid_height": 480,
             "camera_model": {
+                "instance_id": "pyramid-camera-4",
+                "image_id": "pyramid-image-4",
+                "world_frame": "pyramid-world",
                 "fx": 1200.0,
                 "fy": 1180.0,
                 "cx": 320.0,
@@ -9929,13 +9947,17 @@ TEST(DepthMapMeshBuilderTest, FallsBackToHighestResolutionManifestPyramidArtifac
     EXPECT_TRUE(frames.front().confidencePath.endsWith(QStringLiteral("depth_4_level_2_conf.bin")));
     EXPECT_EQ(frames.front().gridWidth, 320);
     EXPECT_EQ(frames.front().gridHeight, 240);
-    ASSERT_TRUE(frames.front().hasCameraModel);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 600.0);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalX(), 159.75);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 119.75);
+    ASSERT_TRUE(frames.front().cameraModel);
+    const auto& intrinsics = frames.front().cameraModel->pinholeDefinition().intrinsics();
+    EXPECT_DOUBLE_EQ(intrinsics.focalX, 600.0);
+    EXPECT_DOUBLE_EQ(intrinsics.principalX, 159.75);
+    EXPECT_DOUBLE_EQ(intrinsics.principalY, 119.75);
+    EXPECT_EQ(frames.front().cameraModel->instanceId().value(), "pyramid-camera-4");
+    EXPECT_EQ(frames.front().cameraModel->groundFrame().value(), "pyramid-world");
+    EXPECT_EQ(frames.front().cameraModel->imageSize().samples, 320);
+    EXPECT_EQ(frames.front().cameraModel->imageSize().lines, 240);
     EXPECT_TRUE(frames.front().pyramidFallback);
-    EXPECT_TRUE(frames.front().geometrySupportPath.endsWith(
-        QStringLiteral("depth_4_geometry_support.bin")));
+    EXPECT_TRUE(frames.front().geometrySupportPath.endsWith(QStringLiteral("depth_4_geometry_support.bin")));
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSurfaces)
@@ -10146,6 +10168,9 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
             "grid_width": 320,
             "grid_height": 240,
             "camera_model": {
+                "instance_id": "workspace-camera",
+                "image_id": "workspace-image",
+                "world_frame": "workspace-world",
                 "fx": 250.0,
                 "fy": 252.0,
                 "cx": 160.0,
@@ -10162,13 +10187,11 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
         xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
 
     ASSERT_EQ(frames.size(), 1);
-    EXPECT_TRUE(frames.front().sourceImage.endsWith(
-        QStringLiteral("frame.png")));
-    EXPECT_TRUE(frames.front().refImage.endsWith(
-        QStringLiteral("prepared_images/frame_000000.png")));
-    EXPECT_TRUE(frames.front().hasCameraModel);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 250.0);
-    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 120.0);
+    EXPECT_TRUE(frames.front().sourceImage.endsWith(QStringLiteral("frame.png")));
+    EXPECT_TRUE(frames.front().refImage.endsWith(QStringLiteral("prepared_images/frame_000000.png")));
+    ASSERT_TRUE(frames.front().cameraModel);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel->pinholeDefinition().intrinsics().focalX, 250.0);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel->pinholeDefinition().intrinsics().principalY, 120.0);
     EXPECT_EQ(frames.front().gridWidth, 320);
     EXPECT_EQ(frames.front().gridHeight, 240);
     EXPECT_EQ(frames.front().sceneProfile, QStringLiteral("orbital_object"));
@@ -10183,17 +10206,29 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
     EXPECT_DOUBLE_EQ(frames.front().meanConfidence, 0.78);
     EXPECT_EQ(frames.front().sourceViewCount, 4);
     EXPECT_EQ(frames.front().qualityReasons.size(), 2);
-    EXPECT_TRUE(frames.front().geometrySourceMaskPath.endsWith(
-        QStringLiteral("depth_0_geometry_source_mask.bin")));
-    EXPECT_TRUE(frames.front().inverseDepthMeanPath.endsWith(
-        QStringLiteral("depth_0_inverse_depth_mean.bin")));
-    EXPECT_TRUE(frames.front().inverseDepthSpreadPath.endsWith(
-        QStringLiteral("depth_0_inverse_depth_spread.bin")));
-    EXPECT_TRUE(frames.front().crossViewRepairedMaskPath.endsWith(
-        QStringLiteral("depth_0_cross_view_repaired_mask.png")));
+    EXPECT_TRUE(frames.front().geometrySourceMaskPath.endsWith(QStringLiteral("depth_0_geometry_source_mask.bin")));
+    EXPECT_TRUE(frames.front().inverseDepthMeanPath.endsWith(QStringLiteral("depth_0_inverse_depth_mean.bin")));
+    EXPECT_TRUE(frames.front().inverseDepthSpreadPath.endsWith(QStringLiteral("depth_0_inverse_depth_spread.bin")));
+    EXPECT_TRUE(
+        frames.front().crossViewRepairedMaskPath.endsWith(QStringLiteral("depth_0_cross_view_repaired_mask.png")));
     EXPECT_EQ(frames.front().sourceIndices, QVector<int>({3, 7}));
-    EXPECT_EQ(frames.front().geometrySourceIndices,
-              QVector<int>({3, 7, 9}));
+    EXPECT_EQ(frames.front().geometrySourceIndices, QVector<int>({3, 7, 9}));
+
+    std::ifstream stored_manifest(root / "mvs_manifest.json", std::ios::binary);
+    std::ostringstream manifest_contents;
+    manifest_contents << stored_manifest.rdbuf();
+    std::string anonymous_manifest = manifest_contents.str();
+    const std::string image_identity = "\"image_id\": \"workspace-image\",";
+    const std::size_t identity_offset = anonymous_manifest.find(image_identity);
+    ASSERT_NE(identity_offset, std::string::npos);
+    anonymous_manifest.erase(identity_offset, image_identity.size());
+    stored_manifest.close();
+    std::ofstream(root / "mvs_manifest.json", std::ios::binary | std::ios::trunc) << anonymous_manifest;
+
+    const auto anonymous_frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
+    ASSERT_EQ(anonymous_frames.size(), 1);
+    EXPECT_FALSE(anonymous_frames.front().cameraModel);
 }
 
 TEST(DepthMapMeshBuilderTest, ResolvesAdaptiveGeometryEvidencePaths)
@@ -10274,6 +10309,9 @@ TEST(DepthMapMeshBuilderTest, DoesNotTreatFullFrameAerialImagesAsStudioSilhouett
                     "\"ref_image\":\"" << image_name
                  << "\",\"raw_depth_path\":\"" << depth_name
                  << "\",\"grid_width\":64,\"grid_height\":48,\"camera_model\":{"
+                 << "\"instance_id\":\"aerial-" << index
+                 << "\",\"image_id\":\"aerial-image-" << index
+                 << "\",\"world_frame\":\"aerial-world\","
                     "\"fx\":50,\"fy\":50,\"cx\":32,\"cy\":24,"
                     "\"rotation_world_to_camera\":[1,0,0,0,1,0,0,0,1],"
                     "\"translation_world_to_camera\":[0,0,3],"
@@ -10353,6 +10391,9 @@ TEST(DepthMapMeshBuilderTest, VisualHullPreflightAcceptsStudioSilhouettes)
                     "\"ref_image\":\"" << image_name
                  << "\",\"raw_depth_path\":\"" << depth_name
                  << "\",\"grid_width\":128,\"grid_height\":96,\"camera_model\":{"
+                 << "\"instance_id\":\"studio-" << index
+                 << "\",\"image_id\":\"studio-image-" << index
+                 << "\",\"world_frame\":\"studio-world\","
                     "\"fx\":90,\"fy\":90,\"cx\":64,\"cy\":48,"
                     "\"rotation_world_to_camera\":[1,0,0,0,1,0,0,0,1],"
                     "\"translation_world_to_camera\":[0,0,3],"
@@ -10579,22 +10620,22 @@ TEST(TextureMapperTest, ReadsPlyMeshFacesForTextureMapping)
     fs::create_directories(root);
     const fs::path plyPath = root / "mesh_with_faces.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    plamatrix::MatrixXf points(4, 3);
     points(0, 0) = 0.0f; points(0, 1) = 0.0f; points(0, 2) = 0.0f;
     points(1, 0) = 1.0f; points(1, 1) = 0.0f; points(1, 2) = 0.0f;
     points(2, 0) = 0.0f; points(2, 1) = 1.0f; points(2, 2) = 0.0f;
     points(3, 0) = 1.0f; points(3, 1) = 1.0f; points(3, 2) = 0.0f;
 
-    plapoint::PointCloud<float, plamatrix::Device::CPU> meshCloud(std::move(points));
+    plapoint::GeometryCloud<float> meshCloud(std::move(points));
 
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(4, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(4, 3);
     colors(0, 0) = 255; colors(0, 1) = 0;   colors(0, 2) = 0;
     colors(1, 0) = 0;   colors(1, 1) = 255; colors(1, 2) = 0;
     colors(2, 0) = 0;   colors(2, 1) = 0;   colors(2, 2) = 255;
     colors(3, 0) = 255; colors(3, 1) = 255; colors(3, 2) = 255;
     meshCloud.setColors(std::move(colors));
 
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(2, 3);
     faces(0, 0) = 0; faces(0, 1) = 1; faces(0, 2) = 2;
     faces(1, 0) = 1; faces(1, 1) = 3; faces(1, 2) = 2;
     meshCloud.setFaces(std::move(faces));
@@ -10994,24 +11035,24 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     fs::create_directories(root);
     const fs::path ply_path = root / "mesh.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    plamatrix::MatrixXf points(4, 3);
     points(0, 0) = -0.4f; points(0, 1) = -0.3f; points(0, 2) = 2.0f;
     points(1, 0) = 0.4f;  points(1, 1) = -0.3f; points(1, 2) = 2.0f;
     points(2, 0) = -0.4f; points(2, 1) = 0.3f;  points(2, 2) = 2.0f;
     points(3, 0) = 0.4f;  points(3, 1) = 0.3f;  points(3, 2) = 2.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
-    faces(0, 0) = 0; faces(0, 1) = 1; faces(0, 2) = 2;
-    faces(1, 0) = 1; faces(1, 1) = 3; faces(1, 2) = 2;
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(2, 3);
+    faces(0, 0) = 0;
+    faces(0, 1) = 1;
+    faces(0, 2) = 2;
+    faces(1, 0) = 1;
+    faces(1, 1) = 3;
+    faces(1, 2) = 2;
     mesh.setFaces(std::move(faces));
     plapoint::io::writePly<float>(ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
 
     xjw::mesh::MeshColorView view;
-    view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                              0.0, 1.0, 0.0,
-                                              0.0, 0.0, 1.0},
-                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.camera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36);
     view.colorBgr = cv::Mat(36, 48, CV_8UC3, cv::Scalar(10, 80, 220));
     view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
@@ -11023,8 +11064,8 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     xjw::mesh::TextureMappingResult result;
     std::string error;
     ASSERT_TRUE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
-        ply_path.string(), root.string(), config, QVector<xjw::mesh::MeshColorView>{view},
-        &result, &error)) << error;
+        ply_path.string(), root.string(), config, QVector<xjw::mesh::MeshColorView>{view}, &result, &error))
+        << error;
     EXPECT_EQ(result.textureAlgorithm, "recovered_natural_texture_v1");
     EXPECT_EQ(result.uvMethod, "natural_mapping_camera_charts");
     EXPECT_EQ(result.blendMethod, "natural_multiband");
@@ -11058,7 +11099,7 @@ TEST(TextureMapperTest, FinalMeshVisibilityRejectsOccludedOverlappingFace)
     fs::create_directories(root);
     const fs::path mesh_path = root / "overlapping_faces.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(6, 3);
+    plamatrix::MatrixXf points(6, 3);
     for (int layer = 0; layer < 2; ++layer)
     {
         const int offset = layer * 3;
@@ -11073,9 +11114,8 @@ TEST(TextureMapperTest, FinalMeshVisibilityRejectsOccludedOverlappingFace)
         points(offset + 2, 1) = 0.3f;
         points(offset + 2, 2) = depth;
     }
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(
-        std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(2, 3);
     for (int face_index = 0; face_index < 2; ++face_index)
     {
         const int offset = face_index * 3;
@@ -11126,24 +11166,17 @@ TEST(TextureMapperTest, FinalMeshVisibilityRejectsOccludedOverlappingFace)
 TEST(TextureMapperTest, FinalMeshVisibilityUsesColorRasterResolution)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() /
-        "plascan_texture_visibility_color_resolution_test";
+    const fs::path root = fs::temp_directory_path() / "plascan_texture_visibility_color_resolution_test";
     fs::remove_all(root);
     fs::create_directories(root);
     const fs::path mesh_path = writeTextureTestTriangle(root);
-    xjw::mesh::MeshColorView view =
-        makeTextureTestView(cv::Scalar(20, 80, 220));
-    view.camera.setIntrinsics(10.0, 10.0, 6.0, 4.0);
+    xjw::mesh::MeshColorView view = makeTextureTestView(cv::Scalar(20, 80, 220));
+    view.camera = makeMeshColorCamera(10.0, 10.0, 6.0, 4.0, 12, 9);
     view.depth = cv::Mat(9, 12, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(9, 12, CV_32FC1, cv::Scalar(0.9f));
     view.depthValidMask = cv::Mat(9, 12, CV_8UC1, cv::Scalar(255));
     view.supportMask = cv::Mat(9, 12, CV_8UC1, cv::Scalar(255));
-    view.colorCamera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-    view.colorCamera.setPose(
-        std::array<double, 9>{1.0, 0.0, 0.0,
-                              0.0, 1.0, 0.0,
-                              0.0, 0.0, 1.0},
-        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.colorCamera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36);
 
     xjw::mesh::TextureMappingConfig config;
     config.imageDownscale = 1;
@@ -11151,12 +11184,8 @@ TEST(TextureMapperTest, FinalMeshVisibilityUsesColorRasterResolution)
     xjw::mesh::TextureMappingResult result;
     std::string error;
     ASSERT_TRUE(xjw::mesh::texture_v4::prepareInputs(
-        mesh_path.string(),
-        QVector<xjw::mesh::MeshColorView>{view},
-        config,
-        &data,
-        &result,
-        &error)) << error;
+        mesh_path.string(), QVector<xjw::mesh::MeshColorView>{view}, config, &data, &result, &error))
+        << error;
     ASSERT_TRUE(xjw::mesh::texture_v4::buildFinalMeshVisibility(
         config, &data, &result, &error)) << error;
     ASSERT_EQ(data.views.size(), 1);
@@ -11177,17 +11206,9 @@ TEST(TextureMapperTest, TexturePreparationRejectsDarkStudioBackground)
     xjw::mesh::MeshColorView view =
         makeTextureTestView(cv::Scalar(0, 0, 0));
     view.colorBgr = cv::Mat(480, 640, CV_8UC3, cv::Scalar(4, 5, 6));
-    cv::ellipse(view.colorBgr,
-                cv::Point(320, 240),
-                cv::Size(150, 110),
-                0.0,
-                0.0,
-                360.0,
-                cv::Scalar(150, 160, 170),
-                cv::FILLED);
-    view.colorCamera = view.camera.scaledIntrinsics(
-        640.0 / view.depth.cols,
-        480.0 / view.depth.rows);
+    cv::ellipse(
+        view.colorBgr, cv::Point(320, 240), cv::Size(150, 110), 0.0, 0.0, 360.0, cv::Scalar(150, 160, 170), cv::FILLED);
+    view.colorCamera = view.camera->scaledIntrinsics(640.0 / view.depth.cols, 480.0 / view.depth.rows);
 
     xjw::mesh::TextureMappingConfig config;
     xjw::mesh::texture_v4::PipelineData data;
@@ -11210,40 +11231,26 @@ TEST(TextureMapperTest, TexturePreparationRejectsDarkStudioBackground)
 TEST(TextureMapperTest, FinalMeshVisibilityDoesNotLeakAcrossNeighborPixels)
 {
     xjw::mesh::texture_v4::PreparedView view;
-    view.colorCamera.setIntrinsics(1.0, 1.0, 1.0, 1.0);
-    view.colorCamera.setPose(
-        std::array<double, 9>{1.0, 0.0, 0.0,
-                              0.0, 1.0, 0.0,
-                              0.0, 0.0, 1.0},
-        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.colorCamera = makeMeshColorCamera(1.0, 1.0, 1.0, 1.0, 3, 3);
     view.finalMeshFaceIds = cv::Mat(3, 3, CV_32SC1, cv::Scalar(-1));
     view.finalMeshFaceIds.at<int>(1, 1) = 7;
     view.finalMeshFaceIds.at<int>(1, 2) = 8;
     const std::array<double, 3> center_world{{0.0, 0.0, 1.0}};
 
-    EXPECT_TRUE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(
-        view, 7, center_world));
-    EXPECT_FALSE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(
-        view, 8, center_world));
+    EXPECT_TRUE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(view, 7, center_world));
+    EXPECT_FALSE(xjw::mesh::texture_v4::isFinalMeshFaceVisible(view, 8, center_world));
 }
 
 TEST(TextureMapperTest, FinalMeshVisibilitySafelyRejectsExtremeProjection)
 {
     xjw::mesh::texture_v4::PreparedView view;
-    view.colorCamera.setIntrinsics(40.0, 40.0, 2.0, 2.0);
-    view.colorCamera.setPose(
-        std::array<double, 9>{1.0, 0.0, 0.0,
-                              0.0, 1.0, 0.0,
-                              0.0, 0.0, 1.0},
-        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.colorCamera = makeMeshColorCamera(40.0, 40.0, 2.0, 2.0, 4, 4);
     view.colorBgr = cv::Mat(4, 4, CV_8UC3, cv::Scalar(0, 0, 0));
     view.supportDistance = cv::Mat(4, 4, CV_32FC1, cv::Scalar(1.0f));
     xjw::mesh::texture_v4::PipelineData data;
     data.views.push_back(std::move(view));
     xjw::mesh::texture_v4::FaceGeometry face;
-    face.vertices = {{{{1.0e300, 0.0, 1.0}},
-                      {{1.0e300, 1.0, 1.0}},
-                      {{1.0e300, 0.0, 2.0}}}};
+    face.vertices = {{{{1.0e300, 0.0, 1.0}}, {{1.0e300, 1.0, 1.0}}, {{1.0e300, 0.0, 2.0}}}};
     data.geometry.push_back(face);
     xjw::mesh::TextureMappingConfig config;
     xjw::mesh::TextureMappingResult result;
@@ -11263,40 +11270,59 @@ TEST(TextureMapperTest, CameraAtlasRejectsNonzeroDistortion)
     fs::remove_all(root);
     fs::create_directories(root);
     const fs::path mesh_path = writeTextureTestTriangle(root);
-    xjw::mesh::MeshColorView view =
-        makeTextureTestView(cv::Scalar(20, 80, 220));
-    view.camera.setDistortion(0.1, 0.0, 0.0, 0.0, 0.0);
+    xjw::mesh::MeshColorView view = makeTextureTestView(cv::Scalar(20, 80, 220));
+    placamera::BrownConradyDistortion distortion;
+    distortion.radialK1 = 0.1;
+    view.camera->setDistortion(distortion);
     xjw::mesh::TextureMappingConfig config;
     xjw::mesh::TextureMappingResult result;
     std::string error;
 
-    EXPECT_FALSE(
-        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
-            mesh_path.string(),
-            root.string(),
-            config,
-            QVector<xjw::mesh::MeshColorView>{view},
-            &result,
-            &error));
+    EXPECT_FALSE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+        mesh_path.string(), root.string(), config, QVector<xjw::mesh::MeshColorView>{view}, &result, &error));
     EXPECT_NE(error.find("预去畸变"), std::string::npos);
+}
+
+TEST(TextureMapperTest, RejectsDepthAndColorCamerasWithDifferentGroundFrames)
+{
+    ASSERT_TRUE(QDir().mkpath(QString::fromUtf8(PLASCAN_TEST_TMP_ROOT)));
+    QTemporaryDir directory(QString::fromUtf8(PLASCAN_TEST_TMP_ROOT) + QStringLiteral("/texture-mixed-frame-XXXXXX"));
+    ASSERT_TRUE(directory.isValid());
+    const std::filesystem::path mesh_path =
+        writeTextureTestTriangle(std::filesystem::path(directory.path().toStdString()));
+
+    xjw::mesh::MeshColorView view = makeTextureTestView(cv::Scalar(20, 80, 220));
+    view.colorCamera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36, {0.0, 0.0, 0.0}, "other-texture-world");
+    xjw::mesh::texture_v4::PipelineData data;
+    xjw::mesh::TextureMappingConfig config;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    EXPECT_FALSE(xjw::mesh::texture_v4::prepareInputs(mesh_path.string(), {view}, config, &data, &result, &error));
+    EXPECT_NE(error.find("地面坐标系不一致"), std::string::npos);
+
+    xjw::mesh::MeshColorView other_view = makeTextureTestView(cv::Scalar(20, 80, 220));
+    other_view.camera = view.colorCamera;
+    view.colorCamera.reset();
+    error.clear();
+    EXPECT_FALSE(
+        xjw::mesh::texture_v4::prepareInputs(mesh_path.string(), {view, other_view}, config, &data, &result, &error));
+    EXPECT_NE(error.find("地面坐标系不一致"), std::string::npos);
 }
 
 TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() /
-        "plascan_texture_subpixel_face_test";
+    const fs::path root = fs::temp_directory_path() / "plascan_texture_subpixel_face_test";
     fs::remove_all(root);
     fs::create_directories(root);
     const fs::path mesh_path = root / "subpixel_triangle.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    plamatrix::MatrixXf points(3, 3);
     points(0, 0) = -0.01f; points(0, 1) = -0.01f; points(0, 2) = 2.0f;
     points(1, 0) = 0.03f;  points(1, 1) = -0.01f; points(1, 2) = 2.0f;
     points(2, 0) = -0.01f; points(2, 1) = 0.03f;  points(2, 2) = 2.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(
-        std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(1, 3);
     faces(0, 0) = 0;
     faces(0, 1) = 1;
     faces(0, 2) = 2;
@@ -11365,11 +11391,9 @@ TEST(TextureMapperTest, CameraAtlasKeepsValidSubpixelFacesMapped)
     std::array<cv::Point2f, 3> uv{};
     for (int corner = 0; corner < 3; ++corner)
     {
-        const int texture_index =
-            textured_mesh->faceTextureIndices()->getValue(0, corner);
-        uv[corner] = cv::Point2f(
-            textured_mesh->textureCoords()->getValue(texture_index, 0),
-            textured_mesh->textureCoords()->getValue(texture_index, 1));
+        const int texture_index = textured_mesh->faceTextureIndices()->coeff(0, corner);
+        uv[corner] = cv::Point2f(textured_mesh->textureCoords()->coeff(texture_index, 0),
+                                 textured_mesh->textureCoords()->coeff(texture_index, 1));
     }
     const auto sample_atlas = [&atlas](const cv::Point2f &coordinate)
     {
@@ -11989,7 +12013,7 @@ TEST(TextureMapperTest, CameraAtlasSuppressesIsolatedFaceCameraSwitches)
     fs::create_directories(root);
     const fs::path ply_path = root / "mesh.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(16, 3);
+    plamatrix::MatrixXf points(16, 3);
     for (int row = 0; row < 4; ++row)
     {
         for (int column = 0; column < 4; ++column)
@@ -12000,8 +12024,8 @@ TEST(TextureMapperTest, CameraAtlasSuppressesIsolatedFaceCameraSwitches)
             points(index, 2) = 2.0f;
         }
     }
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(18, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(18, 3);
     int face_index = 0;
     for (int row = 0; row < 3; ++row)
     {
@@ -12022,17 +12046,12 @@ TEST(TextureMapperTest, CameraAtlasSuppressesIsolatedFaceCameraSwitches)
         }
     }
     mesh.setFaces(std::move(faces));
-    plapoint::io::writePly<float>(
-        ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+    plapoint::io::writePly<float>(ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
 
-    auto make_view = [](const cv::Scalar &color, float quality_weight)
+    auto make_view = [](const cv::Scalar& color, float quality_weight)
     {
         xjw::mesh::MeshColorView view;
-        view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                                  0.0, 1.0, 0.0,
-                                                  0.0, 0.0, 1.0},
-                            std::array<double, 3>{0.0, 0.0, 0.0});
+        view.camera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36);
         view.colorBgr = cv::Mat(36, 48, CV_8UC3, color);
         view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
         view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
@@ -12068,28 +12087,25 @@ TEST(TextureMapperTest, CameraAtlasDoesNotSampleBackgroundAcrossMaskedFaceInteri
     fs::create_directories(root);
     const fs::path ply_path = root / "mesh.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    plamatrix::MatrixXf points(3, 3);
     points(0, 0) = -0.4f; points(0, 1) = -0.3f; points(0, 2) = 2.0f;
     points(1, 0) = 0.4f;  points(1, 1) = -0.3f; points(1, 2) = 2.0f;
     points(2, 0) = -0.4f; points(2, 1) = 0.3f;  points(2, 2) = 2.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    plapoint::GeometryCloud<float> mesh(std::move(points));
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(1, 3);
     faces(0, 0) = 0; faces(0, 1) = 1; faces(0, 2) = 2;
     mesh.setFaces(std::move(faces));
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(3, 3);
     colors(0, 0) = 255; colors(0, 1) = 0;   colors(0, 2) = 0;
     colors(1, 0) = 0;   colors(1, 1) = 255; colors(1, 2) = 0;
-    colors(2, 0) = 0;   colors(2, 1) = 0;   colors(2, 2) = 255;
+    colors(2, 0) = 0;
+    colors(2, 1) = 0;
+    colors(2, 2) = 255;
     mesh.setColors(std::move(colors));
-    plapoint::io::writePly<float>(
-        ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+    plapoint::io::writePly<float>(ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
 
     xjw::mesh::MeshColorView view;
-    view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
-                                              0.0, 1.0, 0.0,
-                                              0.0, 0.0, 1.0},
-                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.camera = makeMeshColorCamera(40.0, 40.0, 24.0, 18.0, 48, 36);
     view.colorBgr = cv::Mat(36, 48, CV_8UC3, cv::Scalar(0, 0, 0));
     view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
     view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
@@ -12126,11 +12142,10 @@ TEST(TextureMapperTest, CameraAtlasDoesNotSampleBackgroundAcrossMaskedFaceInteri
         cv::Vec3b(255, 0, 0)};
     for (int corner = 0; corner < 3; ++corner)
     {
-        const int texture_index =
-            textured_mesh->faceTextureIndices()->getValue(0, corner);
+        const int texture_index = textured_mesh->faceTextureIndices()->coeff(0, corner);
         EXPECT_GT(texture_index, 0);
-        const float u = textured_mesh->textureCoords()->getValue(texture_index, 0);
-        const float v = textured_mesh->textureCoords()->getValue(texture_index, 1);
+        const float u = textured_mesh->textureCoords()->coeff(texture_index, 0);
+        const float v = textured_mesh->textureCoords()->coeff(texture_index, 1);
         const int column = std::clamp(
             static_cast<int>(std::floor(u * atlas.cols)), 0, atlas.cols - 1);
         const int row = std::clamp(

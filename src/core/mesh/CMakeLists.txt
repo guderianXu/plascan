@@ -201,7 +201,6 @@ endif()
 target_include_directories(meshing_algorithms PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/common
-    ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/mvs
 )
 target_include_directories(meshing_algorithms PRIVATE
@@ -216,11 +215,13 @@ endif()
 
 target_link_libraries(meshing_algorithms
     PUBLIC
-        camera
+        placamera::placamera
+        placamera::state
         ${OpenCV_LIBS}
         task_runtime
         plapoint::plapoint
     PRIVATE
+        camera
         mvs_backend
         plascan_poisson_recon_headers
         plascan_common_concurrency

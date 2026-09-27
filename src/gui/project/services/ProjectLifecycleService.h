@@ -49,7 +49,7 @@ public slots:
     void createNewProject();
     void openProject();
     void openProjectFromPath(const QString& projectPath);
-    void saveProject();
+    bool saveProject();
     void exportPortableProject();
     void closeProject();
     void createChunk();

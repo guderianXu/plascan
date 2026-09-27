@@ -92,7 +92,7 @@ void OverlapAnalysisDialog::browseDemPath()
 // runAnalysis: 执行影像重叠度分析的主逻辑
 // 流程：
 //   1. 从项目元数据获取影像列表
-//   2. 遍历界面上勾选的影像，解析 canonical 数值相机状态
+//   2. 遍历界面上勾选的影像，读取 canonical PlaCamera 模型
 //   3. （可选）加载 DEM XYZ 文件或使用固定高程值
 //   4. 调用 OverlapAnalyzer::analyze 计算两两影像重叠评分
 //   5. 将结果填入 _resultTable 表格
@@ -114,27 +114,21 @@ void OverlapAnalysisDialog::runAnalysis()
         }
     }
     bool hasCamerasForAll = false;
-    const QMap<QString, xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras =
-        _session->getPinholeNumericStatesForImages(selectedPaths, &hasCamerasForAll);
+    const auto cameras = _session->getPinholeModelsForImages(selectedPaths, &hasCamerasForAll);
     std::vector<xjw::OverlapImageInput> inputs;
     for (const QString& path : selectedPaths)
     {
-        const auto cameraIt = cameras.constFind(xjw::common::project::normalizePath(path));
-        if (cameraIt == cameras.cend())
+        const auto camera_it = cameras.constFind(xjw::common::project::normalizePath(path));
+        if (camera_it == cameras.cend())
         {
             continue;
         }
 
         xjw::OverlapImageInput one;
         one.imagePath = xjw::common::io::toUtf8Path(path);
-        one.camera = cameraIt.value();
-        const auto imageSize = one.camera.imageSize();
-        if (!imageSize || !imageSize->isValid())
-        {
-            continue;
-        }
-        one.width = imageSize->samples;
-        one.height = imageSize->lines;
+        one.camera = camera_it.value();
+        one.width = one.camera->imageSize().samples;
+        one.height = one.camera->imageSize().lines;
 
         inputs.push_back(one);
     }
@@ -143,9 +137,8 @@ void OverlapAnalysisDialog::runAnalysis()
     {
         QMessageBox::warning(this,
                              tr("提示"),
-                             hasCamerasForAll
-                                 ? tr("至少勾选两张带相机参数的影像")
-                                 : tr("所选影像缺少可用于重叠分析的 canonical 面阵针孔相机"));
+                             hasCamerasForAll ? tr("至少勾选两张带相机参数的影像")
+                                              : tr("所选影像缺少可用于重叠分析的 canonical 面阵针孔相机"));
         return;
     }
 

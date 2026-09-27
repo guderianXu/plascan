@@ -10,27 +10,35 @@
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double centerX)
+    placamera::FramePinholeNumericState makeCamera(double centerX)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(900.0, 900.0, 512.0, 384.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {centerX, 0.0, 0.0});
-        return camera;
+        const placamera::FrameId frame("prior-track-world");
+        const auto suffix = std::to_string(centerX);
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("prior-track-definition-" + suffix),
+                                                      {900.0, 900.0, 512.0, 384.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return placamera::FramePinholeNumericState::fromModel(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("prior-track-instance-" + suffix),
+            placamera::ImageId("prior-track-image-" + suffix),
+            definition,
+            {1024, 768},
+            placamera::Pose::create(frame, {centerX, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
 }
 
-xjw::control_points::PriorObservation
-observation(xjw::ImageId imageId,
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
-            const std::array<double, 3>& point,
-            xjw::control_points::PriorObservationState state)
+xjw::control_points::PriorObservation observation(xjw::ImageId imageId,
+                                                  const placamera::FramePinholeNumericState& camera,
+                                                  const std::array<double, 3>& point,
+                                                  xjw::control_points::PriorObservationState state)
 {
-    double xyz[3] = {point[0], point[1], point[2]};
-    double uv[2] = {0.0, 0.0};
-    EXPECT_TRUE(camera.projectWorldPoint(xyz, uv));
+    const auto projection = camera.groundToImage({camera.groundFrame(), point});
+    EXPECT_TRUE(projection);
     xjw::control_points::PriorObservation result;
     result.imageId = imageId;
-    result.x = uv[0];
-    result.y = uv[1];
+    result.x = projection.value().image.sample;
+    result.y = projection.value().image.line;
     result.state = state;
     result.confidence = 0.95;
     return result;
@@ -56,7 +64,7 @@ TEST(SfmPriorTrackTest, InjectsPinnedTracksWithoutChangingFeatureCaches)
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
+    const std::vector<placamera::FramePinholeNumericState> cameras = {
         makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
@@ -102,8 +110,7 @@ TEST(SfmPriorTrackTest, RejectsPredictedBlockedStaleAndDuplicateImageObservation
     xjw::IncrementalSfmOptions options;
     options.useKnownCameraPoses = true;
     options.iterativeBARounds = 1;
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {makeCamera(-1.0),
-                                                                                              makeCamera(1.0)};
+    const std::vector<placamera::FramePinholeNumericState> cameras = {makeCamera(-1.0), makeCamera(1.0)};
     xjw::IncrementalSfm sfm(options);
     sfm.addImageWithCamera(0, "a.png", cameras[0], {});
     sfm.addImageWithCamera(1, "b.png", cameras[1], {});
@@ -157,7 +164,7 @@ TEST(SfmPriorTrackTest, AppliesControlNetworkButKeepsCheckPointsOutOfBaConstrain
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras = {
+    const std::vector<placamera::FramePinholeNumericState> cameras = {
         makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
@@ -230,7 +237,7 @@ TEST(SfmPriorTrackTest, AppliesControlNetworkButKeepsCheckPointsOutOfBaConstrain
     EXPECT_NEAR(result.checkScaleBarRms, 1.0, 1.0e-3);
     EXPECT_LT(result.controlPointRms, 1.0e-4);
     ASSERT_NE(result.reconstruction, nullptr);
-    const auto transformed_center = result.reconstruction->camera(0).cameraCenter();
+    const auto transformed_center = result.reconstruction->camera(0).pose().center;
     const auto expected_center = toReferenceFrame({{-2.0, 0.0, 0.0}});
     for (int axis = 0; axis < 3; ++axis)
     {

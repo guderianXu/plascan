@@ -2,25 +2,25 @@
 
 #include <cstddef>
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/geometry_cloud.h>
 
 namespace xjw::mvs
 {
 
-using DensePointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using DensePointCloud = plapoint::GeometryCloud<float>;
 
-struct TerrainHeightSpikeFilterOptions
-{
-    bool enabled = true;
-    int gridResolution = 160;
-    int minCellPoints = 8;
-    float minHeightThreshold = 0.35f;
-    float madMultiplier = 6.0f;
-    bool localPlaneFilterEnabled = true;
-    int localPlaneMinPoints = 12;
-    float localPlaneMinResidualThreshold = 0.12f;
-    float localPlaneMadMultiplier = 4.0f;
+    struct TerrainHeightSpikeFilterOptions
+    {
+        bool enabled = true;
+        int gridResolution = 160;
+        int minCellPoints = 8;
+        float minHeightThreshold = 0.35f;
+        float madMultiplier = 6.0f;
+        bool localPlaneFilterEnabled = true;
+        int localPlaneMinPoints = 12;
+        float localPlaneMinResidualThreshold = 0.12f;
+        float localPlaneMadMultiplier = 4.0f;
 };
 
 struct TerrainHeightSpikeFilterReport

@@ -170,9 +170,7 @@ bool SmallBodyMeshRaycaster::Impl::build(const TerrainMeshInput &input,
             return fail(errorMsg, QStringLiteral("构建网格射线器已取消"));
         }
         const auto row = static_cast<plamatrix::Index>(index);
-        const cv::Vec3d point(mesh.points().getValue(row, 0),
-                             mesh.points().getValue(row, 1),
-                             mesh.points().getValue(row, 2));
+        const cv::Vec3d point(mesh.points().coeff(row, 0), mesh.points().coeff(row, 1), mesh.points().coeff(row, 2));
         if (!isFinite(point))
         {
             return fail(errorMsg, QStringLiteral("网格顶点 %1 包含非有限坐标").arg(index));
@@ -204,9 +202,8 @@ bool SmallBodyMeshRaycaster::Impl::build(const TerrainMeshInput &input,
         for (std::size_t index = 0; index < mesh.size(); ++index)
         {
             const auto row = static_cast<plamatrix::Index>(index);
-            _vertexColors[index] = cv::Vec3b(mesh.colors()->getValue(row, 2),
-                                             mesh.colors()->getValue(row, 1),
-                                             mesh.colors()->getValue(row, 0));
+            _vertexColors[index] =
+                cv::Vec3b(mesh.colors()->coeff(row, 2), mesh.colors()->coeff(row, 1), mesh.colors()->coeff(row, 0));
         }
     }
 
@@ -242,8 +239,8 @@ bool SmallBodyMeshRaycaster::Impl::build(const TerrainMeshInput &input,
         for (std::size_t index = 0; index < _textureCoordinates.size(); ++index)
         {
             const auto row = static_cast<plamatrix::Index>(index);
-            _textureCoordinates[index] = cv::Vec2d(mesh.textureCoords()->getValue(row, 0),
-                                                   mesh.textureCoords()->getValue(row, 1));
+            _textureCoordinates[index] =
+                cv::Vec2d(mesh.textureCoords()->coeff(row, 0), mesh.textureCoords()->coeff(row, 1));
             if (!std::isfinite(_textureCoordinates[index][0])
                 || !std::isfinite(_textureCoordinates[index][1]))
             {
@@ -280,7 +277,7 @@ bool SmallBodyMeshRaycaster::Impl::build(const TerrainMeshInput &input,
         triangle.faceIndex = static_cast<std::size_t>(face_index);
         for (int corner = 0; corner < 3; ++corner)
         {
-            const int vertex_index = faces->getValue(face_index, corner);
+            const int vertex_index = faces->coeff(face_index, corner);
             if (vertex_index < 0 || static_cast<std::size_t>(vertex_index) >= vertices.size())
             {
                 return fail(errorMsg, QStringLiteral("三角面 %1 的顶点索引越界").arg(face_index));
@@ -288,8 +285,7 @@ bool SmallBodyMeshRaycaster::Impl::build(const TerrainMeshInput &input,
             triangle.vertexIndices[corner] = static_cast<std::size_t>(vertex_index);
             if (use_texture)
             {
-                const int texture_index = face_uv
-                    ? mesh.faceTextureIndices()->getValue(face_index, corner) : vertex_index;
+                const int texture_index = face_uv ? mesh.faceTextureIndices()->coeff(face_index, corner) : vertex_index;
                 if (texture_index < 0
                     || static_cast<std::size_t>(texture_index) >= _textureCoordinates.size())
                 {

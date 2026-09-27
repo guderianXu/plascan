@@ -1,6 +1,6 @@
 #include "ProjectDashboardSummary.h"
 
-#include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 
 #include <QFileInfo>
 #include <QStringList>
@@ -52,11 +52,6 @@ namespace xjw::gui::project
                 }
             }
             return merged;
-        }
-
-        bool imageHasCamera(const QJsonObject& metadata, const QJsonObject& image)
-        {
-            return !xjw::common::project::projectCameraModelParameters(metadata, image).isEmpty();
         }
 
         bool isMvsDepthResult(const QJsonObject& record)
@@ -218,12 +213,10 @@ namespace xjw::gui::project
 
         ProjectDashboardSummary summary;
         summary.imageCount = images.size();
-        for (const QJsonValue& value : images)
+        const auto cameras = xjw::placamera_runtime::loadProjectCameras(normalized);
+        if (cameras.ok())
         {
-            if (value.isObject() && imageHasCamera(normalized, value.toObject()))
-            {
-                ++summary.cameraCount;
-            }
+            summary.cameraCount = static_cast<int>(cameras.instances.size());
         }
 
         summary.featureResultCount = featureResults.size();

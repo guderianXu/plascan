@@ -29,13 +29,11 @@ namespace xjw
         bool initialize(ImageId id1, ImageId id2);
 
         /// 使用已恢复的第二台相机位姿初始化同一像对，供五点假设逐一试算。
-        bool initializeWithPose(ImageId id1,
-                                ImageId id2,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera);
+        bool initializeWithPose(ImageId id1, ImageId id2, const placamera::FramePinholeNumericState& secondCamera);
 
         /// 从确定性五点子集枚举可通过全体匹配 chirality 检查的相对位姿。
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        enumerateFivePointPoseHypotheses(ImageId id1, ImageId id2) const;
+        std::vector<placamera::FramePinholeNumericState> enumerateFivePointPoseHypotheses(ImageId id1,
+                                                                                          ImageId id2) const;
 
         /// 在尝试下一个候选前恢复重建快照并重建依赖该状态的三角化器。
         void resetTrial(const SfmReconstruction& baseReconstruction);

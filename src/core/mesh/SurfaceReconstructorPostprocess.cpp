@@ -13,8 +13,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/mesh/mesh_processing.h>
 
 namespace xjw
@@ -27,18 +27,18 @@ namespace detail
 namespace
 {
 
-using PlaMesh = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using PlaMesh = plapoint::GeometryCloud<float>;
 
-struct VertexCell
-{
-    std::int64_t x = 0;
-    std::int64_t y = 0;
-    std::int64_t z = 0;
-
-    bool operator==(const VertexCell &other) const
+    struct VertexCell
     {
-        return x == other.x && y == other.y && z == other.z;
-    }
+        std::int64_t x = 0;
+        std::int64_t y = 0;
+        std::int64_t z = 0;
+
+        bool operator==(const VertexCell& other) const
+        {
+            return x == other.x && y == other.y && z == other.z;
+        }
 };
 
 struct VertexCellHash
@@ -77,40 +77,38 @@ struct TriangleKeyHash
 
 PlaMesh toPlaMesh(const TriMesh &mesh)
 {
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(
-        static_cast<plamatrix::Index>(mesh.vertices.size()), 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
-        static_cast<plamatrix::Index>(mesh.vertices.size()), 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
+    plamatrix::MatrixXf points(static_cast<plamatrix::Index>(mesh.vertices.size()), 3);
+    plamatrix::MatrixXf normals(static_cast<plamatrix::Index>(mesh.vertices.size()), 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(
         static_cast<plamatrix::Index>(mesh.vertices.size()), 3);
 
     for (std::size_t i = 0; i < mesh.vertices.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
         const MeshVertex &vertex = mesh.vertices[i];
-        points.setValue(row, 0, vertex.x);
-        points.setValue(row, 1, vertex.y);
-        points.setValue(row, 2, vertex.z);
-        normals.setValue(row, 0, vertex.nx);
-        normals.setValue(row, 1, vertex.ny);
-        normals.setValue(row, 2, vertex.nz);
-        colors.setValue(row, 0, vertex.r);
-        colors.setValue(row, 1, vertex.g);
-        colors.setValue(row, 2, vertex.b);
+        points(row, 0) = vertex.x;
+        points(row, 1) = vertex.y;
+        points(row, 2) = vertex.z;
+        normals(row, 0) = vertex.nx;
+        normals(row, 1) = vertex.ny;
+        normals(row, 2) = vertex.nz;
+        colors(row, 0) = vertex.r;
+        colors(row, 1) = vertex.g;
+        colors(row, 2) = vertex.b;
     }
 
     PlaMesh out(std::move(points));
     out.setNormals(std::move(normals));
     out.setColors(std::move(colors));
 
-    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(
+    plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(
         static_cast<plamatrix::Index>(mesh.faces.size()), 3);
     for (std::size_t i = 0; i < mesh.faces.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        faces.setValue(row, 0, mesh.faces[i].v[0]);
-        faces.setValue(row, 1, mesh.faces[i].v[1]);
-        faces.setValue(row, 2, mesh.faces[i].v[2]);
+        faces(row, 0) = mesh.faces[i].v[0];
+        faces(row, 1) = mesh.faces[i].v[1];
+        faces(row, 2) = mesh.faces[i].v[2];
     }
     out.setFaces(std::move(faces));
     return out;
@@ -130,14 +128,14 @@ void assignFromPlaMesh(const PlaMesh &source, TriMesh *mesh)
     {
         const auto row = static_cast<plamatrix::Index>(i);
         MeshVertex vertex;
-        vertex.x = source.points().getValue(row, 0);
-        vertex.y = source.points().getValue(row, 1);
-        vertex.z = source.points().getValue(row, 2);
+        vertex.x = source.points().coeff(row, 0);
+        vertex.y = source.points().coeff(row, 1);
+        vertex.z = source.points().coeff(row, 2);
         if (source.hasNormals())
         {
-            vertex.nx = source.normals()->getValue(row, 0);
-            vertex.ny = source.normals()->getValue(row, 1);
-            vertex.nz = source.normals()->getValue(row, 2);
+            vertex.nx = source.normals()->coeff(row, 0);
+            vertex.ny = source.normals()->coeff(row, 1);
+            vertex.nz = source.normals()->coeff(row, 2);
         }
         else
         {
@@ -147,9 +145,9 @@ void assignFromPlaMesh(const PlaMesh &source, TriMesh *mesh)
         }
         if (source.hasColors())
         {
-            vertex.r = source.colors()->getValue(row, 0);
-            vertex.g = source.colors()->getValue(row, 1);
-            vertex.b = source.colors()->getValue(row, 2);
+            vertex.r = source.colors()->coeff(row, 0);
+            vertex.g = source.colors()->coeff(row, 1);
+            vertex.b = source.colors()->coeff(row, 2);
         }
         mesh->vertices.push_back(vertex);
     }
@@ -160,9 +158,9 @@ void assignFromPlaMesh(const PlaMesh &source, TriMesh *mesh)
         for (plamatrix::Index r = 0; r < source.faces()->rows(); ++r)
         {
             Triangle triangle;
-            triangle.v[0] = source.faces()->getValue(r, 0);
-            triangle.v[1] = source.faces()->getValue(r, 1);
-            triangle.v[2] = source.faces()->getValue(r, 2);
+            triangle.v[0] = source.faces()->coeff(r, 0);
+            triangle.v[1] = source.faces()->coeff(r, 1);
+            triangle.v[2] = source.faces()->coeff(r, 2);
             mesh->faces.push_back(triangle);
         }
     }

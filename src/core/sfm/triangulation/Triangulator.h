@@ -9,7 +9,7 @@
 //   2. 将新观测追加到已有三维点（延续轨迹）
 //   3. 过滤质量不佳的三维点
 //
-// 复用 Intersection::intersectPair 进行双目三角化。
+// 双目三角化使用 PlaCamera 原生数值状态。
 // 参考：COLMAP 的 IncrementalTriangulator，简化适配。
 // ============================================================
 
@@ -17,8 +17,7 @@
 #include "graph/CorrespondenceGraph.h"
 #include "reconstruction/SfmReconstruction.h"
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "Intersection.h"
+#include <placamera/frame_numeric_state.h>
 
 #include <vector>
 

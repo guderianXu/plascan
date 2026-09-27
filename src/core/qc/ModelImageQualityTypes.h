@@ -1,8 +1,8 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "PointCloudAlignment.h"
 
+#include <placamera/frame_camera.h>
 #include <opencv2/core.hpp>
 
 #include <QString>
@@ -11,6 +11,7 @@
 #include <QVector>
 
 #include <limits>
+#include <memory>
 
 namespace xjw::qc
 {
@@ -110,7 +111,7 @@ struct ModelValidationView
 {
     QString id;
     QString imagePath;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    std::shared_ptr<const placamera::FramePinholeModel> camera;
     int cameraWidth = 0;
     int cameraHeight = 0;
     QString depthPath;

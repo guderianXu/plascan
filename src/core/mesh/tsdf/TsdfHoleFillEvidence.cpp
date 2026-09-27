@@ -235,15 +235,16 @@ namespace xjw::mesh::tsdf_detail
                     int outside_support_sample_count = 0;
                     for (const MeshVertex& sample : samples)
                     {
-                        const double world[3] = {sample.x, sample.y, sample.z};
-                        double pixel[2]{};
-                        double camera_depth = 0.0;
-                        if (!frame.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+                        const auto projected = frame.camera->groundToImage(
+                            {frame.camera->groundFrame(), {sample.x, sample.y, sample.z}});
+                        if (!projected || !projected.value().positiveDepth)
                         {
                             continue;
                         }
-                        const int column = static_cast<int>(std::lround(pixel[0]));
-                        const int row = static_cast<int>(std::lround(pixel[1]));
+                        const auto& pixel = projected.value().image;
+                        const double camera_depth = *projected.value().positiveDepth;
+                        const int column = static_cast<int>(std::lround(pixel.sample));
+                        const int row = static_cast<int>(std::lround(pixel.line));
                         if (row < 0 || column < 0 || row >= frame.supportMask.rows || column >= frame.supportMask.cols)
                         {
                             continue;

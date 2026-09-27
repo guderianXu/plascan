@@ -1,3 +1,4 @@
+#include <plapoint/geometry_cloud.h>
 #include "PointCloudPreprocess.h"
 
 #include <algorithm>
@@ -8,8 +9,8 @@
 #include <memory>
 #include <utility>
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/point_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/search/kdtree.h>
 
@@ -23,49 +24,48 @@ namespace detail
 namespace
 {
 
-using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    using PlaCloud = plapoint::GeometryCloud<float>;
 
-class DisjointSet
-{
-public:
-    explicit DisjointSet(std::size_t size)
-        : _parents(size), _ranks(size, 0)
+    class DisjointSet
     {
-        std::iota(_parents.begin(), _parents.end(), 0);
-    }
+    public:
+        explicit DisjointSet(std::size_t size) : _parents(size), _ranks(size, 0)
+        {
+            std::iota(_parents.begin(), _parents.end(), 0);
+        }
 
-    std::size_t find(std::size_t index)
-    {
-        while (_parents[index] != index)
+        std::size_t find(std::size_t index)
         {
-            _parents[index] = _parents[_parents[index]];
-            index = _parents[index];
+            while (_parents[index] != index)
+            {
+                _parents[index] = _parents[_parents[index]];
+                index = _parents[index];
+            }
+            return index;
         }
-        return index;
-    }
 
-    void unite(std::size_t left, std::size_t right)
-    {
-        left = find(left);
-        right = find(right);
-        if (left == right)
+        void unite(std::size_t left, std::size_t right)
         {
-            return;
+            left = find(left);
+            right = find(right);
+            if (left == right)
+            {
+                return;
+            }
+            if (_ranks[left] < _ranks[right])
+            {
+                std::swap(left, right);
+            }
+            _parents[right] = left;
+            if (_ranks[left] == _ranks[right])
+            {
+                ++_ranks[left];
+            }
         }
-        if (_ranks[left] < _ranks[right])
-        {
-            std::swap(left, right);
-        }
-        _parents[right] = left;
-        if (_ranks[left] == _ranks[right])
-        {
-            ++_ranks[left];
-        }
-    }
 
-private:
-    std::vector<std::size_t> _parents;
-    std::vector<std::uint8_t> _ranks;
+    private:
+        std::vector<std::size_t> _parents;
+        std::vector<std::uint8_t> _ranks;
 };
 
 float squaredDistance(const PointXYZRGB &left, const PointXYZRGB &right)
@@ -82,26 +82,24 @@ PlaCloud toPlaCloud(const std::vector<PointXYZRGB> &points)
                             std::all_of(points.begin(), points.end(), [](const PointXYZRGB &point) {
                                 return point.hasNormal;
                             });
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> xyz(
+    plamatrix::MatrixXf xyz(static_cast<plamatrix::Index>(points.size()), 3);
+    plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(
         static_cast<plamatrix::Index>(points.size()), 3);
-    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
-        static_cast<plamatrix::Index>(points.size()), 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
-        hasNormals ? static_cast<plamatrix::Index>(points.size()) : 0, 3);
+    plamatrix::MatrixXf normals(hasNormals ? static_cast<plamatrix::Index>(points.size()) : 0, 3);
     for (std::size_t i = 0; i < points.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        xyz.setValue(row, 0, points[i].x);
-        xyz.setValue(row, 1, points[i].y);
-        xyz.setValue(row, 2, points[i].z);
-        colors.setValue(row, 0, points[i].r);
-        colors.setValue(row, 1, points[i].g);
-        colors.setValue(row, 2, points[i].b);
+        xyz(row, 0) = points[i].x;
+        xyz(row, 1) = points[i].y;
+        xyz(row, 2) = points[i].z;
+        colors(row, 0) = points[i].r;
+        colors(row, 1) = points[i].g;
+        colors(row, 2) = points[i].b;
         if (hasNormals)
         {
-            normals.setValue(row, 0, points[i].nx);
-            normals.setValue(row, 1, points[i].ny);
-            normals.setValue(row, 2, points[i].nz);
+            normals(row, 0) = points[i].nx;
+            normals(row, 1) = points[i].ny;
+            normals(row, 2) = points[i].nz;
         }
     }
 
@@ -122,21 +120,21 @@ std::vector<PointXYZRGB> fromPlaCloud(const PlaCloud &cloud)
     {
         const auto row = static_cast<plamatrix::Index>(i);
         PointXYZRGB point;
-        point.x = cloud.points().getValue(row, 0);
-        point.y = cloud.points().getValue(row, 1);
-        point.z = cloud.points().getValue(row, 2);
+        point.x = cloud.points().coeff(row, 0);
+        point.y = cloud.points().coeff(row, 1);
+        point.z = cloud.points().coeff(row, 2);
         if (cloud.hasNormals())
         {
             point.hasNormal = true;
-            point.nx = cloud.normals()->getValue(row, 0);
-            point.ny = cloud.normals()->getValue(row, 1);
-            point.nz = cloud.normals()->getValue(row, 2);
+            point.nx = cloud.normals()->coeff(row, 0);
+            point.ny = cloud.normals()->coeff(row, 1);
+            point.nz = cloud.normals()->coeff(row, 2);
         }
         if (cloud.hasColors())
         {
-            point.r = cloud.colors()->getValue(row, 0);
-            point.g = cloud.colors()->getValue(row, 1);
-            point.b = cloud.colors()->getValue(row, 2);
+            point.r = cloud.colors()->coeff(row, 0);
+            point.g = cloud.colors()->coeff(row, 1);
+            point.b = cloud.colors()->coeff(row, 2);
         }
         points.push_back(point);
     }
@@ -254,29 +252,25 @@ PoissonPointComponentStats removeSmallPoissonPointComponents(
     }
 
     const std::size_t point_count = points->size();
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> coordinates(
-        static_cast<plamatrix::Index>(point_count), 3);
+    auto search_cloud = std::make_shared<plapoint::PointCloud<plapoint::PointXYZ>>();
+    search_cloud->resize(point_count);
     for (std::size_t index = 0; index < point_count; ++index)
     {
-        const auto row = static_cast<plamatrix::Index>(index);
-        coordinates(row, 0) = (*points)[index].x;
-        coordinates(row, 1) = (*points)[index].y;
-        coordinates(row, 2) = (*points)[index].z;
+        const auto& point = (*points)[index];
+        search_cloud->points[index] = plapoint::PointXYZ(point.x, point.y, point.z);
     }
-
-    const auto cloud = std::make_shared<PlaCloud>(std::move(coordinates));
-    std::shared_ptr<const PlaCloud> const_cloud = cloud;
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(const_cloud);
-    tree.build();
+    plapoint::search::KdTree<plapoint::PointXYZ> tree;
+    tree.setInputCloud(search_cloud);
 
     const int neighbor_count = std::min(12, static_cast<int>(point_count));
     std::vector<float> local_spacing(point_count, 0.0f);
     for (std::size_t index = 0; index < point_count; ++index)
     {
         const PointXYZRGB &point = (*points)[index];
-        const plamatrix::Vec3<float> query{point.x, point.y, point.z};
-        const std::vector<int> neighbors = tree.nearestKSearch(query, neighbor_count);
+        const plapoint::PointXYZ& query = search_cloud->points[index];
+        std::vector<int> neighbors;
+        std::vector<float> squared_distances;
+        tree.nearestKSearch(query, neighbor_count, neighbors, squared_distances);
         std::array<float, 12> distances{};
         int distance_count = 0;
         for (const int neighbor_index : neighbors)
@@ -320,8 +314,10 @@ PoissonPointComponentStats removeSmallPoissonPointComponents(
     for (std::size_t index = 0; index < point_count; ++index)
     {
         const PointXYZRGB &point = (*points)[index];
-        const plamatrix::Vec3<float> query{point.x, point.y, point.z};
-        const std::vector<int> neighbors = tree.nearestKSearch(query, neighbor_count);
+        const plapoint::PointXYZ& query = search_cloud->points[index];
+        std::vector<int> neighbors;
+        std::vector<float> squared_distances;
+        tree.nearestKSearch(query, neighbor_count, neighbors, squared_distances);
         for (const int neighbor_index : neighbors)
         {
             if (neighbor_index < 0 || static_cast<std::size_t>(neighbor_index) == index)

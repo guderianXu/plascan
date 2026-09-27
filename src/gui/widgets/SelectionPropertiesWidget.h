@@ -5,6 +5,13 @@
 #include <QVector>
 #include <QWidget>
 
+#include <memory>
+
+namespace placamera
+{
+    class RasterModel;
+}
+
 class QLabel;
 class QTableWidget;
 
@@ -37,9 +44,10 @@ private:
     QJsonObject findResourceRecord(const QJsonObject& meta, const QString& section, const QString& resourcePath) const;
     QVector<PropertyRow>
     modelPropertyRows(const QJsonObject& meta, const QJsonObject& record, const QString& resourcePath) const;
-    QString imageAlignedText(const QJsonObject& entry, const QJsonObject& camera) const;
-    QString cameraCenterText(const QJsonObject& entry, const QJsonObject& camera) const;
-    QString intrinsicsText(const QJsonObject& entry, const QJsonObject& camera) const;
+    QString imageAlignedText(const QJsonObject& entry,
+                             const std::shared_ptr<const placamera::RasterModel>& camera) const;
+    QString cameraCenterText(const std::shared_ptr<const placamera::RasterModel>& camera) const;
+    QString intrinsicsText(const std::shared_ptr<const placamera::RasterModel>& camera) const;
     static QString fileSizeText(qint64 bytes);
 
     QLabel* _title = nullptr;

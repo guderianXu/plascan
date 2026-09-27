@@ -43,7 +43,6 @@ namespace xjw
                     continue;
                 }
                 const ScenePoint3D& point = reconstruction.point3D(point_id);
-                const double world[3] = {point.xyz[0], point.xyz[1], point.xyz[2]};
                 for (const TrackElement& element : point.track.elements)
                 {
                     if (!reconstruction.isRegistered(element.imageId) || !reconstruction.hasCamera(element.imageId) ||
@@ -56,14 +55,15 @@ namespace xjw
                     {
                         continue;
                     }
-                    double projected[2] = {0.0, 0.0};
-                    if (!reconstruction.camera(element.imageId).projectWorldPoint(world, projected))
+                    const auto& camera = reconstruction.camera(element.imageId);
+                    const auto projection = camera.groundToImage({camera.groundFrame(), point.xyz});
+                    if (!projection)
                     {
                         continue;
                     }
                     const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-                    const double dx = projected[0] - keypoint.x;
-                    const double dy = projected[1] - keypoint.y;
+                    const double dx = projection.value().image.sample - keypoint.x;
+                    const double dy = projection.value().image.line - keypoint.y;
                     const double squared_error = dx * dx + dy * dy;
                     if (!std::isfinite(squared_error))
                     {
@@ -162,7 +162,7 @@ namespace xjw
         if (!shouldRun(_owner._sfmOptions.enableHierarchicalBA,
                        registered_count,
                        _owner._sfmOptions.hierarchicalBAMinImages,
-                       _owner._sfmOptions.baOptions.refineCameraPose))
+                       _owner._sfmOptions.baOptions.calibration.refineCameraPose))
         {
             return summary;
         }
@@ -203,16 +203,18 @@ namespace xjw
         summary.plannedBlocks = static_cast<int>(blocks.size());
         const auto started = std::chrono::steady_clock::now();
         const unsigned int hardware_threads = std::max(1u, std::thread::hardware_concurrency());
-        const int total_threads = _owner._sfmOptions.baOptions.numThreads > 0 ? _owner._sfmOptions.baOptions.numThreads
-                                                                              : static_cast<int>(hardware_threads);
+        const int total_threads = _owner._sfmOptions.baOptions.solver.numThreads > 0
+                                      ? _owner._sfmOptions.baOptions.solver.numThreads
+                                      : static_cast<int>(hardware_threads);
         const int worker_count = resolveWorkerCount(
             static_cast<int>(blocks.size()), total_threads, _owner._sfmOptions.hierarchicalBAMaxConcurrentBlocks, true);
         const int minimum_threads_per_block = resolveWorkerThreadCount(total_threads, worker_count, worker_count - 1);
         const int maximum_threads_per_block = resolveWorkerThreadCount(total_threads, worker_count, 0);
 
-        BAOptions block_options = _owner._sfmOptions.baOptions;
-        block_options.maxIterations = std::clamp(
-            _owner._sfmOptions.hierarchicalBAMaxIterations, 1, std::max(1, _owner._sfmOptions.baOptions.maxIterations));
+        plabundle::SolveOptions block_options = _owner._sfmOptions.baOptions;
+        block_options.solver.maxIterations = std::clamp(_owner._sfmOptions.hierarchicalBAMaxIterations,
+                                                        1,
+                                                        std::max(1, _owner._sfmOptions.baOptions.solver.maxIterations));
         Logger::instance()->infof("[BA] hierarchical start cameras=%d blocks=%zu targetCore=%zu overlap=%zu "
                                   "workers=%d threadsPerBlock=%d-%d backend=%s iterations=%d",
                                   registered_count,
@@ -222,8 +224,8 @@ namespace xjw
                                   worker_count,
                                   minimum_threads_per_block,
                                   maximum_threads_per_block,
-                                  BundleAdjust::backendName(BABackend::PlaMatrixCpu),
-                                  block_options.maxIterations);
+                                  plabundle::backendName(plabundle::Backend::PlaMatrixCpu),
+                                  block_options.solver.maxIterations);
 
         std::unordered_map<ImageId, std::size_t> core_owner;
         for (std::size_t block_index = 0; block_index < blocks.size(); ++block_index)
@@ -312,7 +314,7 @@ namespace xjw
                 }
             }
             Logger::instance()->infof("[BA] hierarchical progress completed=%zu/%zu", end, blocks.size());
-            if (block_options.progressCallback)
+            if (block_options.solver.progressCallback)
             {
                 double rms_sum = 0.0;
                 int rms_count = 0;
@@ -321,21 +323,21 @@ namespace xjw
                 {
                     if (outcome.accepted)
                     {
-                        rms_sum += outcome.result.meanRmsAfter;
+                        rms_sum += outcome.result.quality.meanRmsAfter;
                         ++rms_count;
-                        valid_points += outcome.result.optimizedTracks;
+                        valid_points += outcome.result.quality.optimizedTracks;
                     }
                 }
-                continue_processing =
-                    block_options.progressCallback(static_cast<int>(end),
-                                                   static_cast<int>(blocks.size()),
-                                                   rms_count > 0 ? rms_sum / static_cast<double>(rms_count) : 0.0,
-                                                   valid_points);
+                continue_processing = block_options.solver.progressCallback(
+                    {static_cast<int>(end),
+                     static_cast<int>(blocks.size()),
+                     rms_count > 0 ? rms_sum / static_cast<double>(rms_count) : 0.0,
+                     valid_points});
                 if (!continue_processing)
                 {
-                    if (block_options.cancelFlag)
+                    if (block_options.solver.cancelFlag)
                     {
-                        block_options.cancelFlag->store(true);
+                        block_options.solver.cancelFlag->store(true);
                     }
                     break;
                 }
@@ -347,7 +349,7 @@ namespace xjw
                   [](const BlockOutcome& left, const BlockOutcome& right)
                   { return left.blockIndex < right.blockIndex; });
         const GlobalReprojectionState global_before = evaluateGlobalReprojection(*_owner._reconstruction);
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> camera_snapshots;
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState> camera_snapshots;
         std::vector<PointSnapshot> point_snapshots;
         int candidate_applied_blocks = 0;
         int candidate_updated_cameras = 0;
@@ -359,9 +361,9 @@ namespace xjw
                 Logger::instance()->warnf("[BA] hierarchical block rejected block=%zu status=%s rms=%.6f->%.6f "
                                           "fixedBoundaryTracks=%d",
                                           outcome.blockIndex,
-                                          BundleAdjust::solveStatusName(outcome.result.solveStatus),
-                                          outcome.result.meanRmsBefore,
-                                          outcome.result.meanRmsAfter,
+                                          plabundle::solveStatusName(outcome.result.status),
+                                          outcome.result.quality.meanRmsBefore,
+                                          outcome.result.quality.meanRmsAfter,
                                           outcome.fixedTrackCount);
                 continue;
             }
@@ -374,10 +376,10 @@ namespace xjw
             for (ImageId image_id : blocks[outcome.blockIndex].coreImageIds)
             {
                 const auto index = camera_index.find(image_id);
-                if (index != camera_index.end() && index->second < outcome.result.refinedCameras.size())
+                if (index != camera_index.end() && index->second < outcome.refinedCameras.size())
                 {
                     camera_snapshots.try_emplace(image_id, _owner._reconstruction->camera(image_id));
-                    _owner._reconstruction->camera(image_id) = outcome.result.refinedCameras[index->second];
+                    _owner._reconstruction->camera(image_id) = outcome.refinedCameras[index->second];
                     ++candidate_updated_cameras;
                 }
             }
@@ -387,7 +389,7 @@ namespace xjw
             {
                 const Point3DId point_id = outcome.pointIds[index];
                 const auto owner = point_owner.find(point_id);
-                const BARefinedPoint& refined = outcome.result.points[index];
+                const plabundle::RefinedPoint& refined = outcome.result.points[index];
                 if (owner == point_owner.end() || owner->second != outcome.blockIndex || !refined.valid ||
                     !_owner._reconstruction->hasPoint3D(point_id))
                 {

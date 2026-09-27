@@ -17,49 +17,40 @@ CASES: dict[str, tuple[int, int, int]] = {
 
 DEFAULT_FIELDS = [
     "case",
-    "repeat",
+    "cameras",
+    "tracks",
+    "views",
+    "repetition",
+    "phase",
     "backend",
+    "available",
     "requested",
     "used",
+    "status",
+    "usable",
     "gpu",
     "fallback",
-    "solver",
-    "observations",
-    "tracks",
-    "optimized",
+    "selection_reason",
+    "backend_message",
     "valid_ratio",
     "rms_before",
     "rms_after",
     "quality_rejected",
-    "backend_reason",
-    "quality_message",
-    "plamatrix_initial_cost",
-    "plamatrix_final_cost",
-    "plamatrix_accepted_steps",
-    "plamatrix_rejected_steps",
-    "plamatrix_rejected_initial_tracks",
-    "plamatrix_linear_solver",
-    "plamatrix_device",
-    "plamatrix_linear_iterations",
-    "plamatrix_schur_pattern_builds",
-    "plamatrix_schur_pattern_reuses",
-    "plamatrix_schur_assembly_on_device",
-    "plamatrix_schur_assembly_seconds",
-    "plamatrix_linear_solve_seconds",
-    "native_pcg_iterations",
-    "native_linear_residual",
-    "native_active_observations",
-    "native_upload_seconds",
-    "native_kernel_seconds",
-    "native_download_seconds",
-    "native_host_cost_seconds",
-    "native_device_select_seconds",
-    "native_staging_seconds",
-    "native_release_seconds",
-    "setup_seconds",
+    "initial_cost",
+    "final_cost",
+    "linear_solver",
+    "device",
+    "linear_iterations",
+    "schur_pattern_builds",
+    "schur_pattern_reuses",
+    "schur_on_device",
+    "mixed_precision_used",
+    "assembly_seconds",
+    "linear_solve_seconds",
+    "back_substitution_seconds",
     "solve_seconds",
     "total_seconds",
-    "seconds",
+    "wall_seconds",
 ]
 
 
@@ -69,14 +60,14 @@ def split_csv(value: str) -> list[str]:
 
 def parse_metric_line(line: str) -> dict[str, str] | None:
     parts = [part.strip() for part in line.split(",")]
-    if not parts or parts[0] == "dataset":
+    if not parts or parts[0] != "run":
         return None
-    row = {"backend": parts[0]}
+    row: dict[str, str] = {}
     for part in parts[1:]:
         if "=" in part:
             key, value = part.split("=", 1)
             row[key] = value
-    return row
+    return row if row.get("backend") else None
 
 
 def parse_float(row: dict[str, str], key: str) -> float | None:
@@ -101,9 +92,10 @@ def run_one(
     views_per_track: int,
     iterations: int,
     threads: int,
-    refine_pose: bool,
-    repeat_index: int,
+    repetitions: int,
     wanted_backends: set[str],
+    device_index: int,
+    mixed_precision: bool,
 ) -> list[dict[str, str]]:
     completed = subprocess.run(
         [
@@ -113,8 +105,10 @@ def run_one(
             str(views_per_track),
             str(iterations),
             str(threads),
-            "1" if refine_pose else "0",
+            str(repetitions),
             ",".join(sorted(wanted_backends)),
+            str(device_index),
+            "1" if mixed_precision else "0",
         ],
         check=True,
         text=True,
@@ -127,7 +121,9 @@ def run_one(
         if not row or row["backend"] not in wanted_backends:
             continue
         row["case"] = case_name
-        row["repeat"] = str(repeat_index)
+        row["cameras"] = str(camera_count)
+        row["tracks"] = str(track_count)
+        row["views"] = str(views_per_track)
         rows.append(row)
     print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
     return rows
@@ -141,7 +137,7 @@ def build_summary(rows: list[dict[str, str]]) -> dict[str, object]:
     cases: list[dict[str, object]] = []
     for (case_name, backend), group_rows in sorted(grouped.items()):
         total_values = [value for row in group_rows if (value := parse_float(row, "total_seconds")) is not None]
-        wall_values = [value for row in group_rows if (value := parse_float(row, "seconds")) is not None]
+        wall_values = [value for row in group_rows if (value := parse_float(row, "wall_seconds")) is not None]
         rms_values = [value for row in group_rows if (value := parse_float(row, "rms_after")) is not None]
         valid_values = [value for row in group_rows if (value := parse_float(row, "valid_ratio")) is not None]
         last = group_rows[-1]
@@ -157,9 +153,10 @@ def build_summary(rows: list[dict[str, str]]) -> dict[str, object]:
                 "last_used_backend": last.get("used", ""),
                 "last_gpu": last.get("gpu", ""),
                 "last_fallback": last.get("fallback", ""),
-                "last_solver": last.get("solver", ""),
+                "last_status": last.get("status", ""),
+                "last_solver": last.get("linear_solver", ""),
                 "last_quality_rejected": last.get("quality_rejected", ""),
-                "last_backend_reason": last.get("backend_reason", ""),
+                "last_backend_reason": last.get("selection_reason", ""),
             }
         )
 
@@ -167,23 +164,20 @@ def build_summary(rows: list[dict[str, str]]) -> dict[str, object]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run PlaScan BA backend benchmark.")
+    parser = argparse.ArgumentParser(description="Run PlaBundle backend benchmark.")
     parser.add_argument("--exe", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--cases", default="medium", help="逗号分隔: small,medium,large")
     parser.add_argument(
         "--backends",
-        default="plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto",
+        default="plamatrix_cpu,plamatrix_cuda,plamatrix_vulkan,plamatrix_opencl,auto",
     )
     parser.add_argument("--repeat", default=3, type=int)
     parser.add_argument("--iterations", default=8, type=int)
     parser.add_argument("--threads", default=32, type=int)
-    parser.add_argument(
-        "--refine-pose",
-        action="store_true",
-        help="同时优化相机位姿。benchmark 会通过公共 BA 校验补足 gauge 锚定。",
-    )
+    parser.add_argument("--device", default=0, type=int, help="PlaMatrix CUDA/OpenCL 设备索引")
+    parser.add_argument("--mixed-precision", action="store_true", help="请求受保护的 FP32 PCG 初值")
     args = parser.parse_args()
 
     case_names = split_csv(args.cases)
@@ -191,25 +185,30 @@ def main() -> int:
     if unknown_cases:
         raise SystemExit(f"未知 case: {', '.join(unknown_cases)}")
     wanted_backends = set(split_csv(args.backends))
+    if not wanted_backends:
+        raise SystemExit("至少需要一个后端")
 
     all_rows: list[dict[str, str]] = []
     for case_name in case_names:
         camera_count, track_count, views_per_track = CASES[case_name]
-        for repeat_index in range(1, max(1, args.repeat) + 1):
-            all_rows.extend(
-                run_one(
-                    exe=args.exe,
-                    case_name=case_name,
-                    camera_count=camera_count,
-                    track_count=track_count,
-                    views_per_track=views_per_track,
-                    iterations=max(1, args.iterations),
-                    threads=max(1, args.threads),
-                    refine_pose=args.refine_pose,
-                    repeat_index=repeat_index,
-                    wanted_backends=wanted_backends,
-                )
+        all_rows.extend(
+            run_one(
+                exe=args.exe,
+                case_name=case_name,
+                camera_count=camera_count,
+                track_count=track_count,
+                views_per_track=views_per_track,
+                iterations=max(1, args.iterations),
+                threads=max(0, args.threads),
+                repetitions=max(1, args.repeat),
+                wanted_backends=wanted_backends,
+                device_index=max(0, args.device),
+                mixed_precision=args.mixed_precision,
             )
+        )
+
+    if not all_rows:
+        raise SystemExit("benchmark 未输出任何 run 记录，请确认 --exe 指向 plabundle_benchmark")
 
     fieldnames = [field for field in DEFAULT_FIELDS if any(field in row for row in all_rows)]
     extras = sorted({key for row in all_rows for key in row if key not in fieldnames})

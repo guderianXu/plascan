@@ -19,7 +19,7 @@ namespace xjw::mvs
         static std::vector<DensePoint>
         unproject(const cv::Mat& depth,
                   const cv::Mat& mask,
-                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraModel,
+                         const placamera::FramePinholeModel& cameraModel,
                   const cv::Mat& colorImg,
                   float minDepth,
                   float maxDepth,

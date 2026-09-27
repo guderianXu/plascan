@@ -1,10 +1,10 @@
 #include "project/services/ProjectSession.h"
 
-#include "ProjectCameraIO.h"
-#include "camera/project/CameraProjectRecords.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectSessionModel.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -18,7 +18,6 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
 #include <memory>
 #include <concepts>
 #include <thread>
@@ -88,18 +87,6 @@ namespace
     static_assert(PublishesImageMaskRecords<ProjectSession>);
     static_assert(ClearsImageMaskRecords<ProjectSession>);
 
-    QJsonObject canonicalFrameCamera(int width, int height, const std::array<double, 3>& center)
-    {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setPixelPitch(0.01);
-        camera.setIntrinsics(1200.0, 1200.0, width * 0.5, height * 0.5);
-        camera.setImageSize(xjw::camera_core::ImageSize{width, height});
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, center);
-        QJsonObject result = xjw::common::project::serializeFramePinholeNumericState(camera);
-        result.insert(QStringLiteral("aligned"), true);
-        return result;
-    }
-
     class ScopedCoreApplication final
     {
     public:
@@ -119,8 +106,8 @@ namespace
         std::unique_ptr<QCoreApplication> _application;
     };
 
-    xjw::camera_project::CameraInstanceUpdates
-    prepareSessionBundleAdjustUpdate(ProjectData* project, const QString& directory, QString* errorMessage)
+    placamera::CameraInstanceSet
+    prepareSessionBundleAdjustCameras(ProjectData* project, const QString& directory, QString* errorMessage)
     {
         const QString imagePath = QDir(directory).filePath(QStringLiteral("session-stage.jpg"));
         QFile image(imagePath);
@@ -137,29 +124,51 @@ namespace
         {
             return {};
         }
-        const QJsonObject camera = canonicalFrameCamera(1024, 768, {1.0, 2.0, 3.0});
+        const QString image_id = project->coreFilesMeta()
+                                     .value(QStringLiteral("images"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString();
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("session-stage-definition"),
+                                                      {1200.0, 1200.0, 512.0, 384.0, 0.01, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        const auto added =
+            cameras.add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                placamera::CameraInstanceId("session-stage-instance"),
+                placamera::ImageId(image_id.toStdString()),
+                definition,
+                {1024, 768},
+                placamera::Pose::create(frame, {1.0, 2.0, 3.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))));
+        if (!added.ok())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QString::fromStdString(added.message());
+            }
+            return {};
+        }
         int updatedCount = 0;
-        if (!project->setCameraInstances({{imagePath, camera}}, &updatedCount, errorMessage))
+        if (!project->upsertNativeCameraInstances(cameras, {}, &updatedCount, errorMessage))
         {
             return {};
         }
-        const QJsonObject core = project->coreFilesMeta();
-        const QJsonObject imageRecord = core.value(QStringLiteral("images")).toArray().at(0).toObject();
-        const QString imageId = imageRecord.value(QStringLiteral("image_uuid")).toString();
-        const QJsonObject instance = xjw::camera_project::CameraProjectRecords::instanceForImage(core, imageId);
-        const QString worldFrame = core.value(QStringLiteral("camera_definitions"))
-                                       .toArray()
-                                       .at(0)
-                                       .toObject()
-                                       .value(QStringLiteral("frame"))
-                                       .toString();
-        QJsonObject update = xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, imageRecord);
-        update.insert(QStringLiteral("world_frame"), worldFrame);
-        update.insert(QStringLiteral("solution"), QStringLiteral("session-stage"));
-        return {{xjw::camera_core::ImageId(imageId.toStdString()),
-                 xjw::camera_core::CameraInstanceId(instance.value(QStringLiteral("id")).toString().toStdString()),
-                 xjw::coordinate_system::CoordinateFrameId(worldFrame.toStdString()),
-                 update}};
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(project->coreFilesMeta());
+        if (!loaded.ok())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = loaded.errors.join(QStringLiteral("; "));
+            }
+            return {};
+        }
+        return loaded.instances;
     }
 
     class ProjectSessionTest : public testing::Test
@@ -391,7 +400,8 @@ namespace
         int clearedCount = 4;
         QString errorMessage;
 
-        EXPECT_FALSE(nullSession.replaceCameraInstances({}, {}, &updatedCount, &clearedCount, &errorMessage));
+        EXPECT_FALSE(nullSession.replaceNativeCameraInstances(
+            nullSession.context(), {}, {}, {}, &updatedCount, &clearedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(clearedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("ProjectData 未初始化"));
@@ -405,6 +415,86 @@ namespace
 
         EXPECT_FALSE(session.isCurrent(oldContext));
         EXPECT_EQ(session.context().generation, oldContext.generation + 1);
+    }
+
+    TEST_F(ProjectSessionTest, NativeCameraInitializationUsesGuardedProjectWrite)
+    {
+        const QString temp_root =
+            QDir(QString::fromUtf8(TEST_DATA_DIR)).filePath(QStringLiteral("../build/tmp/placamera-session"));
+        ASSERT_TRUE(QDir().mkpath(temp_root));
+        QTemporaryDir directory(QDir(temp_root).filePath(QStringLiteral("XXXXXX")));
+        ASSERT_TRUE(directory.isValid());
+        ASSERT_TRUE(data.createProject(directory.filePath(QStringLiteral("native_camera.plascan")),
+                                       QStringLiteral("native_camera")));
+        const QString image_path = directory.filePath(QStringLiteral("frame.png"));
+        QFile image_file(image_path);
+        ASSERT_TRUE(image_file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(image_file.write("image"), 5);
+        image_file.close();
+        ASSERT_TRUE(data.addImages({image_path}));
+        const QString image_id = data.coreFilesMeta()
+                                     .value(QStringLiteral("images"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString();
+        ASSERT_FALSE(image_id.isEmpty());
+
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("native-init-definition"),
+                                                      {120.0, 120.0, 16.0, 12.0, 1.0, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(
+            cameras
+                .add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("native-init-instance"),
+                    placamera::ImageId(image_id.toStdString()),
+                    definition,
+                    {32, 24},
+                    placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))))
+                .ok());
+        const QMap<QString, QJsonObject> annotations{
+            {image_id, QJsonObject{{QStringLiteral("source"), QStringLiteral("init_from_intrinsics")}}}};
+
+        const auto context = session.context();
+        int written_count = 0;
+        QString error;
+        ASSERT_TRUE(session.upsertNativeCameraInstances(context, cameras, annotations, &written_count, &error))
+            << error.toStdString();
+        EXPECT_EQ(written_count, 1);
+        const QJsonObject committed = session.coreMetadata();
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(committed);
+        ASSERT_TRUE(loaded.ok()) << loaded.errors.join(';').toStdString();
+        EXPECT_EQ(loaded.instances.size(), 1U);
+
+        placamera::CameraInstanceSet no_cameras;
+        int cleared_count = 0;
+        ASSERT_TRUE(session.replaceNativeCameraInstances(context,
+                                                         {placamera::ImageId(image_id.toStdString())},
+                                                         no_cameras,
+                                                         {},
+                                                         &written_count,
+                                                         &cleared_count,
+                                                         &error))
+            << error.toStdString();
+        EXPECT_EQ(written_count, 0);
+        EXPECT_EQ(cleared_count, 1);
+        const QJsonObject cleared = session.coreMetadata();
+        const auto cleared_models = xjw::placamera_runtime::loadProjectCameras(cleared);
+        ASSERT_TRUE(cleared_models.ok()) << cleared_models.errors.join(';').toStdString();
+        EXPECT_TRUE(cleared_models.instances.empty());
+
+        session.advanceGeneration();
+        written_count = 7;
+        EXPECT_FALSE(session.upsertNativeCameraInstances(context, cameras, annotations, &written_count, &error));
+        EXPECT_EQ(written_count, 0);
+        EXPECT_EQ(session.coreMetadata(), cleared);
+        ASSERT_TRUE(data.closeProject(&error)) << error.toStdString();
     }
 
     TEST_F(ProjectSessionTest, GuardedCameraAndIntersectionWritesCommitCurrentAndRejectStaleContexts)
@@ -423,15 +513,55 @@ namespace
         ASSERT_EQ(projectImages.size(), 1);
 
         const auto currentContext = session.context();
-        QJsonObject currentCamera = canonicalFrameCamera(32, 24, {0.0, 0.0, 1.0});
-        currentCamera.insert(QStringLiteral("solution"), QStringLiteral("current"));
+        const QString image_id = data.coreFilesMeta()
+                                     .value(QStringLiteral("images"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("image_uuid"))
+                                     .toString();
+        ASSERT_FALSE(image_id.isEmpty());
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("guarded-definition"),
+                                                      {1200.0, 1200.0, 16.0, 12.0, 0.01, 1, 1},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(
+            cameras
+                .add(std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+                    placamera::CameraInstanceId("guarded-instance"),
+                    placamera::ImageId(image_id.toStdString()),
+                    definition,
+                    {32, 24},
+                    placamera::Pose::create(frame, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}))))
+                .ok());
+        const QMap<QString, QJsonObject> annotations{
+            {image_id,
+             QJsonObject{
+                 {QStringLiteral("metadata"), QJsonObject{{QStringLiteral("solution"), QStringLiteral("current")}}}}}};
         int updatedCount = 0;
         QString errorMessage;
 
-        ASSERT_TRUE(session.setCameraInstances(
-            currentContext, {{projectImages.front(), currentCamera}}, &updatedCount, &errorMessage))
+        ASSERT_TRUE(
+            session.upsertNativeCameraInstances(currentContext, cameras, annotations, &updatedCount, &errorMessage))
             << qPrintable(errorMessage);
         EXPECT_EQ(updatedCount, 1);
+        bool has_cameras_for_all = false;
+        const auto reference_cameras =
+            session.getReferenceCameraGeometriesForImages(projectImages, &has_cameras_for_all);
+        ASSERT_TRUE(has_cameras_for_all);
+        ASSERT_EQ(reference_cameras.size(), 1U);
+        EXPECT_EQ(reference_cameras.begin()->second.imageId().value(), reference_cameras.begin()->first.value());
+        EXPECT_EQ(reference_cameras.begin()->second.model().imageSize().samples, 32);
+        EXPECT_EQ(reference_cameras.begin()->second.model().imageSize().lines, 24);
+        const auto pinhole_models = session.getPinholeModelsForImages(
+            {projectImages.front(), temporaryDirectory.filePath(QStringLiteral("missing.png"))}, &has_cameras_for_all);
+        EXPECT_FALSE(has_cameras_for_all);
+        ASSERT_EQ(pinhole_models.size(), 1);
+        EXPECT_EQ(pinhole_models.cbegin().value()->imageSize().samples, 32);
         ASSERT_TRUE(session.appendIntersectionResult(
             currentContext, QJsonObject{{QStringLiteral("id"), QStringLiteral("current")}}, &errorMessage))
             << qPrintable(errorMessage);
@@ -440,10 +570,8 @@ namespace
         session.advanceGeneration();
         updatedCount = 7;
         errorMessage.clear();
-        QJsonObject staleCamera = currentCamera;
-        staleCamera.insert(QStringLiteral("solution"), QStringLiteral("stale"));
-        EXPECT_FALSE(session.setCameraInstances(
-            currentContext, {{projectImages.front(), staleCamera}}, &updatedCount, &errorMessage));
+        EXPECT_FALSE(
+            session.upsertNativeCameraInstances(currentContext, cameras, annotations, &updatedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("项目会话已变化，已拒绝过期结果写回"));
         EXPECT_FALSE(session.appendIntersectionResult(
@@ -451,8 +579,11 @@ namespace
         EXPECT_EQ(session.intersectionResults().size(), 1);
 
         const QJsonObject core = session.coreMetadata();
-        const QJsonObject image = core.value(QStringLiteral("images")).toArray().at(0).toObject();
-        EXPECT_EQ(xjw::camera_project::CameraProjectRecords::modelParametersForImage(core, image)
+        const QJsonObject record = core.value(QStringLiteral("camera_instances")).toArray().first().toObject();
+        EXPECT_EQ(record.value(QStringLiteral("state"))
+                      .toObject()
+                      .value(QStringLiteral("metadata"))
+                      .toObject()
                       .value(QStringLiteral("solution"))
                       .toString(),
                   QStringLiteral("current"));
@@ -824,8 +955,8 @@ namespace
         ASSERT_TRUE(projectData.createProject(temporaryDirectory.filePath(QStringLiteral("guarded_ba_stage.plascan")),
                                               QStringLiteral("guarded_ba_stage")));
         QString errorMessage;
-        const auto updates = prepareSessionBundleAdjustUpdate(&projectData, temporaryDirectory.path(), &errorMessage);
-        ASSERT_FALSE(updates.empty()) << qPrintable(errorMessage);
+        const auto cameras = prepareSessionBundleAdjustCameras(&projectData, temporaryDirectory.path(), &errorMessage);
+        ASSERT_FALSE(cameras.empty()) << qPrintable(errorMessage);
         const auto expected = session.context();
         const QJsonObject before = projectData.metadataIncludingResults();
         int metadataChangedCount = 0;
@@ -835,7 +966,7 @@ namespace
         ProjectBundleAdjustMetadataStageToken token;
 
         ASSERT_TRUE(session.stageBundleAdjustMetadata(
-            expected, updates, QJsonObject{{QStringLiteral("track_count"), 4}}, &token, &errorMessage))
+            expected, cameras, {}, QJsonObject{{QStringLiteral("track_count"), 4}}, &token, &errorMessage))
             << qPrintable(errorMessage);
         EXPECT_EQ(metadataChangedCount, 0);
         session.advanceGeneration();
@@ -889,28 +1020,15 @@ namespace
         int clearedCount = 9;
         QString errorMessage;
 
-        EXPECT_FALSE(session.setCameraInstances({}, &updatedCount, &errorMessage));
-        EXPECT_EQ(updatedCount, 0);
-        EXPECT_EQ(errorMessage, QStringLiteral("没有打开的项目"));
-
-        updatedCount = 7;
-        errorMessage.clear();
-        EXPECT_FALSE(session.setCameraInstancesById({}, &updatedCount, &errorMessage));
+        EXPECT_FALSE(session.upsertNativeCameraInstances(session.context(), {}, {}, &updatedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("没有打开的项目"));
 
         updatedCount = 7;
         clearedCount = 9;
         errorMessage.clear();
-        EXPECT_FALSE(session.replaceCameraInstances({}, {}, &updatedCount, &clearedCount, &errorMessage));
-        EXPECT_EQ(updatedCount, 0);
-        EXPECT_EQ(clearedCount, 0);
-        EXPECT_EQ(errorMessage, QStringLiteral("没有打开的项目"));
-
-        updatedCount = 7;
-        clearedCount = 9;
-        errorMessage.clear();
-        EXPECT_FALSE(session.replaceCameraInstancesById({}, {}, &updatedCount, &clearedCount, &errorMessage));
+        EXPECT_FALSE(session.replaceNativeCameraInstances(
+            session.context(), {}, {}, {}, &updatedCount, &clearedCount, &errorMessage));
         EXPECT_EQ(updatedCount, 0);
         EXPECT_EQ(clearedCount, 0);
         EXPECT_EQ(errorMessage, QStringLiteral("没有打开的项目"));

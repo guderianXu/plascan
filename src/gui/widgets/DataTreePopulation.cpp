@@ -92,11 +92,12 @@ void DataTreeWidget::populateFromMeta(const QJsonObject& meta)
             }
         }
     }
+    const QSet<QString> cameraAlignedImageIds = projectCameraAlignedImageIds(normalized);
     int alignedImageCount = 0;
     int maskCount = 0;
     for (const QJsonValue& v : images)
     {
-        if (imageIsAligned(v, alignedImageKeys, normalized))
+        if (imageIsAligned(v, alignedImageKeys, cameraAlignedImageIds))
         {
             ++alignedImageCount;
         }
@@ -357,7 +358,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject& meta)
         QString name = fi.fileName();
         if (name.isEmpty())
             name = path;
-        const bool aligned = imageIsAligned(v, alignedImageKeys, normalized);
+        const bool aligned = imageIsAligned(v, alignedImageKeys, cameraAlignedImageIds);
         QStandardItem* imageItem = appendItemRow(photos, name, path, storage);
         if (imageItem)
         {

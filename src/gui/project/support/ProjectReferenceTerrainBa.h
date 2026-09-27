@@ -1,6 +1,5 @@
 #pragma once
 
-#include "BundleAdjustSolver.h"
 #include "BundleAdjustService.h"
 #include "ReferenceDatasetWorkflow.h"
 
@@ -19,7 +18,7 @@ struct ReferenceTerrainBaApplyResult
 };
 
 ReferenceTerrainBaApplyResult applyReferenceTerrainPriorToBundleAdjust(
-    std::vector<xjw::BATrack> *tracks,
+    std::vector<plabundle::Track> *tracks,
     xjw::gui::BaServiceOptions *options);
 
 } // namespace xjw::gui::project

@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace
@@ -41,7 +42,7 @@ std::array<double, 3> cross(
         lhs[0] * rhs[1] - lhs[1] * rhs[0]};
 }
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeLookAtCamera(const std::array<double, 3>& center)
+placamera::FramePinholeNumericState makeLookAtCamera(const std::array<double, 3>& center)
 {
     const std::array<double, 3> forward =
         normalize({-center[0], -center[1], -center[2]});
@@ -65,15 +66,29 @@ xjw::camera_models::frame_pinhole::FramePinholeNumericState makeLookAtCamera(con
         }
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
-    camera.setPose(camera_to_world, center);
-    return camera;
+    placamera::FrameIntrinsics intrinsics;
+    intrinsics.focalX = 80.0;
+    intrinsics.focalY = 80.0;
+    intrinsics.principalX = 32.0;
+    intrinsics.principalY = 32.0;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("visibility-definition"),
+        intrinsics,
+        {},
+        placamera::PixelConvention::PixelCenter,
+        placamera::FrameId("world"));
+    const auto model = placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("visibility-instance"),
+        placamera::ImageId("visibility-image"),
+        definition,
+        {64, 64},
+        placamera::Pose::create(placamera::FrameId("world"), center, camera_to_world));
+    return placamera::FramePinholeNumericState::fromModel(model);
 }
 
 struct SyntheticFrame
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+    std::optional<placamera::FramePinholeNumericState> camera;
     cv::Mat depth;
     cv::Mat confidence;
     cv::Mat valid;
@@ -85,7 +100,7 @@ SyntheticFrame renderSphere(
     double radius)
 {
     SyntheticFrame frame;
-    frame.camera = makeLookAtCamera(camera_center);
+    frame.camera.emplace(makeLookAtCamera(camera_center));
     frame.depth = cv::Mat::zeros(64, 64, CV_32FC1);
     frame.confidence = cv::Mat(64, 64, CV_32FC1, cv::Scalar(1.0f));
     frame.valid = cv::Mat::zeros(64, 64, CV_8UC1);
@@ -94,18 +109,13 @@ SyntheticFrame renderSphere(
     {
         for (int column = 0; column < 64; ++column)
         {
-            const double pixel[2] = {
-                static_cast<double>(column),
-                static_cast<double>(row)};
-            double ray_point[3]{};
-            if (!frame.camera.unprojectPixel(pixel, 1.0, ray_point))
+            const auto locus = frame.camera->imageToImagingLocus(
+                {static_cast<double>(column), static_cast<double>(row)});
+            if (!locus)
             {
                 continue;
             }
-            std::array<double, 3> direction = normalize({
-                ray_point[0] - camera_center[0],
-                ray_point[1] - camera_center[1],
-                ray_point[2] - camera_center[2]});
+            const std::array<double, 3> direction = normalize(locus.value().direction);
             const double projection =
                 camera_center[0] * direction[0] +
                 camera_center[1] * direction[1] +
@@ -130,7 +140,13 @@ SyntheticFrame renderSphere(
                 camera_center[0] + direction[0] * ray_distance,
                 camera_center[1] + direction[1] * ray_distance,
                 camera_center[2] + direction[2] * ray_distance};
-            const double depth = frame.camera.positiveDepth(world);
+            const auto projected = frame.camera->groundToImage(
+                placamera::GroundCoordinate{frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+            if (!projected || !projected.value().positiveDepth)
+            {
+                continue;
+            }
+            const double depth = *projected.value().positiveDepth;
             frame.depth.at<float>(row, column) =
                 static_cast<float>(depth);
             frame.valid.at<std::uint8_t>(row, column) = 255;
@@ -163,7 +179,7 @@ std::vector<xjw::mesh::VisibilityOccupancyFrameView> makeViews(
     for (const SyntheticFrame &frame : frames)
     {
         xjw::mesh::VisibilityOccupancyFrameView view;
-        view.camera = &frame.camera;
+        view.camera = frame.camera ? &*frame.camera : nullptr;
         view.depth = &frame.depth;
         view.confidence = &frame.confidence;
         view.depthValidMask = &frame.valid;

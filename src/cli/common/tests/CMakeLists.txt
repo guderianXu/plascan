@@ -22,5 +22,9 @@ if(TARGET plascan_cli_photogrammetry_common)
         plascan_cli_photogrammetry_common
         GTest::gtest_main
     )
+    target_compile_definitions(test_cli_photogrammetry_common PRIVATE
+        TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+        PLASCAN_TEST_TMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp"
+    )
     gtest_discover_tests(test_cli_photogrammetry_common DISCOVERY_MODE PRE_TEST)
 endif()

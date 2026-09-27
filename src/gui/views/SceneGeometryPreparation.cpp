@@ -363,12 +363,12 @@ PointRenderPreparation preparePointRenderData(const SceneRenderCloud& cloud,
         vertex[0] = cloud.points()(row, 0);
         vertex[1] = cloud.points()(row, 1);
         vertex[2] = cloud.points()(row, 2);
-        vertex[3] = has_normals ? cloud.normals()->getValue(row, 0) : 0.0f;
-        vertex[4] = has_normals ? cloud.normals()->getValue(row, 1) : 0.0f;
-        vertex[5] = has_normals ? cloud.normals()->getValue(row, 2) : 0.0f;
-        vertex[6] = has_colors ? cloud.colors()->getValue(row, 0) * color_scale : 0.45f;
-        vertex[7] = has_colors ? cloud.colors()->getValue(row, 1) * color_scale : 0.45f;
-        vertex[8] = has_colors ? cloud.colors()->getValue(row, 2) * color_scale : 0.50f;
+        vertex[3] = has_normals ? cloud.normals()->coeff(row, 0) : 0.0f;
+        vertex[4] = has_normals ? cloud.normals()->coeff(row, 1) : 0.0f;
+        vertex[5] = has_normals ? cloud.normals()->coeff(row, 2) : 0.0f;
+        vertex[6] = has_colors ? cloud.colors()->coeff(row, 0) * color_scale : 0.45f;
+        vertex[7] = has_colors ? cloud.colors()->coeff(row, 1) * color_scale : 0.45f;
+        vertex[8] = has_colors ? cloud.colors()->coeff(row, 2) * color_scale : 0.50f;
         scalar_output[index] =
             has_image_counts ? static_cast<float>(imageCounts.at(static_cast<qsizetype>(index))) : 0.0f;
     }

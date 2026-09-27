@@ -15,6 +15,37 @@ namespace xjw::mvs
             return true;
         }
 
+        if (!result.cameraModel || result.cameraModel->imageSize().samples != result.depthMap->cols ||
+            result.cameraModel->imageSize().lines != result.depthMap->rows ||
+            result.cameraModel->pinholeDefinition().depthAxisFlipped() ||
+            result.cameraModel->pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
+        {
+            const QString message = QStringLiteral("帧 %1 的 PlaCamera 深度相机缺失或与深度栅格不一致").arg(frameIndex);
+            markManifestFrameFailed(frameIndex, message);
+            errorOccurred(message);
+            return false;
+        }
+        const auto& source_camera = _views[static_cast<std::size_t>(frameIndex)].camera;
+        if (!source_camera || result.cameraModel->instanceId() != source_camera->instanceId() ||
+            result.cameraModel->imageId() != source_camera->imageId() ||
+            result.cameraModel->groundFrame() != source_camera->groundFrame())
+        {
+            const QString message =
+                QStringLiteral("帧 %1 的 PlaCamera 深度相机与源影像 identity/frame 不一致").arg(frameIndex);
+            markManifestFrameFailed(frameIndex, message);
+            errorOccurred(message);
+            return false;
+        }
+        const auto& distortion = result.cameraModel->pinholeDefinition().distortion();
+        if (distortion.radialK1 != 0.0 || distortion.radialK2 != 0.0 || distortion.radialK3 != 0.0 ||
+            distortion.tangentialP1 != 0.0 || distortion.tangentialP2 != 0.0)
+        {
+            const QString message = QStringLiteral("帧 %1 的 PlaCamera 深度相机必须为零畸变").arg(frameIndex);
+            markManifestFrameFailed(frameIndex, message);
+            errorOccurred(message);
+            return false;
+        }
+
         const bool final_artifacts = stageLabel != QStringLiteral("初始");
         const bool consistency_publication_expected =
             detail::expectsConsistencyPublication(result, static_cast<int>(_views.size()));
@@ -619,11 +650,28 @@ namespace xjw::mvs
         {
             MvsPreparedRasterArtifact prepared_raster;
             QString prepared_raster_error;
-            if (!ensurePreparedRasterArtifact(frameIndex, &prepared_raster, &prepared_raster_error))
+            if (!ensurePreparedRasterArtifact(frameIndex, &prepared_raster, &prepared_raster_error) ||
+                !prepared_raster.camera)
             {
+                if (prepared_raster_error.isEmpty())
+                {
+                    prepared_raster_error =
+                        QStringLiteral("帧 %1 的 MVS prepared raster 缺少 PlaCamera 相机").arg(frameIndex);
+                }
                 LOG_ERROR(QStringLiteral("[MVS] %1").arg(prepared_raster_error));
                 errorOccurred(prepared_raster_error);
                 markManifestFrameFailed(frameIndex, prepared_raster_error);
+                return false;
+            }
+            if (prepared_raster.camera->instanceId() != result.cameraModel->instanceId() ||
+                prepared_raster.camera->imageId() != result.cameraModel->imageId() ||
+                prepared_raster.camera->groundFrame() != result.cameraModel->groundFrame())
+            {
+                const QString message =
+                    QStringLiteral("帧 %1 的 prepared raster 相机与深度相机 identity/frame 不一致").arg(frameIndex);
+                LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+                errorOccurred(message);
+                markManifestFrameFailed(frameIndex, message);
                 return false;
             }
             QJsonArray sourceImages;
@@ -899,7 +947,7 @@ namespace xjw::mvs
             artifact[QStringLiteral("prepared_image")] = QString::fromStdString(prepared_raster.imagePath);
             artifact[QStringLiteral("prepared_valid_mask_path")] =
                 QString::fromStdString(prepared_raster.validMaskPath);
-            artifact[QStringLiteral("prepared_camera_model")] = cameraModelToJson(prepared_raster.camera);
+            artifact[QStringLiteral("prepared_camera_model")] = cameraModelToJson(*prepared_raster.camera);
             artifact[QStringLiteral("source_images")] = sourceImages;
             artifact[QStringLiteral("source_indices")] = sourceIndices;
             artifact[QStringLiteral("geometry_source_indices")] = geometrySourceIndices;
@@ -938,10 +986,6 @@ namespace xjw::mvs
             {
                 artifact[QStringLiteral("pose_refinement_diagnostics")] = result.poseRefinementDiagnostics;
             }
-            if (result.derivedCameraModel.isValid())
-            {
-                artifact[QStringLiteral("derived_camera_model")] = cameraModelToJson(result.derivedCameraModel);
-            }
             if (depthCompleteness.finalMetrics.validInputs)
             {
                 artifact[QStringLiteral("mask_pixel_count")] = depthCompleteness.finalMetrics.maskPixelCount;
@@ -965,8 +1009,7 @@ namespace xjw::mvs
             artifact[QStringLiteral("acceptance")] = acceptance;
             artifact[QStringLiteral("fusion_eligible")] = result.eligibleForFusion();
             artifact[QStringLiteral("depth_postprocess")] = depthPostprocessJson;
-            artifact[QStringLiteral("camera_model")] = cameraModelToJson(
-                result.cameraModel.isValid() ? result.cameraModel : mvsPinholeCamera(_views[frameIndex].camera));
+            artifact[QStringLiteral("camera_model")] = cameraModelToJson(*result.cameraModel);
             artifact[QStringLiteral("status")] =
                 final_artifacts ? QStringLiteral("completed") : QStringLiteral("running");
             artifact[QStringLiteral("stage")] = stageLabel;
@@ -987,7 +1030,7 @@ namespace xjw::mvs
             record.refImage = QString::fromStdString(_views[frameIndex].imagePath);
             record.preparedImage = QString::fromStdString(prepared_raster.imagePath);
             record.preparedValidMaskPath = QString::fromStdString(prepared_raster.validMaskPath);
-            record.preparedCameraModel = cameraModelToJson(prepared_raster.camera);
+            record.preparedCameraModel = cameraModelToJson(*prepared_raster.camera);
             record.sourceImages = sourceImageList;
             for (const QJsonValue& source_value : sourceIndices)
             {
@@ -1024,10 +1067,6 @@ namespace xjw::mvs
             record.depthProvenanceSummary = depthProvenanceSummaryJson;
             record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
             record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
-            if (result.derivedCameraModel.isValid())
-            {
-                record.derivedCameraModel = cameraModelToJson(result.derivedCameraModel);
-            }
             record.qualityDecision = qualityDecisionJson;
             record.pyramidLevels = pyramidLevelsJson;
             record.maskSource = QString::fromStdString(result.maskSource);
@@ -1044,8 +1083,7 @@ namespace xjw::mvs
             record.fusionEligible = result.eligibleForFusion();
             record.fusionEligibilityKnown = true;
             record.depthPostprocess = depthPostprocessJson;
-            record.cameraModel = cameraModelToJson(
-                result.cameraModel.isValid() ? result.cameraModel : mvsPinholeCamera(_views[frameIndex].camera));
+            record.cameraModel = cameraModelToJson(*result.cameraModel);
             record.status = final_artifacts ? QStringLiteral("completed") : QStringLiteral("running");
             record.device = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
             record.depthPng = QString::fromStdString(pngPath);

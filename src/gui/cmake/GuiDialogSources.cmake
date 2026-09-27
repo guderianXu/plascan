@@ -22,8 +22,6 @@ set(GUI_CAMERA_DIALOG_SOURCES
   dialogs/camera/CameraCalibrationData.h
   dialogs/camera/CameraCalibrationDialog.cpp
   dialogs/camera/CameraCalibrationDialog.h
-  dialogs/camera/CameraConvertDialog.cpp
-  dialogs/camera/CameraConvertDialog.h
   dialogs/camera/ForwardIntersectionCheckDialog.cpp
   dialogs/camera/ForwardIntersectionCheckDialog.h
   dialogs/camera/ForwardIntersectionCheckDialog.ui

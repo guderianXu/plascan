@@ -37,7 +37,7 @@ namespace xjw::aerial_triangulation
     MarkerPriorLoadResult MarkerPriorLoader::load(const QString& path,
                                                   const QJsonObject& projectMeta,
                                                   const QMap<QString, ImageId>& imageIdByCanonicalId,
-                                                  const xjw::coordinate_system::CoordinateContext* coordinateContext)
+                                                  const placoordinate::CoordinateContext* coordinateContext)
     {
         MarkerPriorLoadResult result;
         if (path.trimmed().isEmpty() || !QFileInfo::exists(path))

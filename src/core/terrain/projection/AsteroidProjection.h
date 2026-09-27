@@ -15,14 +15,7 @@
 #include <QString>
 #include <array>
 
-#include <plamatrix/core/types.h>
-
-// 前向声明，避免将 PointCloud 的重型依赖传播到整个地形模块头文件
-namespace plapoint
-{
-template <typename Scalar, plamatrix::Device Dev>
-class PointCloud;
-}
+#include <plapoint/geometry_cloud.h>
 
 namespace xjw
 {
@@ -117,7 +110,7 @@ public:
     /**
      * @brief 计算点云的质心坐标和参考半径（各点到质心的均值距离）。
      */
-    static AsteroidBodyCenter computeCenter(const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc);
+    static AsteroidBodyCenter computeCenter(const plapoint::GeometryCloud<float>& pc);
 
     /**
      * @brief 通过 PCA 拟合三轴椭球体，返回半轴参数并可选地输出旋转矩阵。
@@ -128,10 +121,9 @@ public:
      *                             第 0 行对应最长半轴 a，第 2 行对应最短半轴 c。
      * @return 拟合的三轴椭球半轴，a ≥ b ≥ c。
      */
-    static TriaxialEllipsoidParams fitEllipsoid(
-        const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc,
-        const AsteroidBodyCenter &center,
-        std::array<double, 9> *rotationMatrix = nullptr);
+    static TriaxialEllipsoidParams fitEllipsoid(const plapoint::GeometryCloud<float>& pc,
+                                                const AsteroidBodyCenter& center,
+                                                std::array<double, 9>* rotationMatrix = nullptr);
 
     /**
      * @brief 将单个三维笛卡尔点投影到指定坐标系。

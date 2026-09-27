@@ -1,7 +1,12 @@
 #include "cli_photogrammetry_common.h"
 #include "FinalBaCameraExporter.h"
+#include "project/ProjectFramePinholeMetadataIO.h"
+#include "project/ProjectCameraIO.h"
+#include <placamera/tsai.h>
+#include "io/PathIO.h"
 
 #include <gtest/gtest.h>
+#include <placamera/frame_camera.h>
 
 #include <QFile>
 #include <QJsonArray>
@@ -13,13 +18,27 @@ namespace
 
     using xjw::cli::parsePhotogrammetryListLine;
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeFinalCamera(double centerX)
+    std::shared_ptr<const placamera::FramePinholeModel>
+    makeNativeFinalCamera(const std::string& imageId,
+                          double centerX,
+                          placamera::BrownConradyDistortion distortion = {},
+                          int uAxisSign = 1,
+                          bool depthAxisFlipped = false)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(900.0, 905.0, 320.0, 240.0);
-        camera.setPixelPitch(0.01);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {centerX, 0.0, 2.0});
-        return camera;
+        const placamera::FrameId frame("project-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("final-definition-" + imageId),
+                                                      {900.0, 905.0, 320.0, 240.0, 0.01, uAxisSign, 1},
+                                                      distortion,
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame,
+                                                      depthAxisFlipped);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("final-instance-" + imageId),
+            placamera::ImageId(imageId),
+            definition,
+            {640, 480},
+            placamera::Pose::create(frame, {centerX, 0.0, 2.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
     }
 
     void writePlaceholder(const QString& path)
@@ -166,10 +185,10 @@ namespace
         writePlaceholder(imageB);
         const QStringList images{imageA, imageB};
         const QJsonObject projectFiles = canonicalProjectFiles(images);
-        std::vector<xjw::camera_core::ImageId> imageIds;
+        std::vector<placamera::ImageId> imageIds;
         ASSERT_TRUE(xjw::cli::resolveProjectImageIds(projectFiles, images, &imageIds, nullptr));
 
-        xjw::camera_reference::ReferenceCameraPositionMap positions;
+        placamera::reference::ReferenceCameraPositionMap positions;
         QString error;
         ASSERT_TRUE(xjw::cli::readReferencePositionCsv(csvPath, projectFiles, images, imageIds, &positions, &error))
             << qPrintable(error);
@@ -183,6 +202,43 @@ namespace
         EXPECT_EQ(first->second.worldFrame().value(), "local");
     }
 
+    TEST(CliPhotogrammetryCommonTest, BuildsExternalTsaiReferenceWithoutLegacyNumericCamera)
+    {
+        const QStringList images{QStringLiteral("left.tif"), QStringLiteral("right.tif")};
+        const QJsonObject project_files = canonicalProjectFiles(images);
+        const std::vector<placamera::ImageId> image_ids{placamera::ImageId("cli-test-image-1"),
+                                                        placamera::ImageId("cli-test-image-2")};
+        std::vector<xjw::cli::PhotogrammetryInputItem> items(2);
+        items[0].imagePath = images[0];
+        items[0].cameraPath = QString::fromUtf8(TEST_DATA_DIR "/tsai/1.tsai");
+        items[0].hasCameraPath = true;
+        items[1].imagePath = images[1];
+
+        placamera::reference::ReferenceCameraGeometryMap geometries;
+        QString error;
+        ASSERT_TRUE(xjw::cli::buildReferenceCameraGeometries(
+            project_files, items, images, image_ids, true, &geometries, &error))
+            << error.toStdString();
+        ASSERT_EQ(geometries.size(), 2U);
+        const auto first = geometries.find(image_ids[0]);
+        ASSERT_NE(first, geometries.end());
+        EXPECT_EQ(first->second.model().imageId().value(), "cli-test-image-1");
+        EXPECT_EQ(first->second.model().instanceId().value(), "cli-test-instance-cli-test-image-1");
+        EXPECT_EQ(first->second.model().groundFrame().value(), "local");
+        EXPECT_NEAR(first->second.model().pose().center[0], -3206.42347383, 1.0e-8);
+        const auto second = geometries.find(image_ids[1]);
+        ASSERT_NE(second, geometries.end());
+        EXPECT_DOUBLE_EQ(second->second.model().pose().center[2], 2.0);
+
+        geometries.clear();
+        ASSERT_TRUE(xjw::cli::buildReferenceCameraGeometries(
+            project_files, items, images, image_ids, false, &geometries, &error))
+            << error.toStdString();
+        const auto canonical_first = geometries.find(image_ids[0]);
+        ASSERT_NE(canonical_first, geometries.end());
+        EXPECT_DOUBLE_EQ(canonical_first->second.model().pose().center[0], 0.0);
+    }
+
     TEST(CliPhotogrammetryCommonTest, ExportsCompleteFinalBaCameraSetForDirectReuse)
     {
         QTemporaryDir tempDir;
@@ -192,16 +248,20 @@ namespace
         writePlaceholder(imageA);
         writePlaceholder(imageB);
 
-        QMap<QString, QJsonObject> metadata;
-        metadata.insert(QDir::cleanPath(QFileInfo(imageA).absoluteFilePath()),
-                        xjw::cli::cameraToJson(makeFinalCamera(0.0)));
-        metadata.insert(QDir::cleanPath(QFileInfo(imageB).absoluteFilePath()),
-                        xjw::cli::cameraToJson(makeFinalCamera(1.0)));
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(cameras.add(makeNativeFinalCamera("first-image", 0.0)).ok());
+        ASSERT_TRUE(cameras.add(makeNativeFinalCamera("second-image", 1.0)).ok());
         const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("final camera export"));
         xjw::cli::FinalBaCameraExportResult exportResult;
         QString error;
 
-        ASSERT_TRUE(xjw::cli::exportFinalBaCameras({imageA, imageB}, metadata, outputDir, &exportResult, &error))
+        ASSERT_TRUE(
+            xjw::cli::exportFinalBaCameras({imageA, imageB},
+                                           {placamera::ImageId("first-image"), placamera::ImageId("second-image")},
+                                           cameras,
+                                           outputDir,
+                                           &exportResult,
+                                           &error))
             << qPrintable(error);
         EXPECT_EQ(exportResult.cameraPaths.size(), 2);
         EXPECT_TRUE(QFileInfo::exists(exportResult.imageCameraList));
@@ -210,7 +270,6 @@ namespace
 
         xjw::cli::PhotogrammetryListOptions options;
         options.allowImageOnlyRows = false;
-        options.loadCameras = true;
         options.requireExistingCameras = true;
         std::vector<xjw::cli::PhotogrammetryInputItem> items;
         ASSERT_TRUE(xjw::cli::readPhotogrammetryImageList(exportResult.imageCameraList, options, &items, &error))
@@ -218,10 +277,18 @@ namespace
         ASSERT_EQ(items.size(), 2u);
         EXPECT_EQ(QDir::cleanPath(items.at(0).imagePath), QDir::cleanPath(imageA));
         EXPECT_EQ(QDir::cleanPath(items.at(1).imagePath), QDir::cleanPath(imageB));
-        EXPECT_TRUE(items.at(0).hasLoadedCamera);
-        EXPECT_TRUE(items.at(1).hasLoadedCamera);
-        EXPECT_NEAR(items.at(0).camera.cameraCenter().at(0), 0.0, 1e-12);
-        EXPECT_NEAR(items.at(1).camera.cameraCenter().at(0), 1.0, 1e-12);
+        const auto first_camera =
+            placamera::loadTsaiFramePinhole(xjw::common::io::toUtf8Path(items.at(0).cameraPath),
+                                            placamera::CameraDefinitionId("first-exported-definition"),
+                                            placamera::FrameId("project-world"));
+        const auto second_camera =
+            placamera::loadTsaiFramePinhole(xjw::common::io::toUtf8Path(items.at(1).cameraPath),
+                                            placamera::CameraDefinitionId("second-exported-definition"),
+                                            placamera::FrameId("project-world"));
+        ASSERT_TRUE(first_camera) << first_camera.message();
+        ASSERT_TRUE(second_camera) << second_camera.message();
+        EXPECT_NEAR(first_camera.value().pose.center.at(0), 0.0, 1e-12);
+        EXPECT_NEAR(second_camera.value().pose.center.at(0), 1.0, 1e-12);
     }
 
     TEST(CliPhotogrammetryCommonTest, AcceptsExistingEmptyFinalCameraDestination)
@@ -231,18 +298,95 @@ namespace
         const QString image = QDir(tempDir.path()).filePath(QStringLiteral("image.png"));
         writePlaceholder(image);
 
-        QMap<QString, QJsonObject> metadata;
-        metadata.insert(QDir::cleanPath(QFileInfo(image).absoluteFilePath()),
-                        xjw::cli::cameraToJson(makeFinalCamera(0.0)));
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(cameras.add(makeNativeFinalCamera("image", 0.0)).ok());
         const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("precreated_empty"));
         ASSERT_TRUE(QDir().mkpath(outputDir));
 
         xjw::cli::FinalBaCameraExportResult exportResult;
         QString error;
-        ASSERT_TRUE(xjw::cli::exportFinalBaCameras({image}, metadata, outputDir, &exportResult, &error))
+        ASSERT_TRUE(xjw::cli::exportFinalBaCameras(
+            {image}, {placamera::ImageId("image")}, cameras, outputDir, &exportResult, &error))
             << qPrintable(error);
         EXPECT_TRUE(QFileInfo::exists(exportResult.imageCameraList));
         EXPECT_EQ(exportResult.cameraPaths.size(), 1);
+    }
+
+    TEST(CliPhotogrammetryCommonTest, FinalBaExportPreservesPlaCameraTsaiGeometry)
+    {
+        QTemporaryDir tempDir(QStringLiteral(PLASCAN_TEST_TMP_ROOT "/placamera-final-ba-XXXXXX"));
+        ASSERT_TRUE(tempDir.isValid());
+        const QString image = QDir(tempDir.path()).filePath(QStringLiteral("image.png"));
+        writePlaceholder(image);
+
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(
+            cameras.add(makeNativeFinalCamera("image", 3.0, {0.01, -0.002, 0.0003, 0.0004, -0.0005}, -1, true)).ok());
+        const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("native_export"));
+        xjw::cli::FinalBaCameraExportResult exported;
+        QString error;
+        ASSERT_TRUE(xjw::cli::exportFinalBaCameras(
+            {image}, {placamera::ImageId("image")}, cameras, outputDir, &exported, &error))
+            << qPrintable(error);
+        ASSERT_EQ(exported.cameraPaths.size(), 1);
+
+        const auto restored = placamera::loadTsaiFramePinhole(exported.cameraPaths.front().toStdString(),
+                                                              placamera::CameraDefinitionId("roundtrip-definition"),
+                                                              placamera::FrameId("project-world"));
+        ASSERT_TRUE(restored) << restored.message();
+        const auto& intrinsics = restored.value().definition->intrinsics();
+        const auto& distortion = restored.value().definition->distortion();
+        EXPECT_DOUBLE_EQ(intrinsics.focalX, 900.0);
+        EXPECT_DOUBLE_EQ(intrinsics.focalY, 905.0);
+        EXPECT_EQ(intrinsics.uAxisSign, -1);
+        EXPECT_EQ(intrinsics.vAxisSign, 1);
+        EXPECT_TRUE(restored->definition->depthAxisFlipped());
+        EXPECT_DOUBLE_EQ(distortion.radialK1, 0.01);
+        EXPECT_DOUBLE_EQ(distortion.radialK2, -0.002);
+        EXPECT_DOUBLE_EQ(distortion.radialK3, 0.0003);
+        EXPECT_DOUBLE_EQ(distortion.tangentialP1, 0.0004);
+        EXPECT_DOUBLE_EQ(distortion.tangentialP2, -0.0005);
+        EXPECT_DOUBLE_EQ(restored->pose.center[0], 3.0);
+        EXPECT_DOUBLE_EQ(restored->pose.center[2], 2.0);
+    }
+
+    TEST(CliPhotogrammetryCommonTest, FinalBaExportRejectsMismatchedImageIdBeforeWriting)
+    {
+        QTemporaryDir tempDir(QStringLiteral(PLASCAN_TEST_TMP_ROOT "/placamera-final-ba-XXXXXX"));
+        ASSERT_TRUE(tempDir.isValid());
+        const QString image = QDir(tempDir.path()).filePath(QStringLiteral("image.png"));
+        writePlaceholder(image);
+        placamera::CameraInstanceSet cameras;
+        ASSERT_TRUE(cameras.add(makeNativeFinalCamera("other-image", 0.0)).ok());
+        const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("invalid_export"));
+        QString error;
+
+        EXPECT_FALSE(xjw::cli::exportFinalBaCameras(
+            {image}, {placamera::ImageId("image")}, cameras, outputDir, nullptr, &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("没有影像对应"))) << qPrintable(error);
+        EXPECT_FALSE(QFileInfo::exists(outputDir));
+    }
+
+    TEST(CliPhotogrammetryCommonTest, PlaCameraMetadataDecoderRejectsInvalidImageSize)
+    {
+        QJsonObject metadata =
+            xjw::common::project::serializeFramePinholeModel(*makeNativeFinalCamera("metadata-test-image", 0.0));
+        metadata.remove(QStringLiteral("image_height"));
+        metadata.insert(QStringLiteral("image_width"), 640);
+        QString error;
+        EXPECT_FALSE(xjw::common::project::decodeFramePinholeMetadata(
+            metadata, placamera::CameraDefinitionId("invalid-image-size"), &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("宽高"))) << qPrintable(error);
+
+        metadata.insert(QStringLiteral("image_height"), 480.5);
+        EXPECT_FALSE(xjw::common::project::decodeFramePinholeMetadata(
+            metadata, placamera::CameraDefinitionId("fractional-image-size"), &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("正整数"))) << qPrintable(error);
+
+        metadata.insert(QStringLiteral("image_height"), 480);
+        EXPECT_TRUE(xjw::common::project::decodeFramePinholeMetadata(
+            metadata, placamera::CameraDefinitionId("valid-image-size"), &error))
+            << qPrintable(error);
     }
 
     TEST(CliPhotogrammetryCommonTest, RejectsIncompleteOrExistingFinalCameraDestination)
@@ -254,20 +398,26 @@ namespace
         writePlaceholder(imageA);
         writePlaceholder(imageB);
 
-        QMap<QString, QJsonObject> incomplete;
-        incomplete.insert(QDir::cleanPath(QFileInfo(imageA).absoluteFilePath()),
-                          xjw::cli::cameraToJson(makeFinalCamera(0.0)));
+        placamera::CameraInstanceSet incomplete;
+        ASSERT_TRUE(incomplete.add(makeNativeFinalCamera("first-image", 0.0)).ok());
         const QString missingOutput = QDir(tempDir.path()).filePath(QStringLiteral("missing_output"));
         QString error;
-        EXPECT_FALSE(xjw::cli::exportFinalBaCameras({imageA, imageB}, incomplete, missingOutput, nullptr, &error));
-        EXPECT_TRUE(error.contains(QStringLiteral("没有影像对应的相机")));
+        EXPECT_FALSE(
+            xjw::cli::exportFinalBaCameras({imageA, imageB},
+                                           {placamera::ImageId("first-image"), placamera::ImageId("second-image")},
+                                           incomplete,
+                                           missingOutput,
+                                           nullptr,
+                                           &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("没有影像对应的帧相机")));
         EXPECT_FALSE(QFileInfo::exists(missingOutput));
 
         const QString existingOutput = QDir(tempDir.path()).filePath(QStringLiteral("existing"));
         ASSERT_TRUE(QDir().mkpath(existingOutput));
         const QString sentinel = QDir(existingOutput).filePath(QStringLiteral("keep.txt"));
         writePlaceholder(sentinel);
-        EXPECT_FALSE(xjw::cli::exportFinalBaCameras({imageA}, incomplete, existingOutput, nullptr, &error));
+        EXPECT_FALSE(xjw::cli::exportFinalBaCameras(
+            {imageA}, {placamera::ImageId("first-image")}, incomplete, existingOutput, nullptr, &error));
         EXPECT_TRUE(error.contains(QStringLiteral("拒绝覆盖")));
         EXPECT_TRUE(QFileInfo::exists(sentinel));
     }

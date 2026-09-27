@@ -147,19 +147,38 @@ namespace xjw::mvs
             return array;
         }
 
-        QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+        QJsonObject cameraToJson(const placamera::FramePinholeModel& camera)
         {
-            const auto intrinsics = camera.intrinsics();
-            const auto rotation = camera.worldToCameraRotation();
-            const auto translation = camera.worldToCameraTranslation();
-            const auto center = camera.cameraCenter();
+            const auto& intrinsics = camera.pinholeDefinition().intrinsics();
+            const auto& center = camera.pose().center;
+            const auto& camera_to_world = camera.pose().cameraToWorldRotation;
+            const std::array<double, 9> rotation{camera_to_world[0],
+                                                 camera_to_world[3],
+                                                 camera_to_world[6],
+                                                 camera_to_world[1],
+                                                 camera_to_world[4],
+                                                 camera_to_world[7],
+                                                 camera_to_world[2],
+                                                 camera_to_world[5],
+                                                 camera_to_world[8]};
+            std::array<double, 3> translation{};
+            for (int row = 0; row < 3; ++row)
+            {
+                translation[static_cast<std::size_t>(row)] =
+                    -(rotation[static_cast<std::size_t>(row * 3)] * center[0] +
+                      rotation[static_cast<std::size_t>(row * 3 + 1)] * center[1] +
+                      rotation[static_cast<std::size_t>(row * 3 + 2)] * center[2]);
+            }
             return QJsonObject{{QStringLiteral("fx"), intrinsics.focalX},
                                {QStringLiteral("fy"), intrinsics.focalY},
                                {QStringLiteral("cx"), intrinsics.principalX},
                                {QStringLiteral("cy"), intrinsics.principalY},
                                {QStringLiteral("rotation_world_to_camera"), doublesToJson(rotation.data(), 9)},
                                {QStringLiteral("translation_world_to_camera"), doublesToJson(translation.data(), 3)},
-                               {QStringLiteral("camera_center"), doublesToJson(center.data(), 3)}};
+                               {QStringLiteral("camera_center"), doublesToJson(center.data(), 3)},
+                               {QStringLiteral("instance_id"), QString::fromStdString(camera.instanceId().value())},
+                               {QStringLiteral("image_id"), QString::fromStdString(camera.imageId().value())},
+                               {QStringLiteral("world_frame"), QString::fromStdString(camera.groundFrame().value())}};
         }
 
         QJsonObject artifactToJson(const QString& path, const cv::Mat& matrix)
@@ -446,11 +465,20 @@ namespace xjw::mvs
             }
 
             _usedBytes += required_bytes;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = result.cameraModel;
-            if (camera.isValid() && snapshot_size != depth.size())
+            std::shared_ptr<const placamera::FramePinholeModel> camera = result.cameraModel;
+            if (camera && snapshot_size != depth.size())
             {
-                camera = camera.scaledIntrinsics(static_cast<double>(snapshot_size.width) / depth.cols,
-                                                 static_cast<double>(snapshot_size.height) / depth.rows);
+                const auto definition = camera->pinholeDefinition().scaledIntrinsics(
+                    placamera::CameraDefinitionId(camera->definitionId().value() + ":snapshot"),
+                    static_cast<double>(snapshot_size.width) / depth.cols,
+                    static_cast<double>(snapshot_size.height) / depth.rows);
+                camera = std::make_shared<const placamera::FramePinholeModel>(
+                    placamera::FramePinholeModel::create(camera->instanceId(),
+                                                         camera->imageId(),
+                                                         definition,
+                                                         {snapshot_size.width, snapshot_size.height},
+                                                         camera->pose(),
+                                                         camera->captureTime()));
             }
             record.insert(QStringLiteral("status"), QStringLiteral("captured"));
             record.insert(QStringLiteral("original_width"), depth.cols);
@@ -459,7 +487,7 @@ namespace xjw::mvs
             record.insert(QStringLiteral("snapshot_height"), snapshot_size.height);
             record.insert(QStringLiteral("valid_pixel_count"), cv::countNonZero(snapshot_mask));
             record.insert(QStringLiteral("effective_native_final_depth_grid"), result.effectiveNativeFinalDepthGrid);
-            record.insert(QStringLiteral("camera_model"), camera.isValid() ? cameraToJson(camera) : QJsonObject{});
+            record.insert(QStringLiteral("camera_model"), camera ? cameraToJson(*camera) : QJsonObject{});
             record.insert(QStringLiteral("pixel_domain_diagnostics"), result.pixelDomainDiagnostics);
             record.insert(QStringLiteral("quality_metrics"), depthMapQualityMetricsToJson(result.qualityMetrics));
             record.insert(QStringLiteral("quality_decision"), depthFrameQualityDecisionToJson(result.qualityDecision));

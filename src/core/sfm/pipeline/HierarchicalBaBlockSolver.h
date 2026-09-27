@@ -1,8 +1,11 @@
 #pragma once
 
-#include "BundleAdjustSolver.h"
+#include <placamera/frame_numeric_state.h>
 #include "graph/CovisibilityPartitioner.h"
 #include "reconstruction/SfmReconstruction.h"
+
+#include <plabundle/options.h>
+#include <plabundle/result.h>
 
 #include <cstddef>
 #include <vector>
@@ -16,7 +19,8 @@ namespace xjw::hierarchical_ba_detail
         std::vector<ImageId> cameraIds;
         std::vector<Point3DId> pointIds;
         int fixedTrackCount = 0;
-        BAResult result;
+        plabundle::Result result;
+        std::vector<placamera::FramePinholeNumericState> refinedCameras;
         bool accepted = false;
     };
 
@@ -24,7 +28,7 @@ namespace xjw::hierarchical_ba_detail
                             const CovisibilityBlock& block,
                             const SfmReconstruction& reconstruction,
                             const std::vector<Point3DId>& candidatePointIds,
-                            const BAOptions& baseOptions,
+                            const plabundle::SolveOptions& baseOptions,
                             int threadsPerBlock);
 
 } // namespace xjw::hierarchical_ba_detail

@@ -121,8 +121,8 @@ namespace xjw
             return requested && scene_profile == MvsSceneProfile::Custom && !epipolar_rectified;
         }
 
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState
-        cameraForDepthGrid(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& raster_camera,
+        placamera::FramePinholeNumericState
+        cameraForDepthGrid(const placamera::FramePinholeNumericState& raster_camera,
                            const cv::Size& raster_size,
                            const cv::Size& depth_grid_size)
         {

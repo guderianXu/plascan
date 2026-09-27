@@ -119,7 +119,10 @@ namespace xjw::mesh::workflow::workflow_detail
     MeshColorView textureViewFromFrame(const DepthTsdfFrame& frame)
     {
         MeshColorView view;
-        view.camera = frame.camera;
+        if (frame.camera)
+        {
+            view.camera = placamera::FramePinholeNumericState::fromModel(*frame.camera);
+        }
         view.depth = frame.depth;
         view.confidence = frame.confidence;
         view.depthValidMask = frame.depthValidMask;
@@ -134,10 +137,10 @@ namespace xjw::mesh::workflow::workflow_detail
         {
             view.colorBgr = frame.colorBgr;
         }
-        if (!view.colorBgr.empty() && frame.depth.cols > 0 && frame.depth.rows > 0)
+        if (view.camera && !view.colorBgr.empty() && frame.depth.cols > 0 && frame.depth.rows > 0)
         {
             view.colorCamera =
-                frame.camera.scaledIntrinsics(static_cast<double>(view.colorBgr.cols) / frame.depth.cols,
+                view.camera->scaledIntrinsics(static_cast<double>(view.colorBgr.cols) / frame.depth.cols,
                                               static_cast<double>(view.colorBgr.rows) / frame.depth.rows);
         }
         return view;

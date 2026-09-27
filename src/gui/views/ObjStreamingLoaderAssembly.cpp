@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 namespace xjw::gui::obj_streaming
 {
@@ -55,8 +55,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
         progress(65, QStringLiteral("正在组装 OBJ 顶点数据..."));
     }
     const std::size_t vertexCount = input.vx.size();
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(
-        static_cast<plamatrix::Index>(vertexCount), 3);
+    plamatrix::MatrixXf points(static_cast<plamatrix::Index>(vertexCount), 3);
     std::size_t nextItemReport = 0;
     for (std::size_t index = 0; index < vertexCount; ++index)
     {
@@ -85,7 +84,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
                        [](bool value) { return value; });
     if (completeColors)
     {
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
+        plamatrix::Matrix<std::uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(
             static_cast<plamatrix::Index>(vertexCount), 3);
         nextItemReport = 0;
         for (std::size_t index = 0; index < vertexCount; ++index)
@@ -111,8 +110,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
 
     if (input.nx.size() == vertexCount)
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
-            static_cast<plamatrix::Index>(vertexCount), 3);
+        plamatrix::MatrixXf normals(static_cast<plamatrix::Index>(vertexCount), 3);
         nextItemReport = 0;
         for (std::size_t index = 0; index < vertexCount; ++index)
         {
@@ -137,8 +135,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
 
     if (!input.tx.empty())
     {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> textureCoordinates(
-            static_cast<plamatrix::Index>(input.tx.size()), 2);
+        plamatrix::MatrixXf textureCoordinates(static_cast<plamatrix::Index>(input.tx.size()), 2);
         nextItemReport = 0;
         for (std::size_t index = 0; index < input.tx.size(); ++index)
         {
@@ -163,7 +160,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
     if (!input.faceVertices.empty())
     {
         const auto faceCount = static_cast<plamatrix::Index>(input.faceVertices.size());
-        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(faceCount, 3);
+        plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> faces(faceCount, 3);
         nextItemReport = 0;
         for (plamatrix::Index face = 0; face < faceCount; ++face)
         {
@@ -188,7 +185,7 @@ std::shared_ptr<StreamingObjCloud> assembleObjCloud(
         if (input.faceTexturesComplete
             && input.faceTextures.size() == input.faceVertices.size())
         {
-            plamatrix::DenseMatrix<int, plamatrix::Device::CPU> textureIndices(faceCount, 3);
+            plamatrix::Matrix<int, plamatrix::Dynamic, plamatrix::Dynamic> textureIndices(faceCount, 3);
             nextItemReport = 0;
             for (plamatrix::Index face = 0; face < faceCount; ++face)
             {

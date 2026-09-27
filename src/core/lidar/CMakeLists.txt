@@ -7,25 +7,21 @@ add_library(lidar STATIC
     PlanetaryLaserJson.cpp
     PlanetaryLaserShot.cpp
     PlanetaryLineScanBundleAdjust.cpp
-    PlanetaryLineScanBundleAdjustModel.cpp
-    PlanetaryLineScanBundleAdjustPlaMatrix.cpp
-    PlanetaryLineScanBundleAdjustPlaMatrixAssembly.cpp
 )
 
 target_include_directories(lidar PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../overlap
-    ${CMAKE_CURRENT_SOURCE_DIR}/../bundle_adjust
 )
 
 target_link_libraries(lidar PUBLIC
-    bundle_adjust
-    camera_models_linescan
+    plabundle::plabundle
+    placamera::placamera
     plascan_common_io
     plapoint::plapoint
 )
 
-target_link_libraries(lidar PRIVATE Qt6::Core plamatrix::plamatrix)
+target_link_libraries(lidar PRIVATE Qt6::Core)
 target_compile_features(lidar PUBLIC cxx_std_20)
 set_property(TARGET lidar PROPERTY PLASCAN_HAS_PLANETARY_LINE_SCAN_BA TRUE)
 

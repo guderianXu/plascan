@@ -1,7 +1,8 @@
 #pragma once
 
-#include "BundleAdjustSolver.h"
 #include "PlanetaryLaserShot.h"
+
+#include <plabundle/constraints.h>
 
 #include <string>
 #include <vector>
@@ -44,7 +45,7 @@ struct PlanetaryLaserBaAdapterSummary
 };
 
 /**
- * @brief 构建独立激光测距约束，不修改普通摄影测量 BATrack。
+ * @brief 构建独立激光测距约束，不修改普通摄影测量 Track。
  *
  * 仅支持静态 frame camera 和已经换算为单程距离的观测。Line-scan、往返距离、
  * 坐标系不一致、同时影像映射歧义都会被明确拒绝。ISIS projected/virtual measure
@@ -53,7 +54,7 @@ struct PlanetaryLaserBaAdapterSummary
 bool buildPlanetaryLaserRangeConstraints(
     const PlanetaryLaserDataset &dataset,
     const PlanetaryLaserBaAdapterOptions &options,
-    std::vector<BALaserRangeConstraint> *constraints,
+    std::vector<plabundle::LaserRangeConstraint> *constraints,
     PlanetaryLaserBaAdapterSummary *summary = nullptr,
     std::string *errorMessage = nullptr);
 

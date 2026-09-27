@@ -119,107 +119,195 @@ namespace
         EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/CameraModel.cpp")));
         EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/PlanetaryLineScanCamera.h")));
         EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/PlanetaryLineScanCamera.cpp")));
+        EXPECT_FALSE(
+            sourceFileExists(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h")));
         const QString numericHeader =
-            readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
+            readSourceFile(QStringLiteral("3rdparty/placamera/include/placamera/frame_numeric_state.h"));
         expectContainsAll(numericHeader,
                           {
-                              "class FramePinholeNumericState final",
-                              "struct Pose",
-                              "projectWorldPointWithDepth",
-                              "rayForPixel",
+                              "class FramePinholeNumericState",
+                              "groundToImage",
+                              "imageToImagingLocus",
+                              "triangulatePair",
                           });
-        EXPECT_FALSE(numericHeader.contains(QStringLiteral("using FramePinholeNumericState =")));
+        const QString cameraBuild = readSourceFile(QStringLiteral("src/core/camera/CMakeLists.txt"));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_subdirectory(models/frame_pinhole)")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_library(camera INTERFACE)")));
+        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("placamera::gdal")));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_library(camera STATIC")));
+        for (const QString& removedAdapter : {QStringLiteral("TsaiFramePinholeIO.cpp"),
+                                              QStringLiteral("TsaiFramePinholeIO.h"),
+                                              QStringLiteral("PlanetaryLineScanIsdIO.cpp"),
+                                              QStringLiteral("PlanetaryLineScanIsdIO.h"),
+                                              QStringLiteral("RpcRasterIO.cpp"),
+                                              QStringLiteral("RpcRasterIO.h")})
+        {
+            EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/") + removedAdapter));
+        }
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("3rdparty/placamera/include/placamera/tsai.h")));
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("3rdparty/placamera/include/placamera/isd.h")));
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("3rdparty/placamera/include/placamera/rpc_raster.h")));
     }
 
-    TEST(CameraModelContractTest, CameraDomainLivesUnderSingleDirectory)
+    TEST(CameraModelContractTest, CameraReferenceAndProjectImportUsePlaCamera)
     {
         for (const QString& oldDirectory : {QStringLiteral("src/core/camera_core"),
+                                            QStringLiteral("src/core/camera/core"),
                                             QStringLiteral("src/core/camera_models"),
-                                            QStringLiteral("src/core/camera_project"),
-                                            QStringLiteral("src/core/camera_reference")})
+                                            QStringLiteral("src/core/camera_project")})
         {
             EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(oldDirectory)));
         }
-        for (const QString& directory : {QStringLiteral("src/core/camera/core"),
-                                         QStringLiteral("src/core/camera/models"),
-                                         QStringLiteral("src/core/camera/project"),
-                                         QStringLiteral("src/core/camera/reference")})
-        {
-            EXPECT_TRUE(QFileInfo(QDir(repoRoot()).filePath(directory)).isDir());
-        }
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/models/frame_pinhole/CMakeLists.txt")));
+        EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(QStringLiteral("src/core/camera_reference"))));
+        EXPECT_TRUE(sourceFileExists(
+            QStringLiteral("3rdparty/placamera/include/placamera/reference/CameraReferenceResolver.h")));
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("3rdparty/placamera/include/placamera/project_import.h")));
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("src/common/project/camera_reference/CameraReferenceSetStore.h")));
+        EXPECT_TRUE(sourceFileExists(QStringLiteral("src/gui/project/services/ProjectCameraProjectImport.cpp")));
+        const QString projectImport =
+            readSourceFile(QStringLiteral("src/gui/project/services/ProjectCameraProjectImport.cpp"));
+        EXPECT_TRUE(projectImport.contains(QStringLiteral("placamera::importCameraProject")));
+        EXPECT_TRUE(projectImport.contains(QStringLiteral("placamera::makeCentralCameraGeometry")));
+        EXPECT_FALSE(projectImport.contains(QStringLiteral("placamera::makeDatasetFramePinhole")));
+        EXPECT_FALSE(projectImport.contains(QStringLiteral("placamera::FramePinholeDefinition::create")));
+        EXPECT_TRUE(QFileInfo(QDir(repoRoot()).filePath(QStringLiteral("src/core/camera"))).isDir());
+        EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(QStringLiteral("src/core/camera_dataset_import"))));
+        EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(QStringLiteral("src/core/camera_io"))));
+        EXPECT_FALSE(QFileInfo::exists(QDir(repoRoot()).filePath(QStringLiteral("src/cli/camera"))));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/gui/dialogs/camera/CameraConvertDialog.cpp")));
 
         const QString coreBuild = readSourceFile(QStringLiteral("src/core/CMakeLists.txt"));
         const QString cameraBuild = readSourceFile(QStringLiteral("src/core/camera/CMakeLists.txt"));
-        EXPECT_TRUE(coreBuild.contains(QStringLiteral("plascan_core_add_optional_module(camera \"Camera\")")));
+        EXPECT_TRUE(
+            coreBuild.contains(QStringLiteral("plascan_core_add_optional_module(camera \"Camera Integration\")")));
+        EXPECT_FALSE(coreBuild.contains(QStringLiteral("camera_dataset_import")));
+        EXPECT_FALSE(coreBuild.contains(
+            QStringLiteral("plascan_core_add_optional_module(camera_reference \"Camera Reference\")")));
         EXPECT_FALSE(coreBuild.contains(QStringLiteral("plascan_core_add_optional_module(camera_core")));
-        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(core)")));
-        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(models/frame_pinhole)")));
-        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(project)")));
-        EXPECT_TRUE(cameraBuild.contains(QStringLiteral("add_subdirectory(reference)")));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_subdirectory(core)")));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_subdirectory(models/frame_pinhole)")));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_subdirectory(project)")));
+        EXPECT_FALSE(cameraBuild.contains(QStringLiteral("add_subdirectory(reference)")));
     }
 
-    TEST(CameraModelContractTest, GuiNumericCameraLookupUsesCanonicalRuntimeResolver)
+    TEST(CameraModelContractTest, GuiReferenceCameraLookupUsesCanonicalPlaCamera)
     {
         const QString source = readSourceFile(QStringLiteral("src/gui/project/services/ProjectSession.cpp"));
-        const int start = source.indexOf(QStringLiteral("ProjectSession::pinholeNumericStatesByImageId"));
+        const int start = source.indexOf(QStringLiteral("ProjectSession::getReferenceCameraGeometriesForImages"));
         ASSERT_GE(start, 0);
-        const int end = source.indexOf(QStringLiteral("ProjectSession::getPinholeNumericStatesForImages"), start);
+        const int end = source.indexOf(QStringLiteral("ProjectSession::getRpcCameraImagePaths"), start);
         ASSERT_GT(end, start);
         const QString getter = source.mid(start, end - start);
 
-        EXPECT_TRUE(getter.contains(QStringLiteral("runtime.framePinholeStatesForImages")));
-        EXPECT_FALSE(getter.contains(QStringLiteral("runtime.instances.forImage")));
-        EXPECT_FALSE(getter.contains(QStringLiteral("makeFramePinholeNumericState")));
+        EXPECT_TRUE(getter.contains(QStringLiteral("loadProjectCameras")));
+        EXPECT_TRUE(getter.contains(QStringLiteral("loaded.instances.forImage")));
+        EXPECT_TRUE(getter.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_FALSE(source.contains(QStringLiteral("makeSolverNumericState")));
     }
 
-    TEST(CameraModelContractTest, OverlapGeometryUsesValidatedNumericRayState)
+    TEST(CameraModelContractTest, OverlapGeometryUsesPlaCameraImagingLocus)
     {
         const QString header = readSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));
         const QString source = readSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.cpp"));
         const QString analyzer = readSourceFile(QStringLiteral("src/core/overlap/OverlapAnalyzer.cpp"));
 
-        EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeNumericState")));
-        EXPECT_FALSE(header.contains(QStringLiteral("FramePinholeCamera")));
-        EXPECT_TRUE(source.contains(QStringLiteral("rayForPixel")));
-        EXPECT_TRUE(source.contains(QStringLiteral("validateNumericalState")));
-        EXPECT_TRUE(analyzer.contains(QStringLiteral("rayForPixel")));
+        EXPECT_TRUE(header.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_FALSE(header.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_TRUE(source.contains(QStringLiteral("imageToImagingLocus")));
+        EXPECT_TRUE(analyzer.contains(QStringLiteral("imageToImagingLocus")));
         EXPECT_FALSE(analyzer.contains(QStringLiteral("uAxisSign")));
         EXPECT_FALSE(analyzer.contains(QStringLiteral("rayCam")));
         EXPECT_FALSE(analyzer.contains(QStringLiteral("radius = 1.0")));
     }
 
-    TEST(CameraModelContractTest, MeshAndQualityGeometryUseNumericCameraState)
+    TEST(CameraModelContractTest, MeshGeometryUsesNumericStateAndQualityRendererUsesPlaCamera)
     {
         const QString sources = readSourceFile(QStringLiteral("src/core/mesh/DepthMapMeshBuilder.h")) +
                                 readSourceFile(QStringLiteral("src/core/mesh/DepthRayMetric.h")) +
                                 readSourceFile(QStringLiteral("src/core/mesh/DepthTsdfSurfaceBuilder.h")) +
                                 readSourceFile(QStringLiteral("src/core/mesh/MeshColorizer.h")) +
-                                readSourceFile(QStringLiteral("src/core/mesh/VisualHullReconstructor.h")) +
-                                readSourceFile(QStringLiteral("src/core/qc/ModelImageQualityTypes.h")) +
-                                readSourceFile(QStringLiteral("src/core/qc/ModelMeshRenderer.h"));
+                                readSourceFile(QStringLiteral("src/core/mesh/VisualHullReconstructor.h"));
+        const QString quality_sources = readSourceFile(QStringLiteral("src/core/qc/ModelImageQualityTypes.h")) +
+                                        readSourceFile(QStringLiteral("src/core/qc/ModelMeshRenderer.h"));
         const QString depthFrames = readSourceFile(QStringLiteral("src/core/mesh/DepthMapMeshBuilder.cpp"));
 
         EXPECT_TRUE(sources.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_TRUE(quality_sources.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_FALSE(quality_sources.contains(QStringLiteral("FramePinholeNumericState")));
         EXPECT_FALSE(sources.contains(QStringLiteral("FramePinholeCamera")));
         EXPECT_FALSE(depthFrames.contains(QStringLiteral("attachLegacyReportCameras")));
         EXPECT_FALSE(depthFrames.contains(QStringLiteral("loadFromFile")));
     }
 
-    TEST(CameraModelContractTest, TerrainGeometryUsesCanonicalNumericCameraState)
+    TEST(CameraModelContractTest, TerrainGeometryUsesPlaCamera)
     {
-        const QString sources = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjector.h")) +
-                                readSourceFile(QStringLiteral("src/core/terrain/DemGenerator.h")) +
+        const QString ortho_header = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjector.h"));
+        const QString sources = readSourceFile(QStringLiteral("src/core/terrain/DemGenerator.h")) +
                                 readSourceFile(QStringLiteral("src/core/terrain/TerrainPipeline.h")) +
                                 readSourceFile(QStringLiteral("src/core/terrain/DemGeneratorFromDepth.cpp"));
         const QString orthoInput = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjectorGrid.cpp"));
+        const QString orthoProjection = readSourceFile(QStringLiteral("src/core/terrain/OrthoProjectorSupport.cpp"));
 
-        EXPECT_TRUE(sources.contains(QStringLiteral("FramePinholeNumericState")));
-        EXPECT_FALSE(sources.contains(QStringLiteral("FramePinholeCamera")));
-        EXPECT_TRUE(orthoInput.contains(QStringLiteral("CameraProjectRuntime::load")));
-        EXPECT_TRUE(orthoInput.contains(QStringLiteral("CameraOperation::OrthoProjection")));
-        EXPECT_TRUE(orthoInput.contains(QStringLiteral("framePinholeStatesForImages")));
-        EXPECT_FALSE(orthoInput.contains(QStringLiteral("decodeFramePinholeCamera")));
+        EXPECT_TRUE(ortho_header.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_FALSE(ortho_header.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_TRUE(sources.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_FALSE(sources.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_TRUE(orthoInput.contains(QStringLiteral("loadProjectCameras")));
+        EXPECT_TRUE(orthoInput.contains(QStringLiteral("requireCommonGroundFrame")));
+        EXPECT_FALSE(orthoInput.contains(QStringLiteral("makeSolverNumericState")));
+        EXPECT_TRUE(orthoProjection.contains(QStringLiteral("groundToImage")));
         EXPECT_FALSE(orthoInput.contains(QStringLiteral("fileName()")));
+    }
+
+    TEST(CameraModelContractTest, FinalBaTsaiExportUsesPlaCameraGeometry)
+    {
+        const QString exporter = readSourceFile(QStringLiteral("src/cli/common/FinalBaCameraExporter.cpp"));
+        const QString decoder = readSourceFile(QStringLiteral("src/common/project/ProjectFramePinholeMetadataIO.cpp"));
+        const QString writer = readSourceFile(QStringLiteral("3rdparty/placamera/src/tsai.cpp"));
+        const QString calibration = readSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraCalibrationData.cpp"));
+
+        EXPECT_TRUE(exporter.contains(QStringLiteral("placamera::CameraInstanceSet")));
+        EXPECT_TRUE(exporter.contains(QStringLiteral("finalCameras.forImage(imageId)")));
+        EXPECT_FALSE(exporter.contains(QStringLiteral("decodeFramePinholeMetadata")));
+        EXPECT_TRUE(decoder.contains(QStringLiteral("placamera::FramePinholeDefinition::create")));
+        EXPECT_TRUE(exporter.contains(QStringLiteral("saveTsaiFramePinhole")));
+        EXPECT_FALSE(exporter.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(decoder.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(writer.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_TRUE(calibration.contains(QStringLiteral("decodeFramePinholeMetadata")));
+        EXPECT_FALSE(calibration.contains(QStringLiteral("FramePinholeNumericState")));
+    }
+
+    TEST(CameraModelContractTest, CliListReaderDoesNotCarryLegacyNumericCamera)
+    {
+        const QString header = readSourceFile(QStringLiteral("src/cli/common/cli_photogrammetry_common.h"));
+        const QString source = readSourceFile(QStringLiteral("src/cli/common/cli_photogrammetry_common.cpp"));
+        EXPECT_FALSE(header.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(header.contains(QStringLiteral("loadCameras")));
+        EXPECT_FALSE(source.contains(QStringLiteral("loadFramePinholeNumericStateFromTsaiFile")));
+    }
+
+    TEST(CameraModelContractTest, WorkspaceAndMarkerPredictionLoadCanonicalPlaCameraInstances)
+    {
+        const QString workspace = readSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+        const QString marker = readSourceFile(QStringLiteral("src/gui/markers/MarkerFocusMeasurementDialog.cpp"));
+
+        for (const QString& source : {workspace, marker})
+        {
+            EXPECT_TRUE(source.contains(QStringLiteral("loadProjectCameras")));
+            EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeModel")));
+            EXPECT_FALSE(source.contains(QStringLiteral("FramePinholeNumericState")));
+            EXPECT_FALSE(source.contains(QStringLiteral("projectCameraModelParameters")));
+        }
+        const QString geometry = readSourceFile(QStringLiteral("src/core/control_points/geometry/MarkerGeometry.cpp"));
+        const QString predictor =
+            readSourceFile(QStringLiteral("src/core/control_points/geometry/MarkerProjectionPredictor.cpp"));
+        EXPECT_TRUE(marker.contains(QStringLiteral("MarkerImageView")));
+        EXPECT_FALSE(marker.contains(QStringLiteral("normalizedForPositiveDepth")));
+        EXPECT_TRUE(geometry.contains(QStringLiteral("imageToImagingLocus")));
+        EXPECT_TRUE(geometry.contains(QStringLiteral("groundToImage")));
+        EXPECT_TRUE(predictor.contains(QStringLiteral("groundToImage")));
     }
 
     TEST(GuiStyleContractTest, WorkspaceTreeUsesApplicationColorsInsteadOfSystemPalette)
@@ -281,8 +369,16 @@ namespace
         const QString pnpSolver = readSourceFile(QStringLiteral("src/core/sfm/pose/PnpSolver.cpp"));
         const QString incrementalSfm = readIncrementalSfmImplementation();
 
-        EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/geometry/ProjectionGeometry.h")));
-        EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/geometry/TriangulationQuality.h")));
+        EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/sfm/geometry/ProjectionGeometry.h")));
+        const QString frameCameraHeader =
+            readSourceFile(QStringLiteral("3rdparty/placamera/include/placamera/frame_camera.h"));
+        EXPECT_TRUE(frameCameraHeader.contains(QStringLiteral("groundToImageSigned")));
+        const QString qualityHeader = readSourceFile(QStringLiteral("src/core/sfm/geometry/TriangulationQuality.h"));
+        const QString qualitySource = readSourceFile(QStringLiteral("src/core/sfm/geometry/TriangulationQuality.cpp"));
+        EXPECT_TRUE(qualityHeader.contains(QStringLiteral("placamera::FramePinholeModel")));
+        EXPECT_TRUE(qualitySource.contains(QStringLiteral("groundToImageSigned")));
+        EXPECT_FALSE(qualityHeader.contains(QStringLiteral("FramePinholeNumericState")));
+        EXPECT_FALSE(qualitySource.contains(QStringLiteral("FramePinholeNumericState")));
         EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/geometry/OpenCvCameraAdapter.h")));
         expectNotContainsAll(initialFilter,
                              {
@@ -562,7 +658,7 @@ TEST(SfmSourceContractTest, SequenceInitialPoseGuessHandlesContiguousMissingRuns
                       });
 
     const QString poseGuess = sectionBetween(
-        sfmSource, "bool IncrementalSfm::makeSequenceInitialPoseGuess", "void IncrementalSfm::runBundleAdjust");
+        sfmSource, "bool IncrementalSfm::makeSequenceInitialPoseGuess", "void IncrementalSfm::rebuildVisibilityCache");
     expectContainsAll(poseGuess,
                       {
                           "findRegisteredSequenceNeighbor(imageId, -1",
@@ -614,8 +710,7 @@ TEST(SfmSourceContractTest, SequencePnpRecoveryRunsOnlyAfterStandardPnpFails)
                       });
 
     const int regular_branch = indexOfOrFail(registration, "// 常规增量阶段");
-    const int standard_pnp = indexOfOrFail(
-        registration, "pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);", regular_branch);
+    const int standard_pnp = indexOfOrFail(registration, "pnpResult = PnpSolver::solveCalibrated(", regular_branch);
     const int failure_gate = indexOfOrFail(registration, "if (!pnpResult.success)", standard_pnp);
     const int sequence_recovery = indexOfOrFail(registration, "pnpResult = solveSequenceRecovery();", failure_gate);
     EXPECT_LT(standard_pnp, failure_gate);
@@ -750,7 +845,7 @@ TEST(SfmSourceContractTest, FullReferenceRegistrationUsesReferenceResectionSched
                       {
                           "pnpOptions.useReferenceResection = true",
                           "static_cast<double>(0.002F)",
-                          "image_size->samples + image_size->lines",
+                          "image_size.samples + image_size.lines",
                       });
     expectContainsAll(solver,
                       {
@@ -758,7 +853,7 @@ TEST(SfmSourceContractTest, FullReferenceRegistrationUsesReferenceResectionSched
                           "constexpr std::size_t level_count = 10",
                           "thresholds[level] = thresholds[level - 1] * 0.75",
                           "for (int outer = 0; outer < 5; ++outer)",
-                          "refineReferencePose(normalized_camera, worldPoints, imagePoints, inliers, &pose, 10)",
+                          "refineReferencePose(*normalized_camera, worldPoints, imagePoints, inliers, &pose, 10)",
                       });
 }
 
@@ -1668,9 +1763,8 @@ TEST(MvsDepthArtifactContractTest, RecoveredPublicationPreservesPhotometricEvide
 TEST(MvsSchedulerContractTest, StandaloneSparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
     const QString cameraHeader =
-        readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.h"));
-    const QString cameraSource =
-        readSourceFile(QStringLiteral("src/core/camera/models/frame_pinhole/FramePinholeNumericState.cpp"));
+        readSourceFile(QStringLiteral("3rdparty/placamera/include/placamera/frame_numeric_state.h"));
+    const QString cameraSource = readSourceFile(QStringLiteral("3rdparty/placamera/src/frame_numeric_state.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
     const QString scheduler = readMvsPipelineImplementation();
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
@@ -1691,7 +1785,7 @@ TEST(MvsSchedulerContractTest, StandaloneSparseHintsUseProjectedSamplesAndPresca
                           "depthQuantileSamples",
                           "std::nth_element",
                           "projectedCandidates",
-                          "camera.projectWorldPointWithDepth",
+                          "camera.groundToImage",
                           "candidate.depth",
                       });
     expectNotContainsAll(projectedBlock,
@@ -1703,14 +1797,13 @@ TEST(MvsSchedulerContractTest, StandaloneSparseHintsUseProjectedSamplesAndPresca
                          });
     EXPECT_EQ(countOccurrences(projectedBlock, "for (size_t pointIndex : visiblePointIndices)"), 1);
 
-    expectContainsAll(cameraHeader, {"projectWorldPointWithDepth"});
+    expectContainsAll(cameraHeader, {"groundToImage", "signedDepth"});
     expectContainsAll(cameraSource,
                       {
-                          "FramePinholeNumericState::projectWorldPointWithDepth",
-                          "worldToCamera(world, camera)",
-                          "applyDistortion(x, y, &xd, &yd)",
+                          "FramePinholeNumericState::groundToImage",
+                          "internal::projectFrame(",
+                          "FramePinholeNumericState::signedDepth",
                       });
-    expectNotContainsAll(cameraSource, {"return projectWorldPoint(world, pixel)"});
 
     expectContainsAll(pyramid,
                       {
@@ -2064,7 +2157,15 @@ TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCor
                           "xjw::gui::tasks::DepthMapTask",
                           "xjw::mvs::fuseDepthMapsStreaming",
                           "xjw::gui::tasks::runGuardedWithOutcome",
+                          "PinholeModelsByImageId",
+                          "view.camera = std::move(camera)",
+                          "影像尺寸与 PlaCamera 相机不一致",
                       });
+    expectNotContainsAll(pointCloudController,
+                         {
+                             "FramePinholeNumericState",
+                             "toModel()",
+                         });
     const QString dense_publication =
         sectionBetween(pointCloudController, "const QJsonObject processing =", "manager->finishTask(true);");
     expectContainsAll(dense_publication,
@@ -2153,12 +2254,11 @@ TEST(GuiArchitectureContractTest, GuiTestsReuseProductionRuntimeLibrary)
     EXPECT_TRUE(testLinks.contains(QStringLiteral("gui_runtime")));
 }
 
-TEST(CoreArchitectureContractTest, IntersectionDemoIsRemoved)
+TEST(CoreArchitectureContractTest, LegacyIntersectionTargetIsRemoved)
 {
-    const QString intersectionCmake = readSourceFile(QStringLiteral("src/core/intersection/CMakeLists.txt"));
-
-    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/intersection/intersection_demo.cpp")));
-    EXPECT_FALSE(intersectionCmake.contains(QStringLiteral("intersection_demo")));
+    const QString coreCmake = readSourceFile(QStringLiteral("src/core/CMakeLists.txt"));
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/intersection/CMakeLists.txt")));
+    EXPECT_FALSE(coreCmake.contains(QStringLiteral("plascan_core_add_optional_module(intersection")));
 }
 
 TEST(GuiArchitectureContractTest, AsyncTasksExposeSharedCancellationVocabulary)

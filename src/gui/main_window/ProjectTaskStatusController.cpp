@@ -35,6 +35,8 @@ ProjectTaskStatusController::ProjectTaskStatusController(
         createStatus(QStringLiteral("pointCloudTaskStatus"), 220, tr("正在取消点云创建..."), widgetParent);
     _aerialTriangulationStatus = createStatus(
         QStringLiteral("aerialTriangulationTaskStatus"), 220, tr("正在取消空三/光束法平差..."), widgetParent);
+    _cameraStatus =
+        createStatus(QStringLiteral("cameraSetupTaskStatus"), 200, tr("正在取消相机导入/初始化..."), widgetParent);
     _tiePointStatus = createStatus(QStringLiteral("tiePointTaskStatus"), 180, tr("正在取消特征匹配..."), widgetParent);
     _maskStatus = createStatus(QStringLiteral("maskTaskStatus"), 180, tr("正在取消生成蒙版..."), widgetParent);
     _imageImportStatus = createStatus(QStringLiteral("imageImportTaskStatus"), 180, QString(), widgetParent);
@@ -54,6 +56,10 @@ ProjectTaskStatusController::ProjectTaskStatusController(
             &TaskStatusWidget::cancelRequested,
             _tasks,
             &xjw::gui::project::ProjectTaskOrchestrator::cancelActiveTask);
+    connect(_cameraStatus,
+            &TaskStatusWidget::cancelRequested,
+            _tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cancelCameraTask);
     connect(_tiePointStatus,
             &TaskStatusWidget::cancelRequested,
             this,
@@ -99,6 +105,14 @@ ProjectTaskStatusController::ProjectTaskStatusController(
             &xjw::gui::project::ProjectTaskOrchestrator::bundleAdjustFinished,
             this,
             &ProjectTaskStatusController::finishAerialTriangulation);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cameraProgressChanged,
+            this,
+            &ProjectTaskStatusController::updateCameraSetup);
+    connect(_tasks,
+            &xjw::gui::project::ProjectTaskOrchestrator::cameraFinished,
+            this,
+            &ProjectTaskStatusController::finishCameraSetup);
     connect(_tasks,
             &xjw::gui::project::ProjectTaskOrchestrator::maskGenerationProgressChanged,
             this,
@@ -235,6 +249,20 @@ void ProjectTaskStatusController::finishAerialTriangulation(bool success)
                QStringLiteral("aerial_triangulation"));
 }
 
+void ProjectTaskStatusController::updateCameraSetup(const QString& stage, int percent)
+{
+    updatePercentTask(_cameraStatus, stage, percent, true, QStringLiteral("camera_setup"));
+}
+
+void ProjectTaskStatusController::finishCameraSetup(bool success)
+{
+    finishTask(_cameraStatus,
+               success,
+               tr("相机导入/初始化完成"),
+               tr("相机导入/初始化已取消或失败"),
+               QStringLiteral("camera_setup"));
+}
+
 void ProjectTaskStatusController::updateMask(const QString& stage, int done, int total)
 {
     const int maximum = std::max(1, total);
@@ -351,15 +379,15 @@ TaskStatusWidget* ProjectTaskStatusController::createStatus(const QString& objec
 void ProjectTaskStatusController::updatePercentTask(
     TaskStatusWidget* status, const QString& stage, int percent, bool appendIntermediatePercent, const QString& taskId)
 {
+    const QString task_name = taskId == QStringLiteral("mesh")           ? tr("网格重建")
+                              : taskId == QStringLiteral("point_cloud")  ? tr("创建点云")
+                              : taskId == QStringLiteral("camera_setup") ? tr("相机导入/初始化")
+                                                                         : tr("空三/光束法平差");
     if (percent < 0)
     {
         if (!status->isActive() || status->progressMaximum() != 0)
         {
-            const QString name =
-                taskId == QStringLiteral("mesh")
-                    ? tr("网格重建")
-                    : (taskId == QStringLiteral("point_cloud") ? tr("创建点云") : tr("空三/光束法平差"));
-            beginTaskActivity(taskId, name, stage);
+            beginTaskActivity(taskId, task_name, stage);
             status->begin(stage, 0, 0);
         }
         status->updateProgress(stage, 0);
@@ -375,10 +403,7 @@ void ProjectTaskStatusController::updatePercentTask(
         appendIntermediatePercent && value > 0 && value < 100 ? QStringLiteral("%1 %2%").arg(stage).arg(value) : stage;
     if (!status->isActive() || status->progressMaximum() != 100)
     {
-        const QString name = taskId == QStringLiteral("mesh")
-                                 ? tr("网格重建")
-                                 : (taskId == QStringLiteral("point_cloud") ? tr("创建点云") : tr("空三/光束法平差"));
-        beginTaskActivity(taskId, name, text);
+        beginTaskActivity(taskId, task_name, text);
         status->begin(text, 0, 100);
     }
     status->updateProgress(text, value);
@@ -414,6 +439,7 @@ void ProjectTaskStatusController::resetTaskProgress()
     for (TaskStatusWidget* status : {_meshStatus,
                                      _pointCloudStatus,
                                      _aerialTriangulationStatus,
+                                     _cameraStatus,
                                      _tiePointStatus,
                                      _maskStatus,
                                      _imageImportStatus,
@@ -474,6 +500,7 @@ void ProjectTaskStatusController::refreshDashboard()
     append(QStringLiteral("mesh"), tr("网格重建"), _meshStatus);
     append(QStringLiteral("point_cloud"), tr("创建点云"), _pointCloudStatus);
     append(QStringLiteral("aerial_triangulation"), tr("空三/光束法平差"), _aerialTriangulationStatus);
+    append(QStringLiteral("camera_setup"), tr("相机导入/初始化"), _cameraStatus);
     append(QStringLiteral("tie_points"), tr("特征匹配"), _tiePointStatus);
     append(QStringLiteral("mask"), tr("生成蒙版"), _maskStatus);
     append(QStringLiteral("image_import"), tr("导入影像"), _imageImportStatus);

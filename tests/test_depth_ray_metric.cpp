@@ -1,4 +1,3 @@
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthRayMetric.h"
 
 #include <gtest/gtest.h>
@@ -12,13 +11,29 @@ namespace xjw::mesh
 namespace
 {
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+    placamera::FramePinholeNumericState makeCamera(bool depth_flipped = false,
+                                                   std::array<double, 3> center = {0.0, 0.0, 0.0})
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-        camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
-        camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-        return camera;
-}
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = 100.0;
+        intrinsics.focalY = 100.0;
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId("depth-ray-definition"),
+            intrinsics,
+            {},
+            placamera::PixelConvention::PixelCenter,
+            placamera::FrameId("world"),
+            depth_flipped);
+        const auto model = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("depth-ray-instance"),
+            placamera::ImageId("depth-ray-image"),
+            definition,
+            {256, 256},
+            placamera::Pose::create(placamera::FrameId("world"),
+                                    center,
+                                    {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+        return placamera::FramePinholeNumericState::fromModel(model);
+    }
 
 TEST(DepthRayMetricTest, CentrePixelUsesCameraZAsRayDistance)
 {
@@ -68,9 +83,7 @@ TEST(DepthRayMetricTest, OffAxisPixelSeparatesCameraZAndRayDistance)
 
 TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
-    camera.setCameraCenter({1.0, 2.0, 3.0});
-    camera.setDepthAxisFlipped(true);
+    const auto camera = makeCamera(true, {1.0, 2.0, 3.0});
 
     const DepthRayMetricSample sample =
         DepthRayMetric::evaluate(camera, {0.0, 0.0}, 5.0);
@@ -93,13 +106,9 @@ TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
         sample, -5.0, &point));
 }
 
-TEST(DepthRayMetricTest, RejectsInvalidCameraDepthPixelAndOffset)
+TEST(DepthRayMetricTest, RejectsInvalidDepthPixelAndOffset)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState invalid_camera;
-    EXPECT_FALSE(DepthRayMetric::evaluate(
-        invalid_camera, {0.0, 0.0}, 1.0).valid);
-
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
+    const auto camera = makeCamera();
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, 0.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, -1.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(

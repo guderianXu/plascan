@@ -60,11 +60,25 @@ namespace xjw::mvs
             return cv::Mat();
         }
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState cam = mvsPinholeCamera(views[refIdx].camera);
-        if (!cam.isValid())
+        if (!views[refIdx].camera)
         {
             return cv::Mat();
         }
+        const auto normalized = views[refIdx].camera->normalizedForPositiveDepth(
+            placamera::CameraDefinitionId(views[refIdx].camera->definitionId().value() + "-sparse-support-normalized"),
+            views[refIdx].camera->instanceId());
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId(normalized.definitionId().value() + "-undistorted"),
+            normalized.pinholeDefinition().intrinsics(),
+            {},
+            placamera::PixelConvention::PixelCenter,
+            normalized.groundFrame());
+        const auto camera = placamera::FramePinholeModel::create(normalized.instanceId(),
+                                                                 normalized.imageId(),
+                                                                 definition,
+                                                                 normalized.imageSize(),
+                                                                 normalized.pose(),
+                                                                 normalized.captureTime());
 
         const int minSourceViews = sourceIndices.empty() ? 0 : 1;
         std::vector<size_t> visiblePointIndices =
@@ -79,7 +93,7 @@ namespace xjw::mvs
         }
 
         const std::vector<ProjectedSparseDepthSample> samples =
-            collectProjectedSparseDepthSamples(sparse, cam, W, H, visiblePointIndices);
+            collectProjectedSparseDepthSamples(sparse, camera, W, H, visiblePointIndices);
         return buildSparseSupportMaskFromProjectedSamples(refIdx, W, H, samples);
     }
 

@@ -1,7 +1,10 @@
 #include "CameraCalibrationData.h"
 
-#include "ProjectCameraIO.h"
+#include "project/ProjectFramePinholeMetadataIO.h"
 #include "project/ProjectMetadata.h"
+#include "placamera_runtime/ProjectCameraStore.h"
+
+#include <placamera/rpc_camera.h>
 
 #include <QDir>
 #include <QFile>
@@ -16,6 +19,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
+#include <string>
 
 namespace xjw::gui::camera_calibration
 {
@@ -27,13 +32,46 @@ namespace xjw::gui::camera_calibration
             return xjw::common::project::normalizePath(path);
         }
 
-        QString calibrationModelKey(const QJsonObject& primary, const QJsonObject& fallback = {})
+        using ProjectCameras = QHash<QString, std::shared_ptr<const placamera::RasterModel>>;
+
+        ProjectCameras projectCamerasByPath(const QJsonObject& metadata, QString* error = nullptr)
         {
-            QString model = primary.value(QStringLiteral("model")).toString().trimmed();
-            if (model.isEmpty())
+            ProjectCameras cameras;
+            if (error)
             {
-                model = fallback.value(QStringLiteral("model")).toString().trimmed();
+                error->clear();
             }
+            const auto loaded =
+                xjw::placamera_runtime::loadProjectCameras(xjw::common::project::projectFilesRootObject(metadata));
+            if (!loaded.ok())
+            {
+                if (error)
+                {
+                    *error = loaded.errors.join(QStringLiteral("；"));
+                }
+                return cameras;
+            }
+            for (const QJsonValue& value : xjw::common::project::projectImageEntries(metadata))
+            {
+                const QJsonObject image = value.toObject();
+                const QString path = image.value(QStringLiteral("path")).toString();
+                const QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+                if (path.isEmpty() || image_id.isEmpty())
+                {
+                    continue;
+                }
+                const auto model = loaded.instances.forImage(placamera::ImageId(image_id.toStdString()));
+                if (model)
+                {
+                    cameras.insert(normalizedPathKey(path), model.value());
+                }
+            }
+            return cameras;
+        }
+
+        QString calibrationModelKey(const QJsonObject& camera)
+        {
+            const QString model = camera.value(QStringLiteral("model")).toString().trimmed();
             return model.isEmpty() ? QStringLiteral("__generic_camera__") : model.toCaseFolded();
         }
 
@@ -114,14 +152,24 @@ namespace xjw::gui::camera_calibration
             }
         }
 
-        QSize resolveImageSize(const QString& path, const QJsonObject& image, const QJsonObject& camera)
+        QSize resolveImageSize(const QString& path,
+                               const QJsonObject& image,
+                               const QJsonObject& camera,
+                               const std::shared_ptr<const placamera::RasterModel>& projectCamera)
         {
             int width = camera.value(QStringLiteral("image_width"))
                             .toInt(camera.value(QStringLiteral("image_samples"))
-                                       .toInt(image.value(QStringLiteral("width")).toInt()));
+                                       .toInt(image.value(QStringLiteral("width"))
+                                                  .toInt(image.value(QStringLiteral("samples")).toInt())));
             int height = camera.value(QStringLiteral("image_height"))
                              .toInt(camera.value(QStringLiteral("image_lines"))
-                                        .toInt(image.value(QStringLiteral("height")).toInt()));
+                                        .toInt(image.value(QStringLiteral("height"))
+                                                   .toInt(image.value(QStringLiteral("lines")).toInt())));
+            if (projectCamera && (width <= 0 || height <= 0))
+            {
+                width = projectCamera->imageSize().samples;
+                height = projectCamera->imageSize().lines;
+            }
             if (width > 0 && height > 0)
             {
                 return QSize(width, height);
@@ -131,16 +179,10 @@ namespace xjw::gui::camera_calibration
             return size.isValid() ? size : QSize();
         }
 
-        QJsonObject normalizedCalibration(const QJsonObject& camera, const QSize& imageSize)
+        QJsonObject normalizedCalibration(const placamera::FramePinholeDefinition& definition, const QSize& imageSize)
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-            if (!xjw::common::project::decodeFramePinholeNumericState(camera, &parsed))
-            {
-                return {};
-            }
-
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-                parsed.intrinsics();
+            const auto& intrinsics = definition.intrinsics();
+            const auto& distortion = definition.distortion();
             const double focalX = intrinsics.focalX;
             const double focalY = intrinsics.focalY;
             const double principalX = intrinsics.principalX;
@@ -159,13 +201,53 @@ namespace xjw::gui::camera_calibration
                 {QStringLiteral("cy"), imageSize.isValid() ? principalY - imageSize.height() * 0.5 : principalY},
                 {QStringLiteral("image_width"), imageSize.width()},
                 {QStringLiteral("image_height"), imageSize.height()}};
-            for (const QString& parameter : {QStringLiteral("k1"),
-                                             QStringLiteral("k2"),
-                                             QStringLiteral("k3"),
-                                             QStringLiteral("p1"),
-                                             QStringLiteral("p2")})
+            calibration.insert(QStringLiteral("k1"), distortion.radialK1);
+            calibration.insert(QStringLiteral("k2"), distortion.radialK2);
+            calibration.insert(QStringLiteral("k3"), distortion.radialK3);
+            calibration.insert(QStringLiteral("p1"), distortion.tangentialP1);
+            calibration.insert(QStringLiteral("p2"), distortion.tangentialP2);
+            return calibration;
+        }
+
+        QJsonObject normalizedCalibration(const QJsonObject& camera, const QSize& imageSize)
+        {
+            const auto parsed = xjw::common::project::decodeFramePinholeMetadata(
+                camera, placamera::CameraDefinitionId("calibration-report"));
+            return parsed ? normalizedCalibration(*parsed->definition, imageSize) : QJsonObject{};
+        }
+
+        QJsonObject projectCalibration(const placamera::RasterModel& camera, const QSize& imageSize)
+        {
+            if (const auto* frame = dynamic_cast<const placamera::FramePinholeModel*>(&camera))
             {
-                calibration.insert(parameter, camera.value(parameter).toDouble());
+                return normalizedCalibration(frame->pinholeDefinition(), imageSize);
+            }
+            const auto* rpc = dynamic_cast<const placamera::RpcModel*>(&camera);
+            if (!rpc)
+            {
+                return {};
+            }
+            const auto& parameters = rpc->rpcDefinition().parameters();
+            QJsonObject calibration{{QStringLiteral("model"), QStringLiteral("rpc00b")},
+                                    {QStringLiteral("line_off"), parameters.lineOffset},
+                                    {QStringLiteral("samp_off"), parameters.sampleOffset},
+                                    {QStringLiteral("lat_off"), parameters.latitudeOffset},
+                                    {QStringLiteral("long_off"), parameters.longitudeOffset},
+                                    {QStringLiteral("height_off"), parameters.heightOffset},
+                                    {QStringLiteral("line_scale"), parameters.lineScale},
+                                    {QStringLiteral("samp_scale"), parameters.sampleScale},
+                                    {QStringLiteral("lat_scale"), parameters.latitudeScale},
+                                    {QStringLiteral("long_scale"), parameters.longitudeScale},
+                                    {QStringLiteral("height_scale"), parameters.heightScale},
+                                    {QStringLiteral("image_width"), imageSize.width()},
+                                    {QStringLiteral("image_height"), imageSize.height()}};
+            if (parameters.errorBiasMeters)
+            {
+                calibration.insert(QStringLiteral("err_bias_m"), *parameters.errorBiasMeters);
+            }
+            if (parameters.errorRandomMeters)
+            {
+                calibration.insert(QStringLiteral("err_rand_m"), *parameters.errorRandomMeters);
             }
             return calibration;
         }
@@ -197,35 +279,36 @@ namespace xjw::gui::camera_calibration
                 {QStringLiteral("image_height"), imageSize.height()}};
         }
 
-        bool isUsableProjectCamera(const QJsonObject& camera)
-        {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState parsed;
-            return xjw::common::project::decodeFramePinholeNumericState(camera, &parsed);
-        }
-
-        void applyImageMetadata(const QJsonObject& image, const QJsonObject& camera, CameraCalibrationRecord* record)
+        void applyImageMetadata(const QJsonObject& image,
+                                const std::shared_ptr<const placamera::RasterModel>& camera,
+                                CameraCalibrationRecord* record)
         {
             if (!record)
             {
                 return;
             }
 
-            record->hasProjectCamera = !camera.isEmpty();
+            record->hasProjectCamera = camera != nullptr;
             record->path = image.value(QStringLiteral("path")).toString(record->path);
             record->name = QFileInfo(record->path).fileName();
-            record->model = camera.value(QStringLiteral("model")).toString(record->model);
-            record->imageWidth = camera.value(QStringLiteral("image_width"))
-                                     .toInt(camera.value(QStringLiteral("image_samples"))
-                                                .toInt(image.value(QStringLiteral("width")).toInt(record->imageWidth)));
-            record->imageHeight =
-                camera.value(QStringLiteral("image_height"))
-                    .toInt(camera.value(QStringLiteral("image_lines"))
-                               .toInt(image.value(QStringLiteral("height")).toInt(record->imageHeight)));
-
-            if (!camera.isEmpty() && !record->hasInitial && !record->hasAdjusted)
+            if (camera)
             {
-                record->initial = camera;
-                record->hasInitial = true;
+                record->model = QString::fromStdString(std::string(camera->modelType()));
+                record->imageWidth = camera->imageSize().samples;
+                record->imageHeight = camera->imageSize().lines;
+            }
+            else
+            {
+                record->imageWidth = image.value(QStringLiteral("width"))
+                                         .toInt(image.value(QStringLiteral("samples")).toInt(record->imageWidth));
+                record->imageHeight = image.value(QStringLiteral("height"))
+                                          .toInt(image.value(QStringLiteral("lines")).toInt(record->imageHeight));
+            }
+
+            if (camera && !record->hasInitial && !record->hasAdjusted)
+            {
+                record->initial = projectCalibration(*camera, QSize(record->imageWidth, record->imageHeight));
+                record->hasInitial = !record->initial.isEmpty();
                 record->initialSource = QStringLiteral("project_camera_prior");
                 record->adjustmentStatus = QStringLiteral("not_run");
                 if (record->model == QStringLiteral("rpc00b"))
@@ -238,10 +321,12 @@ namespace xjw::gui::camera_calibration
 
     } // namespace
 
-    QJsonArray buildCameraCalibrationComparison(const QJsonObject& projectMetadata,
-                                                const QMap<QString, QJsonObject>& adjustedCameras,
-                                                const QJsonObject& sfmDiagnostics)
+    static QJsonArray buildCameraCalibrationComparisonImpl(const QJsonObject& projectMetadata,
+                                                           const QMap<QString, QJsonObject>& adjustedCameras,
+                                                           const QJsonObject& sfmDiagnostics,
+                                                           const ProjectCameras* nativeAdjustedCameras)
     {
+        const ProjectCameras projectCameras = projectCamerasByPath(projectMetadata);
         QHash<QString, QJsonObject> imagesByPath;
         for (const QJsonValue& value : xjw::common::project::projectImageEntries(projectMetadata))
         {
@@ -275,12 +360,11 @@ namespace xjw::gui::camera_calibration
         {
             const QString path = normalizedPathKey(it.key());
             const QJsonObject image = imagesByPath.value(path);
-            const QJsonObject projectCamera =
-                xjw::common::project::projectCameraModelParameters(projectMetadata, image);
-            const QSize size = resolveImageSize(path, image, it.value());
+            const auto projectCamera = projectCameras.value(path);
+            const QSize size = resolveImageSize(path, image, it.value(), projectCamera);
             resolvedSizesByPath.insert(path, size);
-            const QString modelKey = priorModel.isEmpty() ? calibrationModelKey(it.value(), projectCamera)
-                                                          : priorModel.trimmed().toCaseFolded();
+            const QString modelKey =
+                priorModel.isEmpty() ? calibrationModelKey(it.value()) : priorModel.trimmed().toCaseFolded();
             addResolutionEvidence(modelKey, size, &resolutionConsensusByModel, &resolutionConflicts);
         }
 
@@ -289,19 +373,32 @@ namespace xjw::gui::camera_calibration
         {
             const QString path = normalizedPathKey(it.key());
             const QJsonObject image = imagesByPath.value(path);
-            const QJsonObject projectCamera =
-                xjw::common::project::projectCameraModelParameters(projectMetadata, image);
-            const bool usesProjectCamera = isUsableProjectCamera(projectCamera);
-            const QString modelKey = priorModel.isEmpty() ? calibrationModelKey(it.value(), projectCamera)
-                                                          : priorModel.trimmed().toCaseFolded();
+            const auto projectCamera = projectCameras.value(path);
+            const auto projectFrame = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(projectCamera);
+            const bool usesProjectCamera = projectFrame != nullptr;
+            const QString modelKey =
+                priorModel.isEmpty() ? calibrationModelKey(it.value()) : priorModel.trimmed().toCaseFolded();
             QSize imageSize = resolvedSizesByPath.value(path);
             if (imageSize.width() <= 0 || imageSize.height() <= 0)
             {
                 imageSize = resolutionConsensusByModel.value(modelKey);
             }
-            const QJsonObject initial = usesProjectCamera ? normalizedCalibration(projectCamera, imageSize)
-                                                          : automaticInitialCalibration(imageSize, focalScale);
-            const QJsonObject adjusted = normalizedCalibration(it.value(), imageSize);
+            const QJsonObject initial = usesProjectCamera
+                                            ? normalizedCalibration(projectFrame->pinholeDefinition(), imageSize)
+                                            : automaticInitialCalibration(imageSize, focalScale);
+            QJsonObject adjusted;
+            if (nativeAdjustedCameras)
+            {
+                const auto nativeAdjusted = nativeAdjustedCameras->constFind(path);
+                if (nativeAdjusted != nativeAdjustedCameras->constEnd())
+                {
+                    adjusted = projectCalibration(*nativeAdjusted.value(), imageSize);
+                }
+            }
+            else
+            {
+                adjusted = normalizedCalibration(it.value(), imageSize);
+            }
             QStringList optimized;
             if (adaptiveFittingApplied)
             {
@@ -356,9 +453,47 @@ namespace xjw::gui::camera_calibration
         return comparisons;
     }
 
-    QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(const QJsonObject& projectMetadata,
-                                                                   const QJsonObject& bundleAdjustReport)
+    QJsonArray buildCameraCalibrationComparison(const QJsonObject& projectMetadata,
+                                                const QMap<QString, QJsonObject>& adjustedCameras,
+                                                const QJsonObject& sfmDiagnostics)
     {
+        return buildCameraCalibrationComparisonImpl(projectMetadata, adjustedCameras, sfmDiagnostics, nullptr);
+    }
+
+    QJsonArray buildCameraCalibrationComparison(const QJsonObject& projectMetadata,
+                                                const placamera::CameraInstanceSet& adjustedCameras,
+                                                const QJsonObject& sfmDiagnostics)
+    {
+        QHash<QString, QString> pathByImageId;
+        for (const QJsonValue& value : xjw::common::project::projectImageEntries(projectMetadata))
+        {
+            const QJsonObject image = value.toObject();
+            pathByImageId.insert(image.value(QStringLiteral("image_uuid")).toString(),
+                                 normalizedPathKey(image.value(QStringLiteral("path")).toString()));
+        }
+        QMap<QString, QJsonObject> summaries;
+        ProjectCameras nativeCameras;
+        for (const auto& camera : adjustedCameras.values())
+        {
+            const QString path = pathByImageId.value(QString::fromStdString(camera->imageId().value()));
+            if (path.isEmpty())
+            {
+                continue;
+            }
+            summaries.insert(path,
+                             QJsonObject{{QStringLiteral("model"), QString::fromStdString(std::string(camera->modelType()))},
+                                         {QStringLiteral("image_width"), camera->imageSize().samples},
+                                         {QStringLiteral("image_height"), camera->imageSize().lines}});
+            nativeCameras.insert(path, camera);
+        }
+        return buildCameraCalibrationComparisonImpl(projectMetadata, summaries, sfmDiagnostics, &nativeCameras);
+    }
+
+    QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(const QJsonObject& projectMetadata,
+                                                                   const QJsonObject& bundleAdjustReport,
+                                                                   QString* cameraError)
+    {
+        const ProjectCameras projectCameras = projectCamerasByPath(projectMetadata, cameraError);
         QVector<CameraCalibrationRecord> records;
         QHash<QString, int> recordIndexByPath;
 
@@ -398,13 +533,17 @@ namespace xjw::gui::camera_calibration
         {
             const QJsonObject image = value.toObject();
             const QString path = image.value(QStringLiteral("path")).toString();
-            const QJsonObject camera = xjw::common::project::projectCameraModelParameters(projectMetadata, image);
-            if (path.trimmed().isEmpty() || camera.isEmpty())
+            if (path.trimmed().isEmpty())
             {
                 continue;
             }
 
             const QString key = normalizedPathKey(path);
+            const auto camera = projectCameras.value(key);
+            if (!camera)
+            {
+                continue;
+            }
             const auto existing = recordIndexByPath.constFind(key);
             if (existing != recordIndexByPath.constEnd())
             {

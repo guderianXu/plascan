@@ -2,7 +2,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "PatchMatchHostUtils.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 
 #include <opencv2/imgproc.hpp>
 
@@ -27,24 +27,64 @@ struct CudaPatchMatchRunStats
     double elapsedMs = 0.0;
 };
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera(double fu,
-                                                                       double fv,
-                                                                       double cu,
-                                                                       double cv,
-                                                                       int uDir,
-                                                                       int vDir,
-                                                                       const double r_wc[9],
-                                                                       const double center[3],
-                                                                       bool depthAxisFlipped)
+placamera::FramePinholeModel makeCamera(double fu,
+                                        double fv,
+                                        double cu,
+                                        double cv,
+                                        int uDir,
+                                        int vDir,
+                                        const double r_wc[9],
+                                        const double center[3],
+                                        bool depthAxisFlipped,
+                                        const std::string& frame_id = "patchmatch-test-world")
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    std::array<double, 9> rotation{{r_wc[0], r_wc[1], r_wc[2], r_wc[3], r_wc[4], r_wc[5], r_wc[6], r_wc[7], r_wc[8]}};
-    std::array<double, 3> cameraCenter{{center[0], center[1], center[2]}};
-    camera.setIntrinsics(fu, fv, cu, cv);
-    camera.setPose(rotation, cameraCenter);
-    camera.setAxisDirections(uDir, vDir);
-    camera.setDepthAxisFlipped(depthAxisFlipped);
-    return camera;
+    static std::atomic_size_t next_camera_id{0};
+    const std::string id = std::to_string(next_camera_id.fetch_add(1));
+    const placamera::FrameId frame(frame_id);
+    const auto definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("patchmatch-definition-" + id),
+                                                  placamera::FrameIntrinsics{fu, fv, cu, cv, 1.0, uDir, vDir},
+                                                  {},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  frame,
+                                                  depthAxisFlipped);
+    const placamera::ImageSize image_size{static_cast<int>(cu * 2.0), static_cast<int>(cv * 2.0)};
+    const placamera::Pose pose =
+        placamera::Pose::create(frame,
+                                {center[0], center[1], center[2]},
+                                {r_wc[0], r_wc[1], r_wc[2], r_wc[3], r_wc[4], r_wc[5], r_wc[6], r_wc[7], r_wc[8]});
+    return placamera::FramePinholeModel::create(placamera::CameraInstanceId("patchmatch-instance-" + id),
+                                                placamera::ImageId("patchmatch-image-" + id),
+                                                definition,
+                                                image_size,
+                                                pose);
+}
+
+TEST(PatchMatchCameraContractTest, RejectsMismatchedImageGridAndNonCanonicalAxis)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const cv::Mat image(48, 64, CV_8U, cv::Scalar(128));
+    const auto reference = makeCamera(50.0, 50.0, 32.0, 24.0, 1, 1, identity, center, false);
+    const auto wrong_grid = makeCamera(50.0, 50.0, 31.5, 24.0, 1, 1, identity, center, false);
+    const auto wrong_axis = makeCamera(50.0, 50.0, 32.0, 24.0, -1, 1, identity, center, false);
+    const auto wrong_frame = makeCamera(50.0, 50.0, 32.0, 24.0, 1, 1, identity, center, false, "another-world");
+    xjw::mvs::PatchMatchConfig config;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
+    cv::Mat depth;
+    std::string error;
+
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        image, {image}, reference, {wrong_grid}, 1.0f, 10.0f, config, depth, nullptr, &error));
+    EXPECT_NE(error.find("image size"), std::string::npos);
+    error.clear();
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        image, {image}, reference, {wrong_axis}, 1.0f, 10.0f, config, depth, nullptr, &error));
+    EXPECT_NE(error.find("pinhole geometry"), std::string::npos);
+    error.clear();
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        image, {image}, reference, {wrong_frame}, 1.0f, 10.0f, config, depth, nullptr, &error));
+    EXPECT_NE(error.find("frame"), std::string::npos);
 }
 
 cv::Mat makeTexturedImage(int width, int height)
@@ -83,8 +123,8 @@ cv::Mat makeShiftedImage(const cv::Mat& image, int disparity)
 CudaPatchMatchRunStats
 executeCudaPatchMatchCase(const cv::Mat& refGray,
                           const cv::Mat& srcGray,
-                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState& srcCam,
+                          const placamera::FramePinholeModel& refCam,
+                          const placamera::FramePinholeModel& srcCam,
                           bool useParallelSweep,
                           int iterations,
                           double expectedDepth = 10.0)
@@ -107,7 +147,7 @@ executeCudaPatchMatchCase(const cv::Mat& refGray,
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{srcCam},
+        std::vector<placamera::FramePinholeModel>{srcCam},
         5.0f,
         15.0f,
         config,
@@ -180,10 +220,10 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
 
     const auto refCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, refCenter, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto srcCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, srcCenter, false)
-            .normalizedForPositiveDepth();
+            ;
 
     xjw::mvs::PatchMatchConfig config;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
@@ -204,7 +244,7 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{srcCam},
+        std::vector<placamera::FramePinholeModel>{srcCam},
         5.0f,
         15.0f,
         config,
@@ -261,10 +301,10 @@ TEST(PatchMatchCpuCancellationTest, StopsPromptlyInsideLongPixelSweeps)
     const double source_center[3] = {BASELINE, 0.0, 0.0};
     const auto reference_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, reference_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto source_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, source_center, false)
-            .normalizedForPositiveDepth();
+            ;
 
     std::atomic_bool cancelled{false};
     xjw::mvs::PatchMatchConfig config;
@@ -286,7 +326,7 @@ TEST(PatchMatchCpuCancellationTest, StopsPromptlyInsideLongPixelSweeps)
                                      reference,
                                      std::vector<cv::Mat>{source},
                                      reference_camera,
-                                     std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                     std::vector<placamera::FramePinholeModel>{
                                          source_camera},
                                      5.0f,
                                      15.0f,
@@ -330,10 +370,10 @@ TEST(PatchMatchCudaCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
     const double source_center[3] = {BASELINE, 0.0, 0.0};
     const auto reference_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, reference_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto source_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, source_center, false)
-            .normalizedForPositiveDepth();
+            ;
 
     std::atomic_bool cancelled{false};
     xjw::mvs::PatchMatchConfig config;
@@ -354,7 +394,7 @@ TEST(PatchMatchCudaCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
                                      reference,
                                      std::vector<cv::Mat>{source},
                                      reference_camera,
-                                     std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                     std::vector<placamera::FramePinholeModel>{
                                          source_camera},
                                      5.0f,
                                      30.0f,
@@ -399,10 +439,10 @@ TEST(PatchMatchOpenClCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
     const double source_center[3] = {BASELINE, 0.0, 0.0};
     const auto reference_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, reference_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto source_camera =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, source_center, false)
-            .normalizedForPositiveDepth();
+            ;
 
     for (const xjw::mvs::OpenClDeviceInfo& device : devices)
     {
@@ -431,7 +471,7 @@ TEST(PatchMatchOpenClCancellationTest, StopsPromptlyAtTiledKernelCheckpoints)
                                          reference,
                                          std::vector<cv::Mat>{source},
                                          reference_camera,
-                                         std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{
+                                         std::vector<placamera::FramePinholeModel>{
                                              source_camera},
                                          5.0f,
                                          30.0f,
@@ -468,12 +508,12 @@ TEST(PatchMatchCpuRegressionTest, FrozenGeometryGuidanceEmitsSeparatePhotometric
     const double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     const double reference_center[3] = {0.0, 0.0, 0.0};
     const double source_center[3] = {baseline, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
+    const placamera::FramePinholeModel reference_camera =
         makeCamera(focal, focal, width * 0.5, height * 0.5, 1, 1, identity, reference_center, false)
-            .normalizedForPositiveDepth();
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
+            ;
+    const placamera::FramePinholeModel source_camera =
         makeCamera(focal, focal, width * 0.5, height * 0.5, 1, 1, identity, source_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const cv::Mat reference = makeTexturedImage(width, height);
     const cv::Mat source = makeShiftedImage(reference, disparity);
 
@@ -502,7 +542,7 @@ TEST(PatchMatchCpuRegressionTest, FrozenGeometryGuidanceEmitsSeparatePhotometric
         reference,
         std::vector<cv::Mat>{source},
         reference_camera,
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{source_camera},
+        std::vector<placamera::FramePinholeModel>{source_camera},
         5.0f,
         15.0f,
         config,
@@ -548,16 +588,12 @@ TEST(PatchMatchHostCameraDataTest, PreservesRelativePoseAfterLargeCommonWorldTra
     constexpr double translated_reference_center[3] = {100000000.0, -200000000.0, 300000000.0};
     constexpr double translated_source_center[3] = {100000001.0, -200000000.25, 300000000.5};
 
-    const auto reference =
-        makeCamera(800.0, 790.0, 320.0, 240.0, 1, 1, identity, reference_center, false).normalizedForPositiveDepth();
-    const auto source =
-        makeCamera(810.0, 805.0, 318.0, 242.0, 1, 1, identity, source_center, false).normalizedForPositiveDepth();
+    const auto reference = makeCamera(800.0, 790.0, 320.0, 240.0, 1, 1, identity, reference_center, false);
+    const auto source = makeCamera(810.0, 805.0, 318.0, 242.0, 1, 1, identity, source_center, false);
     const auto translated_reference =
-        makeCamera(800.0, 790.0, 320.0, 240.0, 1, 1, identity, translated_reference_center, false)
-            .normalizedForPositiveDepth();
+        makeCamera(800.0, 790.0, 320.0, 240.0, 1, 1, identity, translated_reference_center, false);
     const auto translated_source =
-        makeCamera(810.0, 805.0, 318.0, 242.0, 1, 1, identity, translated_source_center, false)
-            .normalizedForPositiveDepth();
+        makeCamera(810.0, 805.0, 318.0, 242.0, 1, 1, identity, translated_source_center, false);
 
     const auto local_data = xjw::mvs::buildPatchMatchSourceCameraData(reference, source, 2);
     const auto translated_data = xjw::mvs::buildPatchMatchSourceCameraData(translated_reference, translated_source, 2);
@@ -569,6 +605,22 @@ TEST(PatchMatchHostCameraDataTest, PreservesRelativePoseAfterLargeCommonWorldTra
     EXPECT_FLOAT_EQ(local_data[13], -1.0f);
     EXPECT_FLOAT_EQ(local_data[14], 0.25f);
     EXPECT_FLOAT_EQ(local_data[15], -0.5f);
+}
+
+TEST(PatchMatchHostCameraDataTest, PacksTypedCameraToWorldRotationAsRelativeWorldToCamera)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double source_rotation[9] = {0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const auto reference = makeCamera(80.0, 80.0, 32.0, 24.0, 1, 1, identity, center, false);
+    const auto source = makeCamera(80.0, 80.0, 32.0, 24.0, 1, 1, source_rotation, center, false);
+
+    const auto data = xjw::mvs::buildPatchMatchSourceCameraData(reference, source, 1);
+    const std::array<float, 9> expected_rotation{0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    for (std::size_t index = 0; index < expected_rotation.size(); ++index)
+    {
+        EXPECT_FLOAT_EQ(data[4 + index], expected_rotation[index]);
+    }
 }
 
 TEST(PatchMatchCpuRegressionTest, DepthIsInvariantToLargeCommonWorldTranslation)
@@ -589,17 +641,17 @@ TEST(PatchMatchCpuRegressionTest, DepthIsInvariantToLargeCommonWorldTranslation)
 
     const auto reference =
         makeCamera(focal, focal, image_width * 0.5, image_height * 0.5, 1, 1, identity, reference_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto source =
         makeCamera(focal, focal, image_width * 0.5, image_height * 0.5, 1, 1, identity, source_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto translated_reference =
         makeCamera(
             focal, focal, image_width * 0.5, image_height * 0.5, 1, 1, identity, translated_reference_center, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto translated_source =
         makeCamera(focal, focal, image_width * 0.5, image_height * 0.5, 1, 1, identity, translated_source_center, false)
-            .normalizedForPositiveDepth();
+            ;
 
     xjw::mvs::PatchMatchConfig config;
     config.backend = xjw::mvs::PatchMatchBackend::Cpu;
@@ -610,8 +662,8 @@ TEST(PatchMatchCpuRegressionTest, DepthIsInvariantToLargeCommonWorldTranslation)
     config.doMedianBlur = false;
     config.doBilateralFilter = false;
 
-    const auto estimate = [&](const xjw::camera_models::frame_pinhole::FramePinholeNumericState& reference_camera,
-                              const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source_camera,
+    const auto estimate = [&](const placamera::FramePinholeModel& reference_camera,
+                              const placamera::FramePinholeModel& source_camera,
                               cv::Mat* depth,
                               cv::Mat* confidence)
     {
@@ -620,7 +672,7 @@ TEST(PatchMatchCpuRegressionTest, DepthIsInvariantToLargeCommonWorldTranslation)
             reference_image,
             std::vector<cv::Mat>{source_image},
             reference_camera,
-            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>{source_camera},
+            std::vector<placamera::FramePinholeModel>{source_camera},
             5.0f,
             15.0f,
             config,
@@ -769,10 +821,10 @@ CudaPatchMatchRunStats runCudaPatchMatchSmallPlane(bool useParallelSweep)
 
     const auto refCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, refCenter, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto srcCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, srcCenter, false)
-            .normalizedForPositiveDepth();
+            ;
 
     CudaPatchMatchRunStats stats = executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, useParallelSweep, 3);
     const cv::Rect roi(16, 12, IMAGE_WIDTH - 32, IMAGE_HEIGHT - 24);
@@ -866,10 +918,10 @@ TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWar
     const double srcCenter[3] = {BASELINE, 0.0, 0.0};
     const auto refCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, refCenter, false)
-            .normalizedForPositiveDepth();
+            ;
     const auto srcCam =
         makeCamera(FOCAL, FOCAL, IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5, 1, 1, identity, srcCenter, false)
-            .normalizedForPositiveDepth();
+            ;
 
     (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, true, 4);
     (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, false, 4);

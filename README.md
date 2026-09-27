@@ -26,6 +26,7 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
+- nlohmann/json（header-only）：由两套 vcpkg manifest 提供，用于标准 JSON I/O 与空三连接点读取。
 - vcpkg；manifest 提供底层编解码、测试和系统库，OpenCV 仅支持仓库锁定的 5.0.0 源码构建。Qt 6.11.2、GDAL 3.12.4、AprilTag 3.4.5、OpenEXR 3.2.2 与 Imath 3.1.9 由同一源码依赖入口构建。OpenMP 由编译器工具链提供，PoissonRecon 始终使用仓库固定源码；PlaMatrix 的 CPU 稠密和块稀疏线性代数均为原生实现。
 - TensorRT 可选；用于 GPU 匹配与 AI 蒙版，并与 CUDA Toolkit 一样作为外部 SDK 提供。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
@@ -40,7 +41,7 @@
 ```bash
 git clone https://github.com/guderianXu/plascan.git
 cd plascan
-git submodule update --init 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon 3rdparty/Imath 3rdparty/openexr
+git submodule update --init 3rdparty/plabundle 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/qt 3rdparty/opencv 3rdparty/gdal 3rdparty/apriltag 3rdparty/PoissonRecon 3rdparty/Imath 3rdparty/openexr
 git -C 3rdparty/qt submodule update --init qtbase qtshadertools
 ```
 
@@ -101,7 +102,44 @@ python scripts/env/configure_with_env.py --source-deps --build --test -- \
   -DPLASCAN_BUILD_GUI=OFF -DPLASCAN_BUILD_GUI_TESTS=OFF
 ```
 
-项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
+需要同时关闭 PDF/地形报告绘制时，使用 CPU headless preset（Linux 示例）：
+
+```bash
+python scripts/env/configure_with_env.py --source-deps --preset linux-source-headless-release \
+  --no-tensorrt-auto-install --build --test
+```
+
+Windows/macOS 将 preset 前缀替换为 `windows`/`macos`。此配置关闭 GUI、GUI 测试、CUDA、
+OpenCL、TensorRT 和 `PLASCAN_BUILD_QT_PRESENTATION`，保留 CLI 和核心测试；已构建源码依赖时
+可省略 `--source-deps`。打印 CLI 不生成，小天体 CLI 默认输出 GeoTIFF/JSON，显式 `--preview`
+会提示缺少呈现能力。正常桌面配置仍默认输出 PNG，`--no-preview` 不初始化图形平台。
+headless 仍需要 QtCore/Gui/Network/Concurrent：标靶图像转换和网格纹理
+仍依赖公开 QtGui；它不是无 Qt 的算法构建。
+
+项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。PlaPoint 的 PCL 对齐公开接口依赖 Eigen3，已列入 vcpkg manifest；系统包构建须提供 Eigen3 的 CMake 配置。
+`3rdparty/plabundle` 当前通过 git submodule 固定到独立仓库，提供可独立构建、测试、安装和消费的
+`plabundle::plabundle` 纯数值契约、PlaMatrix CPU 参考求解器及 CUDA/OpenCL Schur-PCG 后端；
+Qt-free adapter 与 CPU/CUDA/OpenCL 已通过固定 synthetic、全约束和质量回退回归。PlaScan 的
+frame/Brown BA 生产入口已全部直接使用 PlaBundle，旧 `src/core/bundle_adjust` 重复实现已删除；
+SfM 的 `SfmBundleCameraCodec` 负责 PlaCamera 求解状态到 PlaBundle 数值相机的转换和身份保持。行星 line-scan 仍保留为 PlaScan
+专用求解模块；PlaBundle 已转换为独立 submodule。
+
+`3rdparty/placoordinate` 的源码随 PlaScan 仓库版本固定，无需单独克隆；它是坐标语义的独立 C++20 库，公开
+`placoordinate::types`、`placoordinate::transform`、可选 `placoordinate::gdal`、
+`placoordinate::presets` 和 `placoordinate::state`。它统一持有 frame/time、CRS/context、solver 尺度、
+静态 frame 图、单位换算、GDAL 变换/误差传播、常用地球/月球投影预设和 JSON 持久化；可单独构建、测试、
+安装并通过 `find_package(placoordinate)` 消费。
+PlaScan 内部业务模块已直接包含 `<placoordinate/...>`、使用 `placoordinate` 命名空间并链接对应组件；
+旧 `src/core/coordinate_system` 及其 include、namespace、CMake target 兼容入口均已删除。
+
+`3rdparty/placamera` 的源码也随 PlaScan 仓库版本固定。其 `FrameId`、`TimeScale` 和 `TimeReference` 直接复用
+`placoordinate::types`，不再维护重复坐标身份；相机核心不会因此传递 GDAL 或 JSON 依赖。PlaScan 的
+Qt-free adapter 已通过 frame、RPC 和 line-scan parity 门禁；独立的 project adapter 支持 canonical
+工程原子加载/回写。静态面阵 SfM、BA、MVS、GUI 工程相机等生产入口已使用 PlaCamera；
+Tsai、Middlebury、EPFL、COLMAP、Metashape、RPC 元数据和 USGSCSM ISD 格式语义由 PlaCamera 处理。
+面阵与线阵完整标定、精确主点分解以及探元仿射也由 PlaCamera 统一持有和持久化。
+`src/core/camera` 只保留兼容 target；GUI 项目服务直接调用 PlaCamera 导入外部相机工程并按工程影像身份绑定，
+不再生成中间 Tsai 目录、`image_camera.lis` 或转换摘要。
 
 ### vcpkg / CPack 跨平台构建
 
@@ -137,7 +175,11 @@ QT_QPA_PLATFORM=offscreen python scripts/env/run_tests.py \
 `CMAKE_CUDA_COMPILER`、`CMAKE_CUDA_HOST_COMPILER` 和 `PLASCAN_CUDA_ARCHITECTURES`；不要修改或复用
 CPU 构建的 vcpkg installed tree。可先用 `clinfo -l` 确认 OpenCL ICD 能枚举目标设备。
 仓库的 `cuda` overlay 会让 vcpkg port 优先遵循 preset 的 `CUDACXX`。
-Linux manifest 同时显式启用 `vulkan-loader[xcb]`，保证 Qt Vulkan RHI 能为 XCB 窗口创建 surface；
+Linux 两套 manifest 同时显式启用 `vulkan-loader[xcb,wayland]`，保证 Qt Vulkan RHI 能为 X11/XCB
+和原生 Wayland 窗口创建 surface；构建机需要 `libwayland-dev`。GUI 直接启动时会从安装布局或主构建树的
+`CMakeCache.txt` 定位 GDAL/PROJ 数据，无需额外设置 `PROJ_DATA`。
+Qt 的 Wayland 客户端标题栏不支持 Vulkan surface，因此 GUI 在 Wayland 菜单栏右侧提供最小化、
+最大化/还原、全屏和关闭按钮；全屏可通过同一按钮、F11 或 Esc 退出，关闭仍执行未保存项目确认。
 显式 OpenCL 模式允许使用 NVIDIA OpenCL，Auto/混合模式仍会与同一物理 GPU 的 CUDA 接口去重。
 CUDA 模型后端还需要 Vulkan 开发库和 `glslangValidator`。标准 vcpkg manifest 会安装
 `glslang[tools]`；也可在 Linux 使用系统 `glslang-tools`，或在 Windows 配置 Vulkan SDK 的
@@ -347,7 +389,7 @@ python scripts\env\configure_with_env.py --source-deps --build
 
 `.venv/` 已加入 git 忽略列表。后续需要运行 Python 模型导出、测试或辅助脚本时，优先复用这个环境；只有 CI、打包或特殊隔离场景才通过 `--runtime-dir` 指定其它虚拟环境位置。
 
-GitHub Actions 的 Linux 构建测试也使用仓库 `.venv/`：先安装 NumPy/Pillow/SciPy，
+GitHub Actions 的 Linux 构建测试也使用仓库 `.venv/`：先安装 NumPy/Pillow/SciPy/rasterio/trimesh，
 再从固定 OpenCV 5.0.0 源码构建 Python 绑定。运行测试前会校验解释器、OpenCV 版本与
 PNG/TIFF 编解码，CMake/CTest 显式使用同一 Python；不依赖系统 OpenCV 或 OpenCV 4 wheel。
 
@@ -501,18 +543,10 @@ path/to/image_001.png path/to/image_001.tsai
 path/to/image_002.png path/to/image_002.tsai
 ```
 
-外部相机文件可先用通用转换工具生成 PlaScan 输入。当前支持自动识别、Middlebury `*_par.txt`、
-EPFL/Strecha `.camera`、COLMAP text sparse (`cameras.txt` / `images.txt`) 和 Metashape
-`doc.xml` / `Project.files/0/chunk.zip`。Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2`
-会写入 PlaScan `.tsai`；暂不支持的 `k4/b1/b2` 会在 `summary.json` 中记录 warning：
-
-```bash
-cmake --build build --target camera_convert_cli -j$(nproc)
-build/bin/camera_convert_cli --format auto \
-  --input testData/photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing \
-  --output-dir build/camera_inputs/dino \
-  --overwrite
-```
+已有 `.plascan` 工程可在“相机校准 → 导入相机工程”中直接选择 Middlebury `*_par.txt`、
+EPFL/Strecha `.camera`、COLMAP text sparse (`cameras.txt` / `images.txt`) 或展开后的 Metashape
+`doc.xml`。PlaCamera 负责格式解析，PlaScan 只负责与当前工程影像匹配和持久化；无法无损映射到
+PlaCamera Brown 面阵模型的 fisheye、thin-prism 或非零有理分母模型会明确拒绝。
 
 三维建模专用 CLI 仍提供无 GUI 的批处理链路，只生成稀疏点云、密集点云和三维模型，不生成 DEM/DOM：
 
@@ -557,11 +591,12 @@ PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量�
 
 `bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
 point-only、已知位姿和联合相机/内参的小问题统一使用参考 PlaMatrix CPU，达到阈值后
-Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix OpenCL。
+Auto 优先选择 PlaMatrix CUDA，其次选择 PlaMatrix Vulkan，最后选择 PlaMatrix OpenCL。
 联合相机/三维点问题还可显式传 `--ba-backend plamatrix_cpu`、`plamatrix_cuda` 或
-`plamatrix_opencl`。三者使用同一套参考 BA：关键点尺度白化普通最小二乘、右乘 Euler/参考点局部参数化、
+`plamatrix_vulkan` 或 `plamatrix_opencl`。四者使用同一套参考 BA：关键点尺度白化普通最小二乘、右乘 Euler/参考点局部参数化、
 定长基线 gauge、零阻尼起步、Armijo 回溯和 `1e-6` RMS 更新终止。CPU 使用直接稠密 Cholesky；
-CUDA/OpenCL 使用严格容差的 CSR 块 Jacobi-PCG，只把 Schur 线性代数放到设备上。track/Jacobian 采用确定性
+CUDA/OpenCL 使用严格容差的 CSR 块 Jacobi-PCG；Vulkan 使用自动启用的 FP32 混合精度 PCG，只把 Schur
+线性求解放到设备上。track/Jacobian 采用确定性
 分片并行装配。设备路径会记录实际设备名且不隐式回退 CPU，
 并复用 Schur CSR pattern、设备缓冲和固定拓扑；CUDA 的 Schur 数值由装配 kernel 直接交给 PCG，不再经过
 device-host-device 往返。OpenCL 在 NVIDIA 595.84 驱动上保留稳定的主机 handoff，但同样复用装配缓冲和拓扑。
@@ -575,46 +610,45 @@ Schur 数值装配位置与耗时、混合精度实际使用状态、
 track 比例；候选未通过状态或质量门控时才回退到当前 PlaMatrix CPU，不额外运行对照 BA。
 旧 `legacy_cpu` 后端名及无效旧求解参数已删除，不再兼容读取。
 联合 BA 可传 `--ba-backend auto`、`--ba-backend plamatrix_cpu`、
-`--ba-backend plamatrix_cuda` 或 `--ba-backend plamatrix_opencl`。
-`--ba-plamatrix-device` 指定 PlaMatrix CUDA/OpenCL 设备索引；OpenCL 进程级选择仍由
+`--ba-backend plamatrix_cuda`、`--ba-backend plamatrix_vulkan` 或 `--ba-backend plamatrix_opencl`。
+`--ba-plamatrix-device` 指定 PlaMatrix CUDA/Vulkan/OpenCL 设备索引；OpenCL 进程级选择仍由
 `PLAMATRIX_OPENCL_DEVICE_INDEX` 初始化，二者不一致时明确报错。
-Auto BA 使用后端独立的两层规模策略。常规门槛为 CUDA `128` 台相机且 `30000` 条观测、OpenCL
-`160` 台相机且 `50000` 条观测；高密度覆盖要求至少 `120` 台相机，并分别达到 CUDA `150000`、
-OpenCL `200000` 条观测。任一层满足即可选择对应设备，CUDA 仍优先于 OpenCL。CLI 可用
-`--ba-min-cuda-*`、`--ba-min-opencl-*`、`--ba-min-dense-cameras` 和对应的
+Auto BA 使用后端独立的两层规模策略。常规门槛为 CUDA `128` 台相机且 `30000` 条观测，Vulkan/OpenCL
+为 `160` 台相机且 `50000` 条观测；高密度覆盖要求至少 `120` 台相机，并分别达到 CUDA `150000`、
+Vulkan/OpenCL `200000` 条观测。任一层满足即可选择对应设备，顺序为 CUDA → Vulkan → OpenCL。CLI 可用
+`--ba-min-cuda-*`、`--ba-min-vulkan-*`、`--ba-min-opencl-*`、`--ba-min-dense-cameras` 和对应的
 `--ba-min-*-dense-observations` 覆盖默认值。阈值依据与适用边界见
 `docs/benchmarks/2026-09-04-reference-ba-backend-efficiency.md`。
 
 BA 后端基准可单独运行：
 
 ```bash
-cmake --build build/windows-vcpkg-cuda-release --target ba_backend_benchmark -j32
+cmake -S 3rdparty/plabundle -B build/plabundle-benchmark \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPLABUNDLE_PLAMATRIX_SOURCE_DIR="$PWD/3rdparty/plamatrix" \
+  -DPLABUNDLE_BUILD_TESTS=OFF \
+  -DPLABUNDLE_BUILD_BENCHMARKS=ON
+cmake --build build/plabundle-benchmark --target plabundle_benchmark --parallel
 python scripts/bench/run_ba_backend_benchmark.py \
-  --exe build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe \
+  --exe build/plabundle-benchmark/plabundle_benchmark \
   --out build/ba_benchmarks/ba_backend_benchmark.csv \
   --summary-json build/ba_benchmarks/ba_backend_benchmark.json \
   --cases small,medium,large \
-  --backends plamatrix_cpu,plamatrix_cuda,plamatrix_opencl,auto \
+  --backends plamatrix_cpu,plamatrix_cuda,plamatrix_vulkan,plamatrix_opencl,auto \
   --repeat 3 \
   --iterations 8 \
-  --threads 32
+  --threads 32 \
+  --device 0
 ```
 
-也可以直接重放正式 SfM 输出的真实 BA 拓扑。`--dataset-json` 读取
-`sfm_sparse_points.json` 中的三维点和像点观测，`--camera-list` 按顺序加载对应 TSAI 相机；
-真实模式会关闭后端回退、质量门控和迭代日志，独立测量指定后端：
-
-```powershell
-build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
-  --dataset-json build/benchmark_runs/<run>/sfm_sparse_points.json `
-  --camera-list testData/photogrammetry_benchmarks/<dataset>/prepared/plascan/image_camera.lis `
-  --backend plamatrix_cpu --iterations 20 --threads 32 --repetitions 5 --refine-pose
-```
+Windows 将可执行文件路径改为 `build/plabundle-benchmark/Release/plabundle_benchmark.exe`
+或所用生成器的实际输出路径。`--mixed-precision` 可请求受保护的 FP32 PCG 初值；脚本把一次进程内的
+首轮标为 cold，后续轮标为 warm，并输出 CSV 与可选 JSON 中位数摘要。该独立 benchmark 使用确定性
+synthetic 联合位姿问题，不读取 PlaScan 工程、TSAI 或 SfM JSON。
 
 参考 PlaMatrix 三后端共享零阻尼起步和 Armijo 回溯；CPU 使用可复用块图最小度符号分析的原生稀疏 Schur Cholesky，CUDA/OpenCL
-仅使用设备 Schur-PCG。旧 `--max-dense-schur-cameras` 参数已删除。输出同时保留
-`seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器、PlaMatrix
-接受/拒绝步、代价统计和 RMS。
+仅使用设备 Schur-PCG。旧 `--max-dense-schur-cameras` 参数已删除。输出报告
+API 墙钟、solve/total、实际后端、实际线性求解器、Schur pattern 复用、设备装配、代价统计和 RMS。
 
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
 `--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；
@@ -658,7 +692,8 @@ sudo docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
 ```
 src/
 ├── core/
-│   ├── camera/                # 相机模型与外部相机格式转换
+│   ├── camera/             # PlaCamera 组件的 CMake INTERFACE 兼容 target
+│   ├── placamera_runtime/     # 工程相机状态与 PlaCamera 的原子读写
 │   ├── image_matching/        # CUDA SIFT + TensorRT LightGlue、几何验证与 .pimatch I/O
 │   ├── matchphototask/        # 候选对、任务内特征缓存、匹配及连接点编排
 │   ├── aerial_triangulation/  # 对齐照片/空中三角测量工作流
@@ -670,7 +705,6 @@ src/
 │   ├── stereo_dem/            # RPC TIFF 立体交会生成 DEM，并基于 DEM 生成 RPC DOM
 │   ├── qc/                    # ReconstructionQualityReport, PointCloudAlignment, DemDifference
 │   ├── overlap/               # 影像重叠度分析
-│   ├── intersection/          # 前方交汇精度检验
 │   └── pipeline/              # SfM 服务层
 ├── gui/                       # Qt6 图形界面
 │   ├── dialogs/               # 参数配置对话框
@@ -702,18 +736,11 @@ CLI 在源码和 CMake 中按领域拆分。影像匹配接口已收敛为原始
 一键重建进一步拆为 Options、Runner、Progress 和 Report；密集点云细化、流式深度融合及点云
 PLY 写出由 `core/mvs` 服务承担，避免 CLI 与核心流程维护两套实现。
 
-### 相机格式转换 (`camera_convert_cli`)
+### 相机工程导入（GUI）
 
-```bash
-camera_convert_cli --list-formats
-camera_convert_cli --format middlebury-par -i ./dinoSparseRing -o ./plascan_cameras --overwrite
-camera_convert_cli --format epfl-camera -i ./epfl_scene -o ./plascan_cameras --overwrite
-camera_convert_cli --format colmap-text -i ./south-building/sparse -o ./plascan_cameras --overwrite
-camera_convert_cli --format metashape-xml -i ./depth_images -o ./plascan_cameras --overwrite
-```
-
-输出目录包含 `image_camera.lis`、`cameras/*.tsai` 和 `summary.json`，可直接传给重建类 CLI。
-Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
+在相机校准窗口点击“导入相机工程…”，选择工程文件或目录。PlaCamera 自动识别 Middlebury、
+EPFL/Strecha、COLMAP text 和展开后的 Metashape XML，PlaScan 将可无损表达的相机直接绑定到当前
+工程影像。该流程不再创建旧式 Tsai 转换目录；单个已有 Tsai 相机仍可绑定到指定影像。
 
 ### 双影像匹配 (`feature_match_cli`)
 

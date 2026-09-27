@@ -66,7 +66,7 @@ QJsonObject summaryFromStats(const QString &path,
 } // namespace
 
 ReferenceTerrainBaApplyResult applyReferenceTerrainPriorToBundleAdjust(
-    std::vector<xjw::BATrack> *tracks,
+    std::vector<plabundle::Track> *tracks,
     xjw::gui::BaServiceOptions *options)
 {
     ReferenceTerrainBaApplyResult result;
@@ -118,19 +118,19 @@ ReferenceTerrainBaApplyResult applyReferenceTerrainPriorToBundleAdjust(
     const ReferenceTerrainPriorStats stats =
         ReferenceTerrainPrior::attachHeightPlaneConstraints(grid, tracks, priorOptions);
 
-    BAOptions priorBaOptions = ReferenceTerrainPrior::makeBundleAdjustOptions(priorOptions);
-    if (priorBaOptions.enableLaserPlaneConstraints && stats.associatedTrackCount > 0)
+    const plabundle::SolveOptions priorBaOptions = ReferenceTerrainPrior::makeBundleAdjustOptions(priorOptions);
+    if (stats.associatedTrackCount > 0)
     {
-        options->baOpt.enableLaserPlaneConstraints = true;
-        options->baOpt.laserPlaneWeight = priorBaOptions.laserPlaneWeight;
-        options->baOpt.laserHuberDeltaMeters = priorBaOptions.laserHuberDeltaMeters;
-        options->baOpt.refineCameraPose = true;
+        options->enableLaserPlaneConstraints = true;
+        options->baOpt.constraints.laserPlaneWeight = priorBaOptions.constraints.laserPlaneWeight;
+        options->baOpt.constraints.laserHuberDeltaMeters = priorBaOptions.constraints.laserHuberDeltaMeters;
+        options->baOpt.calibration.refineCameraPose = true;
     }
 
     result.success = true;
     result.summary = summaryFromStats(demPath, priorOptions, stats);
     result.summary[QStringLiteral("ba_constraints_enabled")] =
-        options->baOpt.enableLaserPlaneConstraints && stats.associatedTrackCount > 0;
+        options->enableLaserPlaneConstraints && stats.associatedTrackCount > 0;
     options->referenceTerrainPriorSummary = result.summary;
     return result;
 }

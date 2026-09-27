@@ -5,8 +5,19 @@
 #include <QPointF>
 #include <QVector>
 
-#include "Intersection.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <array>
+#include <cmath>
+
+struct ForwardIntersectionResult
+{
+    bool valid = false;
+    std::array<double, 3> point{{NAN, NAN, NAN}};
+    double angle_deg = NAN;
+    double ray_miss_distance = NAN;
+    double reproj_error_cam1 = NAN;
+    double reproj_error_cam2 = NAN;
+    double reproj_error_rms = NAN;
+};
 
 class QComboBox;
 class QLabel;
@@ -42,22 +53,19 @@ private slots:
 private:
     void setupUi();
     void loadImagesWithCamera();
-    bool collectAutoPointPairs(QVector<QPointF> *pts1, QVector<QPointF> *pts2, QString *sourceInfo);
-    bool buildCameraFromImageMeta(const QJsonObject& imgObj,
-                                  xjw::camera_models::frame_pinhole::FramePinholeNumericState* cam,
-                                  QString* errorMsg) const;
-    QJsonObject findImageMetaByPath(const QString &imagePath) const;
+    bool collectAutoPointPairs(QVector<QPointF>* pts1, QVector<QPointF>* pts2, QString* sourceInfo);
     void refreshViewer(bool reloadImages);
     void refreshPairTable();
-    void fillResultTable(const QVector<xjw::Intersection::Result> &results);
-    void fillResultTableOrdered(const QVector<int> &order);
+    void fillResultTable(const QVector<ForwardIntersectionResult>& results);
+    void fillResultTableOrdered(const QVector<int>& order);
     void applyPendingPointHint();
     void clearAllSelections();
-    QJsonObject buildBatchResultJson(const QVector<QPointF> &pts1,
-                                     const QVector<QPointF> &pts2,
-                                     const QVector<xjw::Intersection::Result> &results,
-                                     const QString &mode,
-                                     const QString &autoSource) const;
+    QJsonObject buildBatchResultJson(const QVector<QPointF>& pts1,
+                                     const QVector<QPointF>& pts2,
+                                     const QVector<ForwardIntersectionResult>& results,
+                                     const QString& groundFrame,
+                                     const QString& mode,
+                                     const QString& autoSource) const;
     QString selectedImage1() const;
     QString selectedImage2() const;
 
@@ -79,7 +87,7 @@ private:
     QVector<QPointF> _manualPts2;
     QVector<QPointF> _currentPts1;
     QVector<QPointF> _currentPts2;
-    QVector<xjw::Intersection::Result> _currentResults;
+    QVector<ForwardIntersectionResult> _currentResults;
     bool _currentPairsEditable{false};
     // 右键配对临时状态：如果 firstSide==0 表示已在左侧选了点，1 表示右侧
     int _pendingFirstSide{-1};

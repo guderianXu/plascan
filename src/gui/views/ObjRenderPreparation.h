@@ -8,11 +8,11 @@
 #include <atomic>
 #include <functional>
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/geometry_cloud.h>
 
 #include "TiePointVisualization.h"
 
-using ObjRenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using ObjRenderCloud = plapoint::GeometryCloud<float>;
 using ObjPrepareProgressCallback = std::function<void(int, const QString &)>;
 
 struct ObjRenderPreparationLimits

@@ -5,7 +5,8 @@
 
 #include "project/SparseResultQuality.h"
 #include "io/ImageIO.h"
-#include "camera/models/rpc/RpcProjection.h"
+
+#include <placamera/rpc_camera.h>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -32,15 +33,15 @@ namespace
     {
         xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
         input.images = {rpcImage(QStringLiteral("img_01.tif")), rpcImage(QStringLiteral("img_02.tif"))};
-        input.imageIds = {xjw::camera_core::ImageId("rpc-image-01"),
-                          xjw::camera_core::ImageId("rpc-image-02")};
+        input.imageIds = {placamera::ImageId("rpc-image-01"),
+                          placamera::ImageId("rpc-image-02")};
         input.cameraBindings = {
-            {xjw::camera_core::CameraInstanceId("rpc-instance-01"),
+            {placamera::CameraInstanceId("rpc-instance-01"),
              input.imageIds.at(0),
-             xjw::coordinate_system::CoordinateFrameId("EPSG:4978")},
-            {xjw::camera_core::CameraInstanceId("rpc-instance-02"),
+             placoordinate::CoordinateFrameId("EPSG:4978")},
+            {placamera::CameraInstanceId("rpc-instance-02"),
              input.imageIds.at(1),
-             xjw::coordinate_system::CoordinateFrameId("EPSG:4978")}};
+             placoordinate::CoordinateFrameId("EPSG:4978")}};
         input.quality = 2;
 
         const xjw::aerial_triangulation::RpcCameraInput cameraInput =
@@ -66,15 +67,16 @@ namespace
         {
             for (int column = 0; column < 5; ++column)
             {
-                const xjw::camera_models::rpc::ImagePoint leftImage{180.0 + column * 150.0,
-                                                                    180.0 + row * 150.0};
-                xjw::camera_models::rpc::RpcDefinition::GeodeticCoordinate ground{};
-                xjw::camera_models::rpc::ImagePoint rightImage;
-                if (!xjw::camera_models::rpc::RpcProjection::imageToGroundAtHeight(
-                        *leftCamera, leftImage, 2300.0, &ground) ||
-                    !xjw::camera_models::rpc::RpcProjection::groundToImage(*rightCamera, ground, &rightImage) ||
-                    rightImage.sample < 0.0 ||
-                    rightImage.sample >= 1031.0 || rightImage.line < 0.0 || rightImage.line >= 1102.0)
+                const placamera::ImageCoordinate leftImage{180.0 + column * 150.0,
+                                                           180.0 + row * 150.0};
+                const auto ground = leftCamera->imageToGroundAtHeight(leftImage, 2300.0);
+                const auto rightImage = ground
+                                             ? rightCamera->groundToImageGeodetic(ground.value())
+                                             : placamera::EvaluationResult<placamera::Projection>::failure(
+                                                   placamera::CameraErrorCode::InvalidArgument, "invalid ground");
+                if (!ground || !rightImage ||
+                    rightImage.value().image.sample < 0.0 || rightImage.value().image.sample >= 1031.0 ||
+                    rightImage.value().image.line < 0.0 || rightImage.value().image.line >= 1102.0)
                 {
                     continue;
                 }
@@ -83,7 +85,8 @@ namespace
                 graph->keypointsByImage[0].push_back(
                     {static_cast<float>(leftImage.sample), static_cast<float>(leftImage.line)});
                 graph->keypointsByImage[1].push_back(
-                    {static_cast<float>(rightImage.sample), static_cast<float>(rightImage.line)});
+                    {static_cast<float>(rightImage.value().image.sample),
+                     static_cast<float>(rightImage.value().image.line)});
                 pair.matches.push_back({featureIndex, featureIndex, 1.0f});
             }
         }
@@ -108,22 +111,22 @@ namespace
         // The RPC solve follows slightly different floating-point paths across GDAL/compiler builds.
         // Keep this stricter than the 2 px production gate while accepting a stable sub-pixel solution.
         EXPECT_LT(result.meanReprojError, 0.5);
-        EXPECT_EQ(result.cameraInstanceUpdates.size(), 2);
-        for (const auto& update : result.cameraInstanceUpdates)
+        EXPECT_EQ(result.cameraInstances.size(), 2);
+        for (const auto& camera : result.cameraInstances.values())
         {
-            if (update.imageId.value() == "rpc-image-01")
+            if (camera->imageId().value() == "rpc-image-01")
             {
-                EXPECT_EQ(update.instanceId.value(), "rpc-instance-01");
+                EXPECT_EQ(camera->instanceId().value(), "rpc-instance-01");
             }
-            else if (update.imageId.value() == "rpc-image-02")
+            else if (camera->imageId().value() == "rpc-image-02")
             {
-                EXPECT_EQ(update.instanceId.value(), "rpc-instance-02");
+                EXPECT_EQ(camera->instanceId().value(), "rpc-instance-02");
             }
             else
             {
-                ADD_FAILURE() << "unexpected RPC update ImageId: " << update.imageId.value();
+                ADD_FAILURE() << "unexpected RPC ImageId: " << camera->imageId().value();
             }
-            EXPECT_EQ(update.worldFrame.value(), "EPSG:4978");
+            EXPECT_EQ(camera->groundFrame().value(), "EPSG:4978");
         }
         EXPECT_EQ(result.resultRecordExtra.value(QStringLiteral("camera_model")).toString(), QStringLiteral("rpc00b"));
         EXPECT_TRUE(result.resultRecordExtra.value(QStringLiteral("absolute_sensor_model")).toBool());
@@ -174,8 +177,7 @@ namespace
     {
         xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
         input.images = {rpcImage(QStringLiteral("img_01.tif")), rpcImage(QStringLiteral("img_02.tif"))};
-        input.imageIds = {xjw::camera_core::ImageId("rpc-image-01"),
-                          xjw::camera_core::ImageId("rpc-image-02")};
+        input.imageIds = {placamera::ImageId("rpc-image-01"), placamera::ImageId("rpc-image-02")};
         const xjw::aerial_triangulation::RpcCameraInput cameraInput =
             xjw::aerial_triangulation::RpcAerialTriangulationRunner::inspectInput(input);
         ASSERT_EQ(cameraInput.status, xjw::aerial_triangulation::RpcCameraInputStatus::Complete);
@@ -183,7 +185,7 @@ namespace
         const auto result = xjw::aerial_triangulation::RpcAerialTriangulationRunner().run(input, cameraInput.cameras);
         EXPECT_FALSE(result.success);
         EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("canonical cameraBindings")));
-        EXPECT_TRUE(result.cameraInstanceUpdates.empty());
+        EXPECT_TRUE(result.cameraInstances.empty());
     }
 
     TEST(RpcAerialTriangulationRunnerTest, RejectsMixedRpcAndNonRpcInput)
@@ -260,8 +262,8 @@ namespace
 
         xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
         input.images = {QStringLiteral("pinhole-a.png"), QStringLiteral("pinhole-b.png")};
-        input.imageIds = {xjw::camera_core::ImageId("pinhole-image-a"),
-                          xjw::camera_core::ImageId("pinhole-image-b")};
+        input.imageIds = {placamera::ImageId("pinhole-image-a"),
+                          placamera::ImageId("pinhole-image-b")};
         input.projectMeta = QJsonObject{
             {QStringLiteral("images"),
              QJsonArray{QJsonObject{{QStringLiteral("image_uuid"), QStringLiteral("pinhole-image-a")},

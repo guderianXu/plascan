@@ -2,10 +2,10 @@
 
 /**
  * @file SfmBundleAdjustCoordinator.h
- * @brief SfM 状态与独立 bundle_adjust 模块之间的适配/调度层。
+ * @brief SfM 状态与独立 PlaBundle 库之间的适配/调度层。
  *
- * 协调器从当前 SfmReconstruction 构造 FramePinholeNumericState/BATrack，选择局部或全局相机集合，
- * 调用 BundleAdjust 公共入口，再将通过质量门控的相机和点原子写回重建。
+ * 协调器从当前 SfmReconstruction 构造 typed camera/PlaBundle Track，选择局部或全局相机集合，
+ * 调用 PlaBundle 公共入口，再将通过质量门控的相机和点原子写回重建。
  */
 
 #include "IncrementalSfm.h"
@@ -17,7 +17,7 @@ namespace xjw
     {
         bool evaluated = false;
         bool applied = false;
-        BAIntrinsicParameterMask parameterMask{};
+        plabundle::IntrinsicParameterMask parameterMask{};
         std::string modelName;
     };
 
@@ -60,7 +60,7 @@ namespace xjw
         static SfmReferenceBaPolicy referenceBaPolicy(SfmBundleAdjustmentStage stage);
 
         /// 将参考 8 参数相机掩码映射到 PlaScan 的 9 参数块（宽高比始终固定）。
-        static BAIntrinsicParameterMask referenceIntrinsicParameterMask(SfmBundleAdjustmentStage stage);
+        static plabundle::IntrinsicParameterMask referenceIntrinsicParameterMask(SfmBundleAdjustmentStage stage);
 
         /// 根据本轮新增/删除点数判断是否继续；最终方差阶段始终跑满固定轮数。
         static bool shouldContinueReferenceBa(SfmBundleAdjustmentStage stage, int addedPoints, int removedPoints);
@@ -124,18 +124,16 @@ namespace xjw
                                             const SfmAdaptiveCameraModelDiagnosticSnapshot& current);
 
         /// 首次见到影像时保存内参参考，后续独立全局 BA 调用仍按 ImageId 复用原锚点。
-        static std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        buildPersistentIntrinsicReferences(
+        static std::vector<placamera::FramePinholeNumericState> buildPersistentIntrinsicReferences(
             const std::vector<ImageId>& imageIds,
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
-            std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>*
-                referencesByImageId);
+            const std::vector<placamera::FramePinholeNumericState>& current,
+            std::unordered_map<ImageId, placamera::FramePinholeNumericState>* referencesByImageId);
 
         /// 按相机计算两轮内参最大归一化变化，避免多标定组反向变化在全局平均中抵消。
-        static double maximumCameraIntrinsicChange(
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& previous,
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& current,
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& stableReferences);
+        static double
+        maximumCameraIntrinsicChange(const std::vector<placamera::FramePinholeNumericState>& previous,
+                                     const std::vector<placamera::FramePinholeNumericState>& current,
+                                     const std::vector<placamera::FramePinholeNumericState>& stableReferences);
 
     private:
         IncrementalSfm& _owner;

@@ -24,16 +24,16 @@
 #include "MvsQualityReport.h"
 #include "PatchMatchPhotometricCost.h"
 #include "SparseCloudPreprocessor.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/matrix.h>
+#include <plapoint/geometry_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgproc.hpp>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -85,17 +85,71 @@ namespace
         return dst;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
+    placamera::FramePinholeModel
     makeMvsCamera(double fu, double fv, double cu, double cv, const double Rwc[9], const double C[3])
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
-        std::array<double, 9> R{Rwc[0], Rwc[1], Rwc[2], Rwc[3], Rwc[4], Rwc[5], Rwc[6], Rwc[7], Rwc[8]};
-        std::array<double, 3> Cv{C[0], C[1], C[2]};
-        cam.setIntrinsics(fu, fv, cu, cv);
-        cam.setPose(R, Cv);
-        cam.setAxisDirections(1, 1);
-        cam.setDepthAxisFlipped(false);
-        return cam.normalizedForPositiveDepth();
+        static std::atomic_size_t next_camera_id{0};
+        const std::string id = std::to_string(next_camera_id.fetch_add(1));
+        const placamera::FrameId frame("mvs-patchmatch-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("mvs-patchmatch-definition-" + id),
+                                                      placamera::FrameIntrinsics{fu, fv, cu, cv},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("mvs-patchmatch-instance-" + id),
+            placamera::ImageId("mvs-patchmatch-image-" + id),
+            definition,
+            placamera::ImageSize{static_cast<int>(cu * 2.0), static_cast<int>(cv * 2.0)},
+            placamera::Pose::create(
+                frame, {C[0], C[1], C[2]}, {Rwc[0], Rwc[1], Rwc[2], Rwc[3], Rwc[4], Rwc[5], Rwc[6], Rwc[7], Rwc[8]}));
+    }
+
+    std::shared_ptr<const placamera::FramePinholeModel> makeFusionCamera(double fu,
+                                                                         double fv,
+                                                                         double cu,
+                                                                         double cv,
+                                                                         const double rotation[9],
+                                                                         const double center[3],
+                                                                         int width,
+                                                                         int height)
+    {
+        const placamera::FrameId frame("uninitialized-frame");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("fusion-test-definition"),
+                                                      placamera::FrameIntrinsics{fu, fv, cu, cv},
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        return std::make_shared<const placamera::FramePinholeModel>(
+            placamera::FramePinholeModel::create(placamera::CameraInstanceId("fusion-test-instance"),
+                                                 placamera::ImageId("fusion-test-image"),
+                                                 definition,
+                                                 {width, height},
+                                                 placamera::Pose::create(frame,
+                                                                         {center[0], center[1], center[2]},
+                                                                         {rotation[0],
+                                                                          rotation[1],
+                                                                          rotation[2],
+                                                                          rotation[3],
+                                                                          rotation[4],
+                                                                          rotation[5],
+                                                                          rotation[6],
+                                                                          rotation[7],
+                                                                          rotation[8]})));
+    }
+
+    placamera::FramePinholeModel makeConsistencyCamera(double fu,
+                                                       double fv,
+                                                       double cu,
+                                                       double cv,
+                                                       const double rotation[9],
+                                                       const double center[3],
+                                                       int width,
+                                                       int height)
+    {
+        return *makeFusionCamera(fu, fv, cu, cv, rotation, center, width, height);
     }
 
     std::vector<xjw::mvs::CameraView> makeDownLookingGridViews(int columns, int rows)
@@ -110,13 +164,10 @@ namespace
                 xjw::mvs::CameraView view;
                 view.imageWidth = 640;
                 view.imageHeight = 480;
-                view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
-                view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                                    std::array<double, 3>{static_cast<double>(column - columns / 2),
-                                                          static_cast<double>(row - rows / 2),
-                                                          -10.0});
-                view.camera.setAxisDirections(1, 1);
-                view.camera.setDepthAxisFlipped(false);
+                const double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+                const double center[3] = {static_cast<double>(column - columns / 2),
+                                          static_cast<double>(row - rows / 2), -10.0};
+                view.camera = makeFusionCamera(500.0, 500.0, 320.0, 240.0, rotation, center, 640, 480);
                 views.push_back(std::move(view));
             }
         }
@@ -167,19 +218,11 @@ namespace
         xjw::mvs::CameraView view;
         view.imageWidth = 640;
         view.imageHeight = 480;
-        view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
-        view.camera.setPose(std::array<double, 9>{right[0],
-                                                  camera_up[0],
-                                                  forward[0],
-                                                  right[1],
-                                                  camera_up[1],
-                                                  forward[1],
-                                                  right[2],
-                                                  camera_up[2],
-                                                  forward[2]},
-                            std::array<double, 3>{center[0], center[1], center[2]});
-        view.camera.setAxisDirections(1, 1);
-        view.camera.setDepthAxisFlipped(false);
+        const double rotation[9] = {right[0], camera_up[0], forward[0],
+                                    right[1], camera_up[1], forward[1],
+                                    right[2], camera_up[2], forward[2]};
+        const double camera_center[3] = {center[0], center[1], center[2]};
+        view.camera = makeFusionCamera(500.0, 500.0, 320.0, 240.0, rotation, camera_center, 640, 480);
         return view;
     }
 
@@ -408,27 +451,33 @@ TEST(DepthPyramidPolicyTest, NativeFinalGridFailsClosedOutsideUnrectifiedCustomS
 
 TEST(DepthPyramidPolicyTest, ScalesCameraToOddNativeDepthGridWithPixelCenterConvention)
 {
-    const double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    const double center[3] = {0.0, 0.0, 0.0};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState raster_camera =
-        makeMvsCamera(3536.75872, 3533.741148, 3217.170232, 2125.808664, identity, center);
-    raster_camera.setImageSize(xjw::camera_core::ImageSize{6221, 4146});
-
     const cv::Size raster_size(6221, 4146);
     const cv::Size grid_size = xjw::mvs::depthPyramidWorkingSize(raster_size.width, raster_size.height, 4);
     ASSERT_EQ(grid_size, cv::Size(1555, 1036));
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState grid_camera =
+    const placamera::FrameId frame("depth-pyramid-world");
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("depth-pyramid-definition"),
+        placamera::FrameIntrinsics{3536.75872, 3533.741148, 3217.170232, 2125.808664},
+        placamera::BrownConradyDistortion{}, placamera::PixelConvention::PixelCenter, frame);
+    const auto model = placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("depth-pyramid-camera"), placamera::ImageId("depth-pyramid-image"),
+        definition, placamera::ImageSize{raster_size.width, raster_size.height},
+        placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+    const auto raster_camera = placamera::FramePinholeNumericState::fromModel(model);
+    const placamera::FramePinholeNumericState grid_camera =
         xjw::mvs::cameraForDepthGrid(raster_camera, raster_size, grid_size);
     const double scale_x = static_cast<double>(grid_size.width) / raster_size.width;
     const double scale_y = static_cast<double>(grid_size.height) / raster_size.height;
-    EXPECT_DOUBLE_EQ(grid_camera.focalX(), raster_camera.focalX() * scale_x);
-    EXPECT_DOUBLE_EQ(grid_camera.focalY(), raster_camera.focalY() * scale_y);
-    EXPECT_DOUBLE_EQ(grid_camera.principalX(), (raster_camera.principalX() + 0.5) * scale_x - 0.5);
-    EXPECT_DOUBLE_EQ(grid_camera.principalY(), (raster_camera.principalY() + 0.5) * scale_y - 0.5);
-    ASSERT_TRUE(grid_camera.imageSize().has_value());
-    EXPECT_EQ(grid_camera.imageSize()->samples, grid_size.width);
-    EXPECT_EQ(grid_camera.imageSize()->lines, grid_size.height);
+    EXPECT_DOUBLE_EQ(grid_camera.intrinsics().focalX, raster_camera.intrinsics().focalX * scale_x);
+    EXPECT_DOUBLE_EQ(grid_camera.intrinsics().focalY, raster_camera.intrinsics().focalY * scale_y);
+    EXPECT_DOUBLE_EQ(grid_camera.intrinsics().principalX,
+                     (raster_camera.intrinsics().principalX + 0.5) * scale_x - 0.5);
+    EXPECT_DOUBLE_EQ(grid_camera.intrinsics().principalY,
+                     (raster_camera.intrinsics().principalY + 0.5) * scale_y - 0.5);
+    EXPECT_EQ(grid_camera.imageSize().samples, grid_size.width);
+    EXPECT_EQ(grid_camera.imageSize().lines, grid_size.height);
+    EXPECT_TRUE(grid_camera.definitionDirty());
 }
 
 TEST(DepthPyramidPolicyTest, ScalesFullRasterPixelParametersToOddNativeGrid)
@@ -476,11 +525,9 @@ TEST(MvsSceneClassifierTest, DetectsLongAerialStripWithoutGlobalCenterConvergenc
         xjw::mvs::CameraView view;
         view.imageWidth = 640;
         view.imageHeight = 480;
-        view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
-        view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
-                            std::array<double, 3>{static_cast<double>(index * 40), 0.0, -10.0});
-        view.camera.setAxisDirections(1, 1);
-        view.camera.setDepthAxisFlipped(false);
+        const double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+        const double center[3] = {static_cast<double>(index * 40), 0.0, -10.0};
+        view.camera = makeFusionCamera(500.0, 500.0, 320.0, 240.0, rotation, center, 640, 480);
         views.push_back(std::move(view));
     }
 
@@ -511,13 +558,11 @@ TEST(MvsSceneClassifierTest, KeepsTwoSidedPlanarCaptureGeneral)
         xjw::mvs::CameraView view;
         view.imageWidth = 640;
         view.imageHeight = 480;
-        view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
-        view.camera.setPose(
-            below_plane ? std::array<double, 9>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}
-                        : std::array<double, 9>{1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0},
-            std::array<double, 3>{static_cast<double>((index % 4) * 2 - 3), 0.0, below_plane ? -10.0 : 10.0});
-        view.camera.setAxisDirections(1, 1);
-        view.camera.setDepthAxisFlipped(false);
+        const double rotation[9] = {1.0, 0.0, 0.0, 0.0, below_plane ? 1.0 : -1.0,
+                                    0.0, 0.0, 0.0, below_plane ? 1.0 : -1.0};
+        const double center[3] = {static_cast<double>((index % 4) * 2 - 3), 0.0,
+                                  below_plane ? -10.0 : 10.0};
+        view.camera = makeFusionCamera(500.0, 500.0, 320.0, 240.0, rotation, center, 640, 480);
         views.push_back(std::move(view));
     }
 
@@ -1153,15 +1198,25 @@ TEST(EpipolarRectifierTest, UnrectifiesRightReferenceWithRightHomography)
     pair.H1inv = pair.H1.inv();
     pair.H2inv = pair.H2.inv();
     pair.refIsRight = true;
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera;
-    reference_camera.setIntrinsics(1.0, 1.0, 0.0, 0.0);
-    reference_camera.setPose({1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
-    pair.rectCamRight = reference_camera;
+    const placamera::FrameId frame("mvs-test-world");
+    const auto definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("right-reference-definition"),
+                                                  placamera::FrameIntrinsics{1.0, 1.0, 0.0, 0.0},
+                                                  {},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  frame);
+    const auto pose = placamera::Pose::create(frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+    const auto native_camera = placamera::FramePinholeModel::create(placamera::CameraInstanceId("right-reference"),
+                                                                    placamera::ImageId("right-reference-image"),
+                                                                    definition,
+                                                                    placamera::ImageSize{4, 3},
+                                                                    pose);
+    pair.rectCamRight = native_camera;
 
     cv::Mat rectified_depth(3, 4, CV_32F, cv::Scalar(0.0f));
     rectified_depth.at<float>(1, 2) = 7.0f;
 
-    const cv::Mat depth = xjw::mvs::EpipolarRectifier::unrectifyDepth(rectified_depth, pair, reference_camera, 4, 3);
+    const cv::Mat depth = xjw::mvs::EpipolarRectifier::unrectifyDepth(rectified_depth, pair, native_camera, 4, 3);
 
     cv::Mat rectified_support(3, 4, CV_16U, cv::Scalar(0));
     rectified_support.at<std::uint16_t>(1, 2) = 5;
@@ -1181,7 +1236,7 @@ TEST(MvsPipelineTest, SparseCloudPreprocessorReadsBinaryPly)
     fs::create_directories(root);
     const fs::path plyPath = root / "sparse_binary.ply";
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    plamatrix::MatrixXf points(4, 3);
     points(0, 0) = 0.0f;
     points(0, 1) = 0.0f;
     points(0, 2) = 0.0f;
@@ -1194,7 +1249,7 @@ TEST(MvsPipelineTest, SparseCloudPreprocessorReadsBinaryPly)
     points(3, 0) = 0.0f;
     points(3, 1) = 0.0f;
     points(3, 2) = 1.0f;
-    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::GeometryCloud<float> cloud(std::move(points));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
 
     xjw::mvs::SparseCloudPreprocessor preprocessor(plapoint::ProcessingDevice::CPU);
@@ -1499,12 +1554,12 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
 
     xjw::mvs::FusionFrameInput fr0, fr1;
     fr0.depthMap = d0;
-    fr0.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    fr0.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
     fr0.imgW = W;
     fr0.imgH = H;
 
     fr1.depthMap = d1;
-    fr1.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    fr1.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1, W, H);
     fr1.imgW = W;
     fr1.imgH = H;
 
@@ -1522,6 +1577,35 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
     EXPECT_GT(static_cast<int>(pts.size()), 0) << "DepthMapFusion should produce at least one fused point";
 }
 
+TEST(MvsPipelineTest, DepthMapFusionRequiresNativeCameraMatchingDepthGrid)
+{
+    constexpr int width = 8;
+    constexpr int height = 6;
+    const double rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const double center[3] = {0, 0, 0};
+    xjw::mvs::FusionFrameInput frame;
+    frame.depthMap = cv::Mat(height, width, CV_32F, cv::Scalar(4.0f));
+    frame.imgW = width;
+    frame.imgH = height;
+
+    xjw::mvs::DepthMapFusion fusion({});
+    std::vector<xjw::mvs::FusedPoint> points;
+    std::string error;
+    EXPECT_FALSE(fusion.fuse({frame}, points, nullptr, &error));
+    EXPECT_NE(error.find("cameraModel"), std::string::npos);
+
+    frame.cameraModel = makeFusionCamera(8.0, 8.0, 4.0, 3.0, rotation, center, width + 1, height);
+    error.clear();
+    EXPECT_FALSE(fusion.fuse({frame}, points, nullptr, &error));
+    EXPECT_NE(error.find("尺寸"), std::string::npos);
+
+    frame.cameraModel = makeFusionCamera(8.0, 8.0, 4.0, 3.0, rotation, center, width, height);
+    frame.imagePath = "prepared.png";
+    error.clear();
+    EXPECT_FALSE(fusion.fuse({frame}, points, nullptr, &error));
+    EXPECT_NE(error.find("prepared raster"), std::string::npos);
+}
+
 TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantizationFloor)
 {
     constexpr int width = 9;
@@ -1532,17 +1616,15 @@ TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantization
     std::vector<xjw::mvs::FusionFrameInput> frames(2);
     frames[0].depthMap = cv::Mat::zeros(height, width, CV_32F);
     frames[0].depthMap.at<float>(4, 4) = 8.0f;
-    frames[0].cameraModel = makeMvsCamera(20.0, 20.0, 4.0, 4.0, identity, center);
-    frames[0].sourceCamera = frames[0].cameraModel;
-    frames[0].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
+    frames[0].cameraModel = makeFusionCamera(20.0, 20.0, 4.0, 4.0, identity, center, width, height);
+    frames[0].preparedRasterSize = cv::Size(width, height);
     frames[0].imgW = width;
     frames[0].imgH = height;
     frames[0].sourceImageIndices = {1};
 
     frames[1].depthMap = cv::Mat(height, width, CV_32F, cv::Scalar(8.0f));
-    frames[1].cameraModel = makeMvsCamera(20.0, 20.0, 4.4, 4.0, identity, center);
-    frames[1].sourceCamera = frames[1].cameraModel;
-    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width * 4, height * 4});
+    frames[1].cameraModel = makeFusionCamera(20.0, 20.0, 4.4, 4.0, identity, center, width, height);
+    frames[1].preparedRasterSize = cv::Size(width * 4, height * 4);
     frames[1].imgW = width;
     frames[1].imgH = height;
 
@@ -1562,7 +1644,7 @@ TEST(MvsPipelineTest, FusionReprojectionThresholdHonorsNearestSampleQuantization
     EXPECT_EQ(native_points.size(), 1u)
         << "Nearest-neighbor reprojection must retain sub-half-pixel quantization residuals on a reduced grid.";
 
-    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
+    frames[1].preparedRasterSize = cv::Size(width, height);
     xjw::mvs::DepthMapFusion full_grid_fusion(config);
     std::vector<xjw::mvs::FusedPoint> full_grid_points;
     ASSERT_TRUE(full_grid_fusion.fuse(frames, full_grid_points, nullptr, &error)) << error;
@@ -1583,13 +1665,12 @@ TEST(MvsPipelineTest, FusionLocalGradientUsesEachFrameGridScale)
     frames[1].depthMap.at<float>(4, 4) = 8.0f;
     for (auto& frame : frames)
     {
-        frame.cameraModel = makeMvsCamera(20.0, 20.0, 4.0, 4.0, identity, center);
-        frame.sourceCamera = frame.cameraModel;
+        frame.cameraModel = makeFusionCamera(20.0, 20.0, 4.0, 4.0, identity, center, width, height);
         frame.imgW = width;
         frame.imgH = height;
     }
-    frames[0].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
-    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width * 4, height * 4});
+    frames[0].preparedRasterSize = cv::Size(width, height);
+    frames[1].preparedRasterSize = cv::Size(width * 4, height * 4);
     frames[0].sourceImageIndices = {1};
 
     xjw::mvs::StereoFusionConfig config;
@@ -1608,7 +1689,7 @@ TEST(MvsPipelineTest, FusionLocalGradientUsesEachFrameGridScale)
     ASSERT_TRUE(native_fusion.fuse(frames, native_points, nullptr, &error)) << error;
     EXPECT_EQ(native_points.size(), 1u) << "The one-full-raster-pixel gradient radius is subpixel on the ds4 target.";
 
-    frames[1].sourceCamera.setImageSize(xjw::camera_core::ImageSize{width, height});
+    frames[1].preparedRasterSize = cv::Size(width, height);
     xjw::mvs::DepthMapFusion full_grid_fusion(config);
     std::vector<xjw::mvs::FusedPoint> full_grid_points;
     ASSERT_TRUE(full_grid_fusion.fuse(frames, full_grid_points, nullptr, &error)) << error;
@@ -1631,7 +1712,7 @@ TEST(MvsPipelineTest, DepthMapFusionRejectsMaskedLowSupportAndConflictingSheets)
         frame.depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
         frame.validMask = cv::Mat(H, W, CV_8U, cv::Scalar(255));
         frame.geometrySupportCount = cv::Mat(H, W, CV_16U, cv::Scalar(2));
-        frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frame.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
         frame.imgW = W;
         frame.imgH = H;
 
@@ -1745,7 +1826,7 @@ TEST(MvsPipelineTest, DepthMapFusionCancelBeforeWorkClearsStaleOutput)
 
     xjw::mvs::FusionFrameInput frame;
     frame.depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frame.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
     frame.imgW = W;
     frame.imgH = H;
 
@@ -1782,12 +1863,12 @@ TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath
 
     xjw::mvs::FusionFrameInput fr0, fr1;
     fr0.depthMap = d0;
-    fr0.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    fr0.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
     fr0.imgW = W;
     fr0.imgH = H;
 
     fr1.depthMap = d1;
-    fr1.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    fr1.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1, W, H);
     fr1.imgW = W;
     fr1.imgH = H;
 
@@ -1823,12 +1904,12 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionRejectsDepthsWithoutNeighborAgree
 
     std::vector<xjw::mvs::FusionFrameInput> frames(2);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[0].imgW = W;
     frames[0].imgH = H;
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
@@ -1860,18 +1941,18 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionKeepsProductionStrictWhenFallback
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {1, 2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[2].imgW = W;
     frames[2].imgH = H;
 
@@ -1903,18 +1984,18 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionFallsBackToTwoViewAgreementWhenSt
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {1, 2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
     frames[2].imgW = W;
     frames[2].imgH = H;
 
@@ -1955,7 +2036,7 @@ TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations
     for (auto& frame : frames)
     {
         frame.depthMap = depth.clone();
-        frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frame.cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
         frame.imgW = W;
         frame.imgH = H;
     }
@@ -1999,18 +2080,18 @@ TEST(MvsPipelineTest, DepthMapFusionUsesPlannedSourceImagesBeforeNearestCenters)
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frames[0].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(0.0f));
-    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    frames[1].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1, W, H);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C2);
+    frames[2].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C2, W, H);
     frames[2].imgW = W;
     frames[2].imgH = H;
     frames[2].sourceImageIndices = {0};
@@ -2151,25 +2232,25 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.05, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
-        makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, reference_center);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
-        makeMvsCamera(100.0, 100.0, 4.0, 4.0, identity, source_center);
+    const auto reference_camera = makeConsistencyCamera(100.0, 100.0, 4.0, 4.0, identity, reference_center, 9, 9);
+    const auto source_camera = makeConsistencyCamera(100.0, 100.0, 4.0, 4.0, identity, source_center, 9, 9);
 
     const cv::Point2f reference_pixel(4.0f, 4.0f);
     constexpr float reference_depth = 10.0f;
-    const double pixel[2] = {reference_pixel.x, reference_pixel.y};
-    double world[3] = {0.0, 0.0, 0.0};
-    ASSERT_TRUE(reference_camera.unprojectPixel(pixel, reference_depth, world));
-    double projected[2] = {0.0, 0.0};
-    double expected_depth = 0.0;
-    ASSERT_TRUE(source_camera.projectWorldPointWithDepth(world, projected, expected_depth));
+    const auto world = reference_camera.imageToGroundAtDepth({reference_pixel.x, reference_pixel.y}, reference_depth);
+    ASSERT_TRUE(world);
+    const auto projected = source_camera.groundToImage(world.value());
+    ASSERT_TRUE(projected);
+    ASSERT_TRUE(projected.value().positiveDepth.has_value());
+    const double projected_x = projected.value().image.sample;
+    const double projected_y = projected.value().image.line;
+    const double expected_depth = *projected.value().positiveDepth;
 
-    const int center_column = static_cast<int>(std::lround(projected[0]));
-    const int center_row = static_cast<int>(std::lround(projected[1]));
+    const int center_column = static_cast<int>(std::lround(projected_x));
+    const int center_row = static_cast<int>(std::lround(projected_y));
     cv::Mat source_depth(9, 9, CV_32F, cv::Scalar(0.0f));
     source_depth.at<float>(center_row, center_column) = 20.0f;
-    const int consistent_column = center_column > projected[0] ? center_column - 1 : center_column + 1;
+    const int consistent_column = center_column > projected_x ? center_column - 1 : center_column + 1;
     source_depth.at<float>(center_row, consistent_column) = static_cast<float>(expected_depth);
 
     const auto central_only = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -2203,10 +2284,8 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintIncludesEpipolarTriangulat
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
+    const auto reference_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center, 41, 41);
+    const auto source_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, source_center, 41, 41);
     cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     source_depth.at<float>(20, 10) = 10.0f;
 
@@ -2226,20 +2305,19 @@ TEST(DepthGeometryConsistencyTest, ReusedReferenceWorldPreservesConsistencyResul
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.25, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
-        makeMvsCamera(120.0, 120.0, 16.0, 16.0, identity, reference_center);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
-        makeMvsCamera(120.0, 120.0, 16.0, 16.0, identity, source_center);
+    const auto reference_camera = makeConsistencyCamera(120.0, 120.0, 16.0, 16.0, identity, reference_center, 33, 33);
+    const auto source_camera = makeConsistencyCamera(120.0, 120.0, 16.0, 16.0, identity, source_center, 33, 33);
     const cv::Point2f reference_pixel(16.0f, 16.0f);
     constexpr float reference_depth = 12.0f;
-    const double pixel[2] = {reference_pixel.x, reference_pixel.y};
-    double world[3] = {};
-    ASSERT_TRUE(reference_camera.unprojectPixel(pixel, reference_depth, world));
-    double projected[2] = {};
-    double source_depth_value = 0.0;
-    ASSERT_TRUE(source_camera.projectWorldPointWithDepth(world, projected, source_depth_value));
+    const auto world = reference_camera.imageToGroundAtDepth({reference_pixel.x, reference_pixel.y}, reference_depth);
+    ASSERT_TRUE(world);
+    const auto projected = source_camera.groundToImage(world.value());
+    ASSERT_TRUE(projected);
+    ASSERT_TRUE(projected.value().positiveDepth.has_value());
+    const double source_depth_value = *projected.value().positiveDepth;
     cv::Mat source_depth(33, 33, CV_32FC1, cv::Scalar(0.0f));
-    source_depth.at<float>(static_cast<int>(std::lround(projected[1])), static_cast<int>(std::lround(projected[0]))) =
+    source_depth.at<float>(static_cast<int>(std::lround(projected.value().image.line)),
+                           static_cast<int>(std::lround(projected.value().image.sample))) =
         static_cast<float>(source_depth_value);
 
     const auto direct = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -2247,7 +2325,7 @@ TEST(DepthGeometryConsistencyTest, ReusedReferenceWorldPreservesConsistencyResul
     const auto reused = xjw::mvs::evaluateProjectedDepthConsistencyFromReferenceWorld(reference_camera,
                                                                                       reference_pixel,
                                                                                       reference_depth,
-                                                                                      {world[0], world[1], world[2]},
+                                                                                      world.value().position,
                                                                                       source_camera,
                                                                                       source_depth,
                                                                                       0.01f,
@@ -2269,11 +2347,9 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintFallsBackForDegenerateEpip
 {
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
+    const auto reference_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center, 41, 41);
 
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState coincident_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
+    const auto coincident_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center, 41, 41);
     cv::Mat coincident_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     coincident_depth.at<float>(20, 20) = 10.0f;
     const auto coincident = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -2282,8 +2358,7 @@ TEST(DepthGeometryConsistencyTest, JointPixelFootprintFallsBackForDegenerateEpip
     EXPECT_NEAR(coincident.jointWorldPixelFootprint, 0.1f, 1.0e-6f);
 
     constexpr double collinear_center[3] = {0.0, 0.0, 1.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState collinear_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, collinear_center);
+    const auto collinear_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, collinear_center, 41, 41);
     cv::Mat collinear_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     collinear_depth.at<float>(20, 20) = 9.0f;
     const auto collinear = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -2297,10 +2372,8 @@ TEST(DepthGeometryConsistencyTest, MissingSourceDepthRemainsUnverifiableWithCont
     constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState reference_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState source_camera =
-        makeMvsCamera(100.0, 100.0, 20.0, 20.0, identity, source_center);
+    const auto reference_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, reference_center, 41, 41);
+    const auto source_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, source_center, 41, 41);
     const cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
 
     const auto result = xjw::mvs::evaluateProjectedDepthConsistency(
@@ -2310,6 +2383,36 @@ TEST(DepthGeometryConsistencyTest, MissingSourceDepthRemainsUnverifiableWithCont
     EXPECT_FALSE(result.continuousGeometryValid);
     EXPECT_EQ(xjw::mvs::adaptiveGeometryEvidenceClass(result), xjw::mvs::AdaptiveGeometryEvidenceClass::Unobservable);
     EXPECT_FLOAT_EQ(result.jointWorldPixelFootprint, 0.0f);
+}
+
+TEST(DepthGeometryConsistencyTest, RejectsMixedGroundFramesAndMismatchedSourceRaster)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    constexpr double center[3] = {0.0, 0.0, 0.0};
+    const auto reference_camera = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, center, 41, 41);
+    const auto wrong_size = makeConsistencyCamera(100.0, 100.0, 20.0, 20.0, identity, center, 20, 20);
+    const placamera::FrameId other_frame("other-world");
+    const auto other_definition =
+        placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("consistency-other-definition"),
+                                                  placamera::FrameIntrinsics{100.0, 100.0, 20.0, 20.0},
+                                                  {},
+                                                  placamera::PixelConvention::PixelCenter,
+                                                  other_frame);
+    const auto other_camera = placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("consistency-other-instance"),
+        placamera::ImageId("consistency-other-image"),
+        other_definition,
+        {41, 41},
+        placamera::Pose::create(other_frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+    const cv::Mat source_depth(41, 41, CV_32FC1, cv::Scalar(10.0f));
+
+    for (const auto* source_camera : {&wrong_size, &other_camera})
+    {
+        const auto result = xjw::mvs::evaluateProjectedDepthConsistency(
+            reference_camera, {20.0f, 20.0f}, 10.0f, *source_camera, source_depth, 0.01f);
+        EXPECT_EQ(result.evidence, xjw::mvs::DepthConsistencyEvidence::Unverifiable);
+        EXPECT_FALSE(result.continuousGeometryValid);
+    }
 }
 
 TEST(DepthGeometryConsistencyTest, UsesAllVerifiableSourceVotes)
@@ -2806,11 +2909,7 @@ TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
     xjw::mvs::CameraView view;
     view.imageWidth = W;
     view.imageHeight = H;
-    view.camera.setIntrinsics(FOCAL, FOCAL, W * 0.5, H * 0.5);
-    view.camera.setPose(std::array<double, 9>{I[0], I[1], I[2], I[3], I[4], I[5], I[6], I[7], I[8]},
-                        std::array<double, 3>{C[0], C[1], C[2]});
-    view.camera.setAxisDirections(1, 1);
-    view.camera.setDepthAxisFlipped(false);
+    view.camera = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
 
     xjw::mvs::SparseCloud sparse;
     for (int py = 36; py <= 54; py += 6)
@@ -2847,11 +2946,7 @@ TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
     xjw::mvs::CameraView view;
     view.imageWidth = W;
     view.imageHeight = H;
-    view.camera.setIntrinsics(FOCAL, FOCAL, W * 0.5, H * 0.5);
-    view.camera.setPose(std::array<double, 9>{I[0], I[1], I[2], I[3], I[4], I[5], I[6], I[7], I[8]},
-                        std::array<double, 3>{C[0], C[1], C[2]});
-    view.camera.setAxisDirections(1, 1);
-    view.camera.setDepthAxisFlipped(false);
+    view.camera = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
 
     xjw::mvs::SparseCloud sparse;
     std::vector<size_t> indices;
@@ -2870,7 +2965,7 @@ TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
 
     const std::vector<xjw::mvs::ProjectedSparseDepthSample> samples =
         xjw::mvs::MvsPipelineService::collectProjectedSparseDepthSamples(
-            sparse, view.camera.normalizedForPositiveDepth(), W, H, indices);
+            sparse, *view.camera, W, H, indices);
 
     EXPECT_EQ(samples.size(), indices.size() - 1)
         << "The depth outlier should be excluded once before building hint/support rasters.";
@@ -3290,7 +3385,7 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionEstimatesNormalsWhenNormalMapMiss
     for (int i = 0; i < 3; ++i)
     {
         frames[static_cast<size_t>(i)].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-        frames[static_cast<size_t>(i)].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frames[static_cast<size_t>(i)].cameraModel = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C, W, H);
         frames[static_cast<size_t>(i)].imgW = W;
         frames[static_cast<size_t>(i)].imgH = H;
     }
@@ -3407,14 +3502,14 @@ TEST(MvsPipelineTest, DenseCloudBuilderUnprojectBasic)
 
     const double I[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     const double C0[3] = {0, 0, 0};
-    auto cam = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    auto cam = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
 
     xjw::mvs::DenseCloudOptions opt;
     opt.useGPU = false;
     opt.minDepth = 0.1f;
     opt.maxDepth = 100.0f;
 
-    auto pts = xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), cam, cv::Mat(), opt);
+    auto pts = xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), *cam, cv::Mat(), opt);
 
     ASSERT_EQ(static_cast<int>(pts.size()), W * H);
 
@@ -3474,7 +3569,8 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
     opt.useGPU = false;
     opt.minDepth = 1.0f;
     opt.maxDepth = 50.0f;
-    auto pts = xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), refCam, cv::Mat(), opt);
+    const auto fusion_cam = makeFusionCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0, W, H);
+    auto pts = xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), *fusion_cam, cv::Mat(), opt);
 
     EXPECT_GT(static_cast<int>(pts.size()), 0) << "End-to-end CPU MVS pipeline should produce at least one 3D point";
 
@@ -3499,8 +3595,7 @@ TEST(DenseCloudBackendTest, AutoMatchesCpuAndReportsActualBackend)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {1.0, -2.0, 3.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const auto camera = makeFusionCamera(8.0, 8.0, 1.5, 1.5, rotation, center, 4, 4);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
     cv::Mat color(4, 4, CV_8UC3);
     for (int row = 0; row < color.rows; ++row)
@@ -3517,7 +3612,7 @@ TEST(DenseCloudBackendTest, AutoMatchesCpuAndReportsActualBackend)
     cpuOptions.useGPU = false;
     cpuOptions.subsample = 2;
     const std::vector<xjw::mvs::DensePoint> cpu =
-        xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), camera, color, cpuOptions);
+        xjw::mvs::DenseCloudBuilder::unproject(depth, cv::Mat(), *camera, color, cpuOptions);
 
     xjw::mvs::DenseCloudOptions autoOptions = cpuOptions;
     autoOptions.useGPU = true;
@@ -3526,7 +3621,7 @@ TEST(DenseCloudBackendTest, AutoMatchesCpuAndReportsActualBackend)
     xjw::mvs::DenseCloudExecutionReport report;
     std::string error;
     ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
-        depth, cv::Mat(), camera, color, autoOptions, &accelerated, &report, &error))
+        depth, cv::Mat(), *camera, color, autoOptions, &accelerated, &report, &error))
         << error;
     ASSERT_EQ(accelerated.size(), cpu.size());
     for (std::size_t index = 0; index < cpu.size(); ++index)
@@ -3545,8 +3640,7 @@ TEST(DenseCloudBackendTest, ExplicitInvalidAcceleratorDoesNotFallBack)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const auto camera = makeFusionCamera(8.0, 8.0, 1.5, 1.5, rotation, center, 4, 4);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
 
     for (const xjw::mvs::DenseCloudComputeBackend backend :
@@ -3560,7 +3654,7 @@ TEST(DenseCloudBackendTest, ExplicitInvalidAcceleratorDoesNotFallBack)
         xjw::mvs::DenseCloudExecutionReport report;
         std::string error;
         EXPECT_FALSE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
-            depth, cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error));
+            depth, cv::Mat(), *camera, cv::Mat(), options, &cloud, &report, &error));
         EXPECT_TRUE(cloud.empty());
         EXPECT_FALSE(error.empty());
         EXPECT_EQ(report.requestedBackend, backend);
@@ -3572,8 +3666,7 @@ TEST(DenseCloudBackendTest, AutoFallsBackToCpuWhenAcceleratorsAreUnavailable)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const auto camera = makeFusionCamera(8.0, 8.0, 1.5, 1.5, rotation, center, 4, 4);
     const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
 
     xjw::mvs::DenseCloudOptions options;
@@ -3584,7 +3677,7 @@ TEST(DenseCloudBackendTest, AutoFallsBackToCpuWhenAcceleratorsAreUnavailable)
     xjw::mvs::DenseCloudExecutionReport report;
     std::string error;
     ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
-        depth, cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error))
+        depth, cv::Mat(), *camera, cv::Mat(), options, &cloud, &report, &error))
         << error;
     EXPECT_EQ(cloud.size(), 16U);
     EXPECT_EQ(report.requestedBackend, xjw::mvs::DenseCloudComputeBackend::Auto);
@@ -3598,8 +3691,7 @@ TEST(DenseCloudBackendTest, EmptyInputIsSuccessfulNoOpForExplicitBackend)
 {
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {0.0, 0.0, 0.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const auto camera = makeFusionCamera(8.0, 8.0, 1.5, 1.5, rotation, center, 4, 4);
 
     xjw::mvs::DenseCloudOptions options;
     options.computeBackend = xjw::mvs::DenseCloudComputeBackend::Cuda;
@@ -3608,7 +3700,7 @@ TEST(DenseCloudBackendTest, EmptyInputIsSuccessfulNoOpForExplicitBackend)
     xjw::mvs::DenseCloudExecutionReport report;
     std::string error;
     ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
-        cv::Mat(), cv::Mat(), camera, cv::Mat(), options, &cloud, &report, &error))
+        cv::Mat(), cv::Mat(), *camera, cv::Mat(), options, &cloud, &report, &error))
         << error;
     EXPECT_TRUE(cloud.empty());
     EXPECT_EQ(report.requestedBackend, xjw::mvs::DenseCloudComputeBackend::Cuda);
@@ -3635,8 +3727,7 @@ TEST_P(DenseCloudAcceleratorParityTest, MatchesCpuWithSubsamplingColorAndAabb)
 
     constexpr double rotation[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     constexpr double center[3] = {1.0, -2.0, 3.0};
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera =
-        makeMvsCamera(8.0, 8.0, 1.5, 1.5, rotation, center);
+    const auto camera = makeFusionCamera(8.0, 8.0, 1.5, 1.5, rotation, center, 6, 6);
     cv::Mat depth(6, 6, CV_32FC1, cv::Scalar(2.0f));
     depth.at<float>(0, 0) = 0.0f;
     cv::Mat mask(6, 6, CV_8UC1, cv::Scalar(255));
@@ -3663,7 +3754,7 @@ TEST_P(DenseCloudAcceleratorParityTest, MatchesCpuWithSubsamplingColorAndAabb)
     cpuOptions.minZ = 4.0f;
     cpuOptions.maxZ = 6.0f;
     const std::vector<xjw::mvs::DensePoint> cpu =
-        xjw::mvs::DenseCloudBuilder::unproject(depth, mask, camera, color, cpuOptions);
+        xjw::mvs::DenseCloudBuilder::unproject(depth, mask, *camera, color, cpuOptions);
 
     xjw::mvs::DenseCloudOptions acceleratorOptions = cpuOptions;
     acceleratorOptions.useGPU = true;
@@ -3672,7 +3763,7 @@ TEST_P(DenseCloudAcceleratorParityTest, MatchesCpuWithSubsamplingColorAndAabb)
     xjw::mvs::DenseCloudExecutionReport report;
     std::string error;
     ASSERT_TRUE(xjw::mvs::DenseCloudBuilder::unprojectWithReport(
-        depth, mask, camera, color, acceleratorOptions, &accelerated, &report, &error))
+        depth, mask, *camera, color, acceleratorOptions, &accelerated, &report, &error))
         << error;
     ASSERT_EQ(accelerated.size(), cpu.size());
     for (std::size_t index = 0; index < cpu.size(); ++index)

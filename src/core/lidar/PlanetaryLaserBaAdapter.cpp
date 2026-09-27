@@ -257,7 +257,7 @@ bool validateDatasetMode(const PlanetaryLaserDataset &dataset,
 bool buildPlanetaryLaserRangeConstraints(
     const PlanetaryLaserDataset &dataset,
     const PlanetaryLaserBaAdapterOptions &options,
-    std::vector<BALaserRangeConstraint> *constraints,
+    std::vector<plabundle::LaserRangeConstraint> *constraints,
     PlanetaryLaserBaAdapterSummary *summary,
     std::string *errorMessage)
 {
@@ -339,7 +339,7 @@ bool buildPlanetaryLaserRangeConstraints(
             return false;
         }
 
-        BALaserRangeConstraint constraint;
+        plabundle::LaserRangeConstraint constraint;
         constraint.cameraIndex = *simultaneousCameras.begin();
         constraint.initialPoint = shot.pointBodyFixedMeters;
         constraint.observedRangeMeters = shot.observedRangeMeters;
@@ -353,11 +353,11 @@ bool buildPlanetaryLaserRangeConstraints(
         switch (shot.pointMode)
         {
         case PlanetaryLaserPointMode::Fixed:
-            constraint.pointMode = BALaserPointMode::Fixed;
+            constraint.pointMode = plabundle::LaserPointMode::Fixed;
             ++localSummary.fixedPointShots;
             break;
         case PlanetaryLaserPointMode::Constrained:
-            constraint.pointMode = BALaserPointMode::Constrained;
+            constraint.pointMode = plabundle::LaserPointMode::Constrained;
             constraint.pointPrior = shot.pointBodyFixedMeters;
             if (!shot.pointCovarianceBodyFixedMetersSquared ||
                 !covarianceToSqrtInformation(
@@ -373,7 +373,7 @@ bool buildPlanetaryLaserRangeConstraints(
             ++localSummary.constrainedPointShots;
             break;
         case PlanetaryLaserPointMode::Free:
-            constraint.pointMode = BALaserPointMode::Free;
+            constraint.pointMode = plabundle::LaserPointMode::Free;
             ++localSummary.freePointShots;
             break;
         default:
@@ -427,7 +427,7 @@ bool buildPlanetaryLaserRangeConstraints(
                 setError(errorMessage,
                          "Shot '" + shot.id +
                              "' 的 measured image covariance 不是各向同性 sigma^2*I；"
-                             "当前标量 BAObservation 不允许静默丢失相关性");
+                             "当前标量 plabundle::Observation 不允许静默丢失相关性");
                 constraints->clear();
                 return false;
             }
@@ -446,7 +446,7 @@ bool buildPlanetaryLaserRangeConstraints(
             });
             ++localSummary.measuredImageObservations;
         }
-        if (constraint.pointMode == BALaserPointMode::Free && measuredCameras.size() < 2)
+        if (constraint.pointMode == plabundle::LaserPointMode::Free && measuredCameras.size() < 2)
         {
             setError(errorMessage,
                      "Shot '" + shot.id +

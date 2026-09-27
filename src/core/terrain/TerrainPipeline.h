@@ -1,7 +1,8 @@
 #pragma once
 
 #include "SmallBodyGlobalProducts.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QString>
 #include <QJsonObject>
@@ -36,13 +37,13 @@ public:
      * 3. 可选的栅格补密点云 dense_cloud.xyz
      * 4. 可选的三角网模型 model_from_dense.ply
      */
-    static bool generateDemProducts(const QString &pointCloudPath,
-                                    const QString &outputDir,
+    static bool generateDemProducts(const QString& pointCloudPath,
+                                    const QString& outputDir,
                                     double demResolution,
-                                    const QString &demType,
+                                    const QString& demType,
                                     bool generateDenseCloud,
-                                    QJsonObject *result,
-                                    QString *errorMsg = nullptr);
+                                    QJsonObject* result,
+                                    QString* errorMsg = nullptr);
 
     /**
      * @brief 从深度图 + 相机直接生成 DEM（图像空间栅格化，类似 ASP）。
@@ -50,12 +51,11 @@ public:
      * 直接在参考图像空间生成 DEM，避免点云中间步骤的覆盖率损失。
      * DEM 尺寸与参考深度图一致，覆盖率接近 100%。
      */
-    static bool
-    generateDemFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
-                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
-                             const QString& outputDir,
-                             QJsonObject* result,
-                             QString* errorMsg = nullptr);
+    static bool generateDemFromDepthMaps(const std::vector<cv::Mat>& depthMaps,
+                                         const std::vector<placamera::FramePinholeModel>& cameras,
+                                         const QString& outputDir,
+                                         QJsonObject* result,
+                                         QString* errorMsg = nullptr);
 
     /**
      * @brief 结合 DEM 与输入影像生成 DOM。

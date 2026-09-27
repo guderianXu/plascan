@@ -3,10 +3,16 @@
 #include "geometry/TriangulationQuality.h"
 #include "reference/CoordinateReference.h"
 
+#include <placamera/frame_numeric_state.h>
+
 #include <QSet>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace xjw::core::project
 {
@@ -34,8 +40,8 @@ namespace xjw::core::project
         }
 
         bool
-        triangulateMarkerTrack(const xjw::BATrack& track,
-                               const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& cameras,
+        triangulateMarkerTrack(const plabundle::Track& track,
+                               const std::vector<placamera::FramePinholeNumericState>& cameras,
                                std::array<double, 3>* point)
         {
             if (!point)
@@ -44,27 +50,27 @@ namespace xjw::core::project
             }
             for (std::size_t first = 0; first + 1 < track.observations.size(); ++first)
             {
-                const xjw::BAObservation& left = track.observations[first];
+                const plabundle::Observation& left = track.observations[first];
                 if (left.cameraIndex < 0 || left.cameraIndex >= static_cast<int>(cameras.size()))
                 {
                     continue;
                 }
                 for (std::size_t second = first + 1; second < track.observations.size(); ++second)
                 {
-                    const xjw::BAObservation& right = track.observations[second];
+                    const plabundle::Observation& right = track.observations[second];
                     if (right.cameraIndex < 0 || right.cameraIndex >= static_cast<int>(cameras.size()) ||
                         left.cameraIndex == right.cameraIndex)
                     {
                         continue;
                     }
-                    const auto candidate = xjw::camera_models::frame_pinhole::FramePinholeNumericState::triangulatePair(
+                    const auto candidate = placamera::FramePinholeNumericState::triangulatePair(
                         cameras[static_cast<std::size_t>(left.cameraIndex)],
-                        {left.u, left.v},
+                        placamera::ImageCoordinate{left.u, left.v},
                         cameras[static_cast<std::size_t>(right.cameraIndex)],
-                        {right.u, right.v});
-                    if (candidate.valid)
+                        placamera::ImageCoordinate{right.u, right.v});
+                    if (candidate)
                     {
-                        *point = candidate.point;
+                        *point = candidate.value().point.position;
                         return true;
                     }
                 }
@@ -86,6 +92,45 @@ namespace xjw::core::project
         if (!input || !input->markerSet || !result)
         {
             return;
+        }
+
+        if (result->cameraInstances.size() != result->imageIdByIndex.size())
+        {
+            recordControlInputError(result,
+                                    QStringLiteral("BA 标记观测的 PlaCamera 实例与 "
+                                                   "canonical ImageId 数量不一致"));
+            return;
+        }
+        std::vector<placamera::FramePinholeNumericState> native_cameras;
+        native_cameras.reserve(result->cameraInstances.size());
+        for (std::size_t index = 0; index < result->cameraInstances.size(); ++index)
+        {
+            const auto& instance = result->cameraInstances[index];
+            if (!instance)
+            {
+                recordControlInputError(result, QStringLiteral("BA 标记观测包含空 PlaCamera 实例"));
+                return;
+            }
+            if (instance->imageId() != result->imageIdByIndex[index])
+            {
+                const QString message =
+                    QStringLiteral("BA 标记观测的 PlaCamera 实例与 "
+                                   "canonical ImageId 不一致（索引 %1）")
+                        .arg(static_cast<qulonglong>(index));
+                recordControlInputError(result, message);
+                return;
+            }
+            try
+            {
+                native_cameras.push_back(placamera::FramePinholeNumericState::fromModel(*instance));
+            }
+            catch (const std::exception& exception)
+            {
+                recordControlInputError(result,
+                                        QStringLiteral("BA 标记相机无法建立 PlaCamera 数值状态：%1")
+                                            .arg(QString::fromUtf8(exception.what())));
+                return;
+            }
         }
 
         QMap<control_points::MarkerId, int> trackIndexByMarker;
@@ -137,7 +182,7 @@ namespace xjw::core::project
                 continue;
             }
 
-            xjw::BATrack track;
+            plabundle::Track track;
             QSet<int> usedCameras;
             for (const control_points::MarkerProjection& projection : marker.projections)
             {
@@ -173,7 +218,8 @@ namespace xjw::core::project
                                               1.0 / std::max(1.0e-9, projection.sigmaPx * projection.sigmaPx)});
                 usedCameras.insert(cameraIndex);
             }
-            if (track.observations.size() < 2 || !triangulateMarkerTrack(track, result->cameras, &track.initialPoint))
+            if (track.observations.size() < 2 ||
+                !triangulateMarkerTrack(track, native_cameras, &track.initialPoint))
             {
                 ++result->rejectedMarkerTrackCount;
                 continue;
@@ -220,11 +266,29 @@ namespace xjw::core::project
             return;
         }
         const control_points::SimilarityTransform3D& transform = result->markerControlNetwork.transform;
-        for (auto& camera : result->cameras)
+        std::vector<std::shared_ptr<const placamera::FramePinholeModel>> transformed_instances;
+        transformed_instances.reserve(result->cameraInstances.size());
+        try
         {
-            camera.setPose(transform.rotate(camera.cameraToWorldRotation()), transform.apply(camera.cameraCenter()));
+            for (std::size_t index = 0; index < result->cameraInstances.size(); ++index)
+            {
+                const auto& instance = result->cameraInstances[index];
+                const placamera::Pose transformed_pose =
+                    placamera::Pose::create(instance->groundFrame(),
+                                            transform.apply(instance->pose().center),
+                                            transform.rotate(instance->pose().cameraToWorldRotation));
+                transformed_instances.push_back(std::make_shared<const placamera::FramePinholeModel>(
+                    instance->withPose(instance->instanceId(), transformed_pose)));
+            }
         }
-        for (xjw::BATrack& track : result->tracks)
+        catch (const std::exception& exception)
+        {
+            recordControlInputError(
+                result, QStringLiteral("BA 控制网相机位姿更新失败：%1").arg(QString::fromUtf8(exception.what())));
+            return;
+        }
+        result->cameraInstances = std::move(transformed_instances);
+        for (plabundle::Track& track : result->tracks)
         {
             track.initialPoint = transform.apply(track.initialPoint);
         }
@@ -244,7 +308,7 @@ namespace xjw::core::project
             {
                 continue;
             }
-            xjw::BAControlPointConstraint constraint;
+            plabundle::ControlPointConstraint constraint;
             constraint.point = metricReference->pointMetres;
             constraint.sigmaMeters = referenceSigmaRms(metricReference->sigmaMetres);
             constraint.weight = 1.0;
@@ -277,7 +341,7 @@ namespace xjw::core::project
             }
             else
             {
-                xjw::BAScaleBarConstraint constraint;
+                plabundle::ScaleBarConstraint constraint;
                 constraint.trackIndexA = trackIndexByMarker.value(scaleBar.firstMarkerId);
                 constraint.trackIndexB = trackIndexByMarker.value(scaleBar.secondMarkerId);
                 constraint.measuredDistanceMeters = scaleBar.measuredDistance;

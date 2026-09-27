@@ -9,11 +9,11 @@
 namespace
 {
 
-constexpr auto CameraModelPolicyKey = "camera_model_policy";
-constexpr auto FramePinholeToken = "frame_pinhole";
-constexpr auto IsisUsgsCsmLineScanToken = "isis_usgscsm_linescan";
+    constexpr auto CameraModelPolicyKey = "camera_model_policy";
+    constexpr auto FramePinholeToken = "frame_pinhole";
+    constexpr auto IsisUsgsCsmLineScanToken = "isis_usgscsm_linescan";
 
-}
+} // namespace
 
 QString projectCameraModelPolicyToken(ProjectCameraModelPolicy policy)
 {
@@ -28,8 +28,7 @@ QString projectCameraModelPolicyToken(ProjectCameraModelPolicy policy)
     return {};
 }
 
-std::optional<ProjectCameraModelPolicy> parseProjectCameraModelPolicy(
-    const QString &token)
+std::optional<ProjectCameraModelPolicy> parseProjectCameraModelPolicy(const QString& token)
 {
     const QString normalized_token = token.trimmed();
     if (normalized_token == QString::fromLatin1(FramePinholeToken))
@@ -138,7 +137,8 @@ bool ProjectConfigManager::validateBundleAdjustSettings(const QJsonObject& input
         const QString name = backend.toString().trimmed().toLower();
         if (!backend.isString() ||
             (name != QLatin1String("auto") && name != QLatin1String("plamatrix_cpu") &&
-             name != QLatin1String("plamatrix_cuda") && name != QLatin1String("plamatrix_opencl")))
+             name != QLatin1String("plamatrix_cuda") && name != QLatin1String("plamatrix_vulkan") &&
+             name != QLatin1String("plamatrix_opencl")))
         {
             return fail(QStringLiteral("ba_backend=%1").arg(name));
         }
@@ -146,18 +146,14 @@ bool ProjectConfigManager::validateBundleAdjustSettings(const QJsonObject& input
     return true;
 }
 
-std::optional<ProjectCameraModelPolicy>
-ProjectConfigManager::cameraModelPolicy() const
+std::optional<ProjectCameraModelPolicy> ProjectConfigManager::cameraModelPolicy() const
 {
-    return parseProjectCameraModelPolicy(
-        _config.value(QString::fromLatin1(CameraModelPolicyKey)).toString());
+    return parseProjectCameraModelPolicy(_config.value(QString::fromLatin1(CameraModelPolicyKey)).toString());
 }
 
-void ProjectConfigManager::setCameraModelPolicy(
-    ProjectCameraModelPolicy policy)
+void ProjectConfigManager::setCameraModelPolicy(ProjectCameraModelPolicy policy)
 {
-    _config[QString::fromLatin1(CameraModelPolicyKey)] =
-        projectCameraModelPolicyToken(policy);
+    _config[QString::fromLatin1(CameraModelPolicyKey)] = projectCameraModelPolicyToken(policy);
 }
 
 /**
@@ -166,7 +162,7 @@ void ProjectConfigManager::setCameraModelPolicy(
  * @param step  步骤名称（例如 "bundle_adjust"、"dem"、"ortho"）。
  * @return      该步骤对应的参数对象；不存在时返回空 QJsonObject。
  */
-QJsonObject ProjectConfigManager::workflowSettings(const QString &step) const
+QJsonObject ProjectConfigManager::workflowSettings(const QString& step) const
 {
     // 临时创建子管理器，加载 "workflow" 段后查询指定步骤
     ProjectWorkflowConfigManager workflowManager;
@@ -180,7 +176,7 @@ QJsonObject ProjectConfigManager::workflowSettings(const QString &step) const
  * @param step     步骤名称。
  * @param settings 仅含需要修改字段的 JSON 补丁对象。
  */
-void ProjectConfigManager::setWorkflowSettings(const QString &step, const QJsonObject &settings)
+void ProjectConfigManager::setWorkflowSettings(const QString& step, const QJsonObject& settings)
 {
     // 临时创建子管理器，加载 "workflow" 段后更新指定步骤
     ProjectWorkflowConfigManager workflowManager;

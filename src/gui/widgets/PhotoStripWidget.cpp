@@ -1,15 +1,16 @@
 #include "PhotoStripWidget.h"
 
-#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "project/ProjectIO.h"
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "Logger.h"
 
 #include "../views/LayerImageLoader.h"
 
 #include <algorithm>
 #include <exception>
+#include <utility>
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -70,26 +71,13 @@ namespace
         return pool;
     }
 
-    bool hasAlignmentEvidence(const QJsonObject& entry, const QJsonObject& metadata)
-    {
-        if (!xjw::common::project::projectCameraModelParameters(metadata, entry).isEmpty())
-        {
-            return true;
-        }
-        if (entry.contains(QStringLiteral("center")))
-        {
-            return true;
-        }
-        return entry.contains(QStringLiteral("camera_center"));
-    }
-
-    bool isAlignedEntry(const QJsonObject& entry, const QJsonObject& metadata)
+    bool isAlignedEntry(const QJsonObject& entry, const QSet<QString>& cameraImageIds)
     {
         if (entry.contains(QStringLiteral("aligned")))
         {
             return entry.value(QStringLiteral("aligned")).toBool(false);
         }
-        return hasAlignmentEvidence(entry, metadata);
+        return cameraImageIds.contains(entry.value(QStringLiteral("image_uuid")).toString().trimmed());
     }
 
     QString displayNameForEntry(const QJsonObject& entry, const QString& imagePath)
@@ -233,15 +221,28 @@ void PhotoStripWidget::loadFromJson(const QJsonObject& meta)
         return;
     }
 
-    _projectMetadata = meta;
     const QJsonArray images = xjw::common::project::projectImageEntries(meta);
-    if (_hasLoadedImageEntries && _loadedImageEntries == images)
+    QSet<QString> camera_image_ids;
+    const auto loaded = xjw::placamera_runtime::loadProjectCameras(xjw::common::project::projectFilesRootObject(meta));
+    if (!loaded.ok())
+    {
+        LOG_WARN(QStringLiteral("照片列表无法读取工程相机：%1").arg(loaded.errors.join(QStringLiteral("；"))));
+    }
+    else
+    {
+        for (const auto& camera : loaded.instances.values())
+        {
+            camera_image_ids.insert(QString::fromStdString(camera->imageId().value()));
+        }
+    }
+    if (_hasLoadedImageEntries && _loadedImageEntries == images && _cameraImageIds == camera_image_ids)
     {
         return;
     }
 
     advanceThumbnailGeneration(false);
     clearPhotos();
+    _cameraImageIds = std::move(camera_image_ids);
 
     _loadedImageEntries = images;
     _hasLoadedImageEntries = true;
@@ -457,6 +458,7 @@ void PhotoStripWidget::clearPhotos()
     _queuedThumbnailKeys.clear();
     _desiredThumbnailKeys.clear();
     _itemsByPath.clear();
+    _cameraImageIds.clear();
     _loadedImageEntries = QJsonArray();
     _hasLoadedImageEntries = false;
     if (_list)
@@ -485,7 +487,7 @@ QListWidgetItem* PhotoStripWidget::createItem(const QJsonObject& entry)
     const QIcon cachedIcon = cachedThumbnail(key);
     item->setIcon(cachedIcon.isNull() ? placeholderPhotoIcon() : cachedIcon);
 
-    const QString alignedText = isAlignedEntry(entry, _projectMetadata) ? tr("已对齐") : tr("未对齐");
+    const QString alignedText = isAlignedEntry(entry, _cameraImageIds) ? tr("已对齐") : tr("未对齐");
     item->setToolTip(tr("%1\n状态: %2").arg(imagePath, alignedText));
     return item;
 }

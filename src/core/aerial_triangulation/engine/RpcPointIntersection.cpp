@@ -1,5 +1,5 @@
 #include "engine/RpcEngineInternals.h"
-#include "camera/models/rpc/RpcIntersectionService.h"
+#include <placamera/rpc_adjustment.h>
 
 #include <algorithm>
 #include <cmath>
@@ -63,7 +63,7 @@ namespace xjw::aerial_triangulation::engine
         bool rpcResiduals(const TiePointGraph& graph,
                           const std::map<ImageId, RpcCamera>& cameras,
                           const std::vector<RpcObservation>& observations,
-                          const camera_models::rpc::EcefCoordinate& ecef,
+                          const RpcCartesianCoordinate& ecef,
                           std::vector<double>* residuals)
         {
             residuals->clear();
@@ -71,15 +71,19 @@ namespace xjw::aerial_triangulation::engine
             for (const RpcObservation& observation : observations)
             {
                 const auto camera = cameras.find(observation.imageId);
-                camera_models::rpc::ImagePoint projection;
-                if (camera == cameras.cend() || !camera->second ||
-                    !camera_models::rpc::RpcProjection::groundToImageEcef(*camera->second, ecef, &projection))
+                if (camera == cameras.cend() || !camera->second)
                 {
                     return false;
                 }
-                const camera_models::rpc::ImagePoint measured = rpcImageCoordinate(graph, observation);
-                residuals->push_back(projection.sample - measured.sample);
-                residuals->push_back(projection.line - measured.line);
+                const auto projected = camera->second->groundToImage(
+                    placamera::GroundCoordinate{camera->second->groundFrame(), ecef});
+                if (!projected)
+                {
+                    return false;
+                }
+                const RpcImagePoint measured = rpcImageCoordinate(graph, observation);
+                residuals->push_back(projected.value().image.sample - measured.sample);
+                residuals->push_back(projected.value().image.line - measured.line);
             }
             return true;
         }
@@ -101,7 +105,7 @@ namespace xjw::aerial_triangulation::engine
         bool refineRpcPoint(const TiePointGraph& graph,
                             const std::map<ImageId, RpcCamera>& cameras,
                             const std::vector<RpcObservation>& observations,
-                            camera_models::rpc::EcefCoordinate* ecef)
+                            RpcCartesianCoordinate* ecef)
         {
             std::vector<double> currentResiduals;
             if (!rpcResiduals(graph, cameras, observations, *ecef, &currentResiduals))
@@ -115,8 +119,8 @@ namespace xjw::aerial_triangulation::engine
                 std::vector<std::array<double, 3>> jacobian(currentResiduals.size());
                 for (int axis = 0; axis < 3; ++axis)
                 {
-                    camera_models::rpc::EcefCoordinate plus = *ecef;
-                    camera_models::rpc::EcefCoordinate minus = *ecef;
+                    RpcCartesianCoordinate plus = *ecef;
+                    RpcCartesianCoordinate minus = *ecef;
                     plus[axis] += derivativeStepMeters;
                     minus[axis] -= derivativeStepMeters;
                     std::vector<double> plusResiduals;
@@ -160,9 +164,9 @@ namespace xjw::aerial_triangulation::engine
                 }
                 const double updateLength = std::hypot(update[0], std::hypot(update[1], update[2]));
                 const double updateScale = updateLength > 500.0 ? 500.0 / updateLength : 1.0;
-                camera_models::rpc::EcefCoordinate candidate{(*ecef)[0] + updateScale * update[0],
-                                                              (*ecef)[1] + updateScale * update[1],
-                                                              (*ecef)[2] + updateScale * update[2]};
+                RpcCartesianCoordinate candidate{(*ecef)[0] + updateScale * update[0],
+                                                 (*ecef)[1] + updateScale * update[1],
+                                                 (*ecef)[2] + updateScale * update[2]};
                 std::vector<double> candidateResiduals;
                 if (!rpcResiduals(graph, cameras, observations, candidate, &candidateResiduals))
                 {
@@ -194,12 +198,12 @@ namespace xjw::aerial_triangulation::engine
                                RpcPoint* point,
                                std::map<ImageId, CameraResidualAccumulator>* cameraResiduals)
         {
-            camera_models::rpc::RpcIntersectionOptions options;
+            placamera::RpcIntersectionOptions options;
             options.pixelTolerance = 1.0e-4;
             options.positionToleranceMeters = 1.0e-3;
             options.maximumIterations = 40;
 
-            camera_models::rpc::RpcIntersectionResult best;
+            std::optional<placamera::RpcIntersectionResult> best;
             bool hasBest = false;
             for (std::size_t first = 0; first + 1 < observations.size(); ++first)
             {
@@ -214,21 +218,21 @@ namespace xjw::aerial_triangulation::engine
                     {
                         continue;
                     }
-                    camera_models::rpc::RpcIntersectionResult candidate;
-                    const bool converged = camera_models::rpc::RpcIntersectionService::intersect(
+                    const auto candidate = placamera::intersectRpc(
                         *firstCamera->second,
-                        rpcImageCoordinate(graph, firstRpcObservation),
+                        placamera::ImageCoordinate{rpcImageCoordinate(graph, firstRpcObservation).sample,
+                                                   rpcImageCoordinate(graph, firstRpcObservation).line},
                         *secondCamera->second,
-                        rpcImageCoordinate(graph, secondRpcObservation),
-                        &candidate,
+                        placamera::ImageCoordinate{rpcImageCoordinate(graph, secondRpcObservation).sample,
+                                                   rpcImageCoordinate(graph, secondRpcObservation).line},
                         options);
-                    if ((!converged && candidate.iterations <= 0) || !std::isfinite(candidate.reprojectionRmsPixels))
+                    if (!candidate || !std::isfinite(candidate.value().reprojectionRmsPixels))
                     {
                         continue;
                     }
-                    if (!hasBest || candidate.reprojectionRmsPixels < best.reprojectionRmsPixels)
+                    if (!hasBest || candidate.value().reprojectionRmsPixels < best->reprojectionRmsPixels)
                     {
-                        best = candidate;
+                        best = candidate.value();
                         hasBest = true;
                     }
                 }
@@ -238,27 +242,43 @@ namespace xjw::aerial_triangulation::engine
                 return false;
             }
 
-            if (!refineRpcPoint(graph, cameras, observations, &best.ecefMeters) ||
-                !camera_models::rpc::RpcProjection::ecefToGeodetic(best.ecefMeters, &best.geodetic))
+            RpcCartesianCoordinate ecef = best->cartesian.position;
+            if (!refineRpcPoint(graph, cameras, observations, &ecef))
             {
                 return false;
             }
+            const auto firstCamera = cameras.find(observations.front().imageId);
+            if (firstCamera == cameras.cend() || !firstCamera->second)
+            {
+                return false;
+            }
+            const auto geodetic = placamera::cartesianToGeodetic(ecef, firstCamera->second->rpcDefinition().ellipsoid());
+            if (!geodetic)
+            {
+                return false;
+            }
+            const RpcGeodeticCoordinate geodeticArray{
+                geodetic.value().longitudeDegrees, geodetic.value().latitudeDegrees, geodetic.value().heightMeters};
 
             double squaredErrorSum = 0.0;
             double maximumResidual = 0.0;
             for (const RpcObservation& observation : observations)
             {
                 const auto camera = cameras.find(observation.imageId);
-                camera_models::rpc::ImagePoint projection;
-                if (camera == cameras.cend() || !camera->second ||
-                    !camera_models::rpc::RpcProjection::groundToImageEcef(
-                        *camera->second, best.ecefMeters, &projection))
+                if (camera == cameras.cend() || !camera->second)
                 {
                     return false;
                 }
-                const camera_models::rpc::ImagePoint measured = rpcImageCoordinate(graph, observation);
+                const auto projection = camera->second->groundToImage(
+                    placamera::GroundCoordinate{camera->second->groundFrame(), ecef});
+                if (!projection)
+                {
+                    return false;
+                }
+                const RpcImagePoint measured = rpcImageCoordinate(graph, observation);
                 const double residual =
-                    std::hypot(projection.sample - measured.sample, projection.line - measured.line);
+                    std::hypot(projection.value().image.sample - measured.sample,
+                               projection.value().image.line - measured.line);
                 if (!std::isfinite(residual))
                 {
                     return false;
@@ -268,15 +288,15 @@ namespace xjw::aerial_triangulation::engine
             }
             const double rms = std::sqrt(squaredErrorSum / observations.size());
             if (!std::isfinite(rms) || rms > maximumRmsPixels || maximumResidual > maximumRmsPixels * 2.0 ||
-                !std::isfinite(best.geodetic[0]) || !std::isfinite(best.geodetic[1]) ||
-                !std::isfinite(best.geodetic[2]) || std::abs(best.geodetic[0]) > 180.0 ||
-                std::abs(best.geodetic[1]) > 90.0)
+                !std::isfinite(geodeticArray[0]) || !std::isfinite(geodeticArray[1]) ||
+                !std::isfinite(geodeticArray[2]) || std::abs(geodeticArray[0]) > 180.0 ||
+                std::abs(geodeticArray[1]) > 90.0)
             {
                 return false;
             }
 
-            point->ecef = best.ecefMeters;
-            point->geodetic = best.geodetic;
+            point->ecef = ecef;
+            point->geodetic = geodeticArray;
             point->observations = observations;
             point->rmsPixels = rms;
             point->maximumResidualPixels = maximumResidual;
@@ -285,12 +305,16 @@ namespace xjw::aerial_triangulation::engine
             {
                 for (const RpcObservation& observation : observations)
                 {
-                    camera_models::rpc::ImagePoint projection;
-                    camera_models::rpc::RpcProjection::groundToImageEcef(
-                        *cameras.at(observation.imageId), best.ecefMeters, &projection);
-                    const camera_models::rpc::ImagePoint measured = rpcImageCoordinate(graph, observation);
+                    const auto projection = cameras.at(observation.imageId)->groundToImage(
+                        placamera::GroundCoordinate{cameras.at(observation.imageId)->groundFrame(), ecef});
+                    if (!projection)
+                    {
+                        return false;
+                    }
+                    const RpcImagePoint measured = rpcImageCoordinate(graph, observation);
                     const double residual =
-                        std::hypot(projection.sample - measured.sample, projection.line - measured.line);
+                        std::hypot(projection.value().image.sample - measured.sample,
+                                   projection.value().image.line - measured.line);
                     CameraResidualAccumulator& accumulator = (*cameraResiduals)[observation.imageId];
                     ++accumulator.observationCount;
                     accumulator.squaredErrorSum += residual * residual;

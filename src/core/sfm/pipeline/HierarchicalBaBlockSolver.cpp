@@ -1,5 +1,9 @@
 #include "HierarchicalBaBlockSolver.h"
 
+#include "SfmBundleCameraCodec.h"
+
+#include <plabundle/solver.h>
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -13,7 +17,7 @@ namespace xjw::hierarchical_ba_detail
                             const CovisibilityBlock& block,
                             const SfmReconstruction& reconstruction,
                             const std::vector<Point3DId>& candidate_point_ids,
-                            const BAOptions& base_options,
+                            const plabundle::SolveOptions& base_options,
                             int threads_per_block)
     {
         BlockOutcome outcome;
@@ -27,7 +31,7 @@ namespace xjw::hierarchical_ba_detail
         const std::unordered_set<ImageId> core_ids(block.coreImageIds.begin(), block.coreImageIds.end());
         const std::unordered_set<ImageId> overlap_ids(block.overlapImageIds.begin(), block.overlapImageIds.end());
         std::unordered_map<ImageId, int> camera_index;
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState> cameras;
+        std::vector<placamera::FramePinholeNumericState> cameras;
         cameras.reserve(outcome.cameraIds.size());
         for (ImageId image_id : outcome.cameraIds)
         {
@@ -39,7 +43,7 @@ namespace xjw::hierarchical_ba_detail
             cameras.push_back(reconstruction.camera(image_id));
         }
 
-        std::vector<BATrack> tracks;
+        std::vector<plabundle::Track> tracks;
         std::vector<int> fixed_track_indices;
         tracks.reserve(candidate_point_ids.size());
         for (Point3DId point_id : candidate_point_ids)
@@ -49,7 +53,7 @@ namespace xjw::hierarchical_ba_detail
                 continue;
             }
             const ScenePoint3D& point = reconstruction.point3D(point_id);
-            BATrack track;
+            plabundle::Track track;
             track.initialPoint = point.xyz;
             bool touches_core = false;
             bool crosses_block = false;
@@ -92,58 +96,60 @@ namespace xjw::hierarchical_ba_detail
             return outcome;
         }
 
-        BAOptions options = base_options;
+        plabundle::SolveOptions options = base_options;
         // 独立块并行时统一使用 CPU，避免多个求解器同时争抢同一 GPU 上下文。
-        options.backend = BABackend::PlaMatrixCpu;
-        options.numThreads = std::max(1, threads_per_block);
-        options.maxIterations = std::max(1, base_options.maxIterations);
-        options.logIterationProgress = false;
-        options.progressCallback = nullptr;
-        options.enablePointFilter = false;
-        options.refineSharedFocalLength = false;
-        options.refineSharedFocalAspectRatio = false;
-        options.refineSharedPrincipalPoint = false;
-        options.refineSharedRadialDistortion = false;
-        options.cameraCalibrationGroupIds.clear();
-        options.sharedIntrinsicReferenceCameras.clear();
-        options.cameraPosePriors.clear();
-        options.enableControlPointConstraints = false;
-        options.enableScaleBarConstraints = false;
-        options.scaleBarConstraints.clear();
-        options.cameraPlaneConstraint = {};
-        options.fixedCameraIndices.clear();
-        options.fixedTrackIndices = std::move(fixed_track_indices);
-        outcome.fixedTrackCount = static_cast<int>(options.fixedTrackIndices.size());
+        options.backend.requested = plabundle::Backend::PlaMatrixCpu;
+        options.solver.numThreads = std::max(1, threads_per_block);
+        options.solver.maxIterations = std::max(1, base_options.solver.maxIterations);
+        options.solver.logIterationProgress = false;
+        options.solver.progressCallback = nullptr;
+        options.solver.enablePointFilter = false;
+        options.calibration.refineSharedFocalLength = false;
+        options.calibration.refineSharedFocalAspectRatio = false;
+        options.calibration.refineSharedPrincipalPoint = false;
+        options.calibration.refineSharedRadialDistortion = false;
+        plabundle::Problem problem;
+        problem.tracks = std::move(tracks);
+        problem.fixedTrackIndices = std::move(fixed_track_indices);
+        outcome.fixedTrackCount = static_cast<int>(problem.fixedTrackIndices.size());
+        if (!sfm_bundle_camera::encodeAll(cameras, &problem.cameras))
+        {
+            return outcome;
+        }
 
         for (ImageId image_id : outcome.cameraIds)
         {
             if (overlap_ids.count(image_id) > 0)
             {
-                options.fixedCameraIndices.push_back(camera_index.at(image_id));
+                problem.fixedCameraIndices.push_back(camera_index.at(image_id));
             }
         }
         // 每个块至少固定两台相机，直接保留共同坐标系的旋转、平移和尺度。
         for (ImageId image_id : block.coreImageIds)
         {
-            if (options.fixedCameraIndices.size() >= 2)
+            if (problem.fixedCameraIndices.size() >= 2)
             {
                 break;
             }
-            options.fixedCameraIndices.push_back(camera_index.at(image_id));
+            problem.fixedCameraIndices.push_back(camera_index.at(image_id));
         }
-        std::sort(options.fixedCameraIndices.begin(), options.fixedCameraIndices.end());
-        options.fixedCameraIndices.erase(
-            std::unique(options.fixedCameraIndices.begin(), options.fixedCameraIndices.end()),
-            options.fixedCameraIndices.end());
-        options.gaugePolicy = BAGaugePolicy::RequireExplicitGauge;
+        std::sort(problem.fixedCameraIndices.begin(), problem.fixedCameraIndices.end());
+        problem.fixedCameraIndices.erase(
+            std::unique(problem.fixedCameraIndices.begin(), problem.fixedCameraIndices.end()),
+            problem.fixedCameraIndices.end());
+        problem.gauge.policy = plabundle::GaugePolicy::RequireExplicitGauge;
 
-        outcome.result = BundleAdjust::optimizePoints(cameras, tracks, options);
-        const double tolerance = std::max(1.0e-9, std::abs(outcome.result.meanRmsBefore) * 0.01);
-        outcome.accepted = outcome.result.solutionUsable && std::isfinite(outcome.result.meanRmsBefore) &&
-                           std::isfinite(outcome.result.meanRmsAfter) &&
-                           outcome.result.meanRmsAfter <= outcome.result.meanRmsBefore + tolerance &&
-                           outcome.result.refinedCameras.size() == cameras.size() &&
-                           outcome.result.points.size() == tracks.size();
+        outcome.result = plabundle::Solver().solve(problem, options);
+        outcome.refinedCameras = cameras;
+        const bool cameras_applied =
+            !outcome.result.usable() ||
+            sfm_bundle_camera::decodeAll(outcome.result.refinedCameras, &outcome.refinedCameras);
+        const double tolerance = std::max(1.0e-9, std::abs(outcome.result.quality.meanRmsBefore) * 0.01);
+        outcome.accepted =
+            outcome.result.usable() && cameras_applied && std::isfinite(outcome.result.quality.meanRmsBefore) &&
+            std::isfinite(outcome.result.quality.meanRmsAfter) &&
+            outcome.result.quality.meanRmsAfter <= outcome.result.quality.meanRmsBefore + tolerance &&
+            outcome.refinedCameras.size() == cameras.size() && outcome.result.points.size() == problem.tracks.size();
         return outcome;
     }
 

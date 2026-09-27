@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace
@@ -230,18 +231,29 @@ TEST(TextureOverlapExposureTest, PipelineCollectsOnlySharedDepthVisiblePoints)
     {
         xjw::mesh::texture_v4::PreparedView view;
         view.sourceIndex = view_index;
-        view.evidenceCamera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
-        view.evidenceCamera.setPose(
-            std::array<double, 9>{1.0, 0.0, 0.0,
-                                  0.0, 1.0, 0.0,
-                                  0.0, 0.0, 1.0},
-            std::array<double, 3>{0.0, 0.0, 0.0});
+        const placamera::FrameId ground_frame("texture-overlap-world");
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = 40.0;
+        intrinsics.focalY = 40.0;
+        intrinsics.principalX = 24.0;
+        intrinsics.principalY = 18.0;
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("texture-overlap-definition"),
+                                                      intrinsics,
+                                                      {},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      ground_frame);
+        const auto camera = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("texture-overlap-instance-" + std::to_string(view_index)),
+            placamera::ImageId("texture-overlap-image-" + std::to_string(view_index)),
+            definition,
+            {48, 36},
+            placamera::Pose::create(ground_frame, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+        view.evidenceCamera = placamera::FramePinholeNumericState::fromModel(camera);
         view.colorCamera = view.evidenceCamera;
         const int encoded_gray = view_index == 0 ? 180 : 150;
-        view.colorBgr = cv::Mat(
-            36, 48, CV_8UC3, cv::Scalar::all(encoded_gray));
-        view.supportDistance = cv::Mat(
-            36, 48, CV_32FC1, cv::Scalar(4.0f));
+        view.colorBgr = cv::Mat(36, 48, CV_8UC3, cv::Scalar::all(encoded_gray));
+        view.supportDistance = cv::Mat(36, 48, CV_32FC1, cv::Scalar(4.0f));
         depths[view_index] = cv::Mat(
             36, 48, CV_32FC1, cv::Scalar(2.0f));
         confidences[view_index] = cv::Mat(

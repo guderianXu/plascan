@@ -8,13 +8,13 @@
 // 使用 OpenCV 的 solvePnPRansac 估计相机的绝对位姿（R, t）。
 //
 // 输出采用 PlaScan 约定：
-//   - R 为 camera-to-world 旋转矩阵（与 FramePinholeNumericState.h 一致）
+//   - R 为 camera-to-world 旋转矩阵
 //   - C 为相机中心在世界坐标系中的位置
 //
 // 参考：COLMAP 的 absolute_pose.h，简化适配。
 // ============================================================
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 
 #include <array>
 #include <vector>
@@ -108,10 +108,10 @@ namespace xjw
     {
         bool success = false; ///< 是否成功求解
 
-        /// camera-to-world 旋转矩阵（行优先 3×3），与 `FramePinholeNumericState::cameraToWorldRotation()` 一致
+        /// camera-to-world 旋转矩阵（行优先 3×3）
         std::array<double, 9> R{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
 
-        /// 相机中心在世界坐标系中的位置，与 `FramePinholeNumericState::cameraCenter()` 一致
+        /// 相机中心在世界坐标系中的位置
         std::array<double, 3> C{{0, 0, 0}};
 
         int numInliers = 0;                    ///< RANSAC 内点数
@@ -162,32 +162,22 @@ namespace xjw
                                const PnpOptions& options = PnpOptions());
 
         /**
-         * @brief 使用已有 FramePinholeNumericState 内参从 3D-2D 对应关系估计绝对位姿。
+         * @brief 使用 PlaCamera 标定值从 3D-2D 对应关系估计绝对位姿。
          *
          * @param worldPoints   三维点坐标列表
          * @param imagePoints   对应的图像像素坐标列表
-         * @param cam           提供内参、坐标轴方向和 Brown-Conrady 畸变的相机
+         * @param intrinsics    像素内参和坐标轴方向
+         * @param distortion    Brown-Conrady 畸变
+         * @param depthFlipped  物理正深度是否位于负相机 Z 轴
          * @param options       PnP 求解选项
          * @return PnpResult    求解结果
          */
-        static PnpResult solveWithCamera(const std::vector<std::array<double, 3>>& worldPoints,
+        static PnpResult solveCalibrated(const std::vector<std::array<double, 3>>& worldPoints,
                                          const std::vector<std::array<double, 2>>& imagePoints,
-                                         const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam,
+                                         const placamera::FrameIntrinsics& intrinsics,
+                                         const placamera::BrownConradyDistortion& distortion,
+                                         bool depthFlipped,
                                          const PnpOptions& options = PnpOptions());
-
-    private:
-        static PnpResult
-        solveWithDistortion(const std::vector<std::array<double, 3>>& worldPoints,
-                            const std::vector<std::array<double, 2>>& imagePoints,
-                            double fu,
-                            double fv,
-                            double cu,
-                            double cv,
-                            int uDir,
-                            int vDir,
-                            bool depthFlipped,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion& distortion,
-                            const PnpOptions& options);
     };
 
 } // namespace xjw

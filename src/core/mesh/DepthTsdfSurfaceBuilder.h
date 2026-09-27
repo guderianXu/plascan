@@ -4,10 +4,11 @@
 
 #include "DepthGeometrySourceEncoding.h"
 #include "DepthFrameQualificationPolicy.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthMapMeshBuilder.h"
 #include "MeshTopologyQuality.h"
 #include "MeshTypes.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -20,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace xjw::mesh
@@ -31,7 +33,7 @@ namespace xjw::mesh
         QString refImage;
         QString sceneProfile;
         int algorithmRevision = 0;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::shared_ptr<const placamera::FramePinholeModel> camera;
         cv::Mat depth;
         cv::Mat confidence;
         cv::Mat geometrySupportCount;

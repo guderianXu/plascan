@@ -10,6 +10,7 @@ set(GUI_SOURCES
   config/settings/RecentProjectsManager.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
+  main_window/ApplicationShutdownCoordinator.cpp
   main_window/WindowControlsWidget.cpp
   main_window/MainWindowLayout.cpp
   main_window/MainWindowMenuBindings.cpp
@@ -117,6 +118,7 @@ set(GUI_PROJECT_SOURCES
   config/settings/FileDialogStateManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
+  project/services/ProjectCameraProjectImport.cpp
   project/services/ProjectLifecycleService.cpp
   project/services/ProjectResourceCleanupCoordinator.cpp
   project/services/ProjectResourceService.cpp

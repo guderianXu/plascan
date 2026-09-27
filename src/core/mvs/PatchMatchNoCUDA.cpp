@@ -48,8 +48,8 @@ namespace xjw
         bool PatchMatchDepthEstimator::estimateGPU(
             const cv::Mat&,
             const std::vector<cv::Mat>&,
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
-            const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>&,
+            const placamera::FramePinholeModel&,
+            const std::vector<placamera::FramePinholeModel>&,
             float,
             float,
             const PatchMatchConfig&,
@@ -87,7 +87,7 @@ namespace xjw
         std::vector<DensePoint>
         DensePointCloudCUDA::unprojectGPU(const cv::Mat&,
                                           const cv::Mat&,
-                                          const xjw::camera_models::frame_pinhole::FramePinholeNumericState&,
+                                          const placamera::FramePinholeModel&,
                                           const cv::Mat&,
                                           float,
                                           float,

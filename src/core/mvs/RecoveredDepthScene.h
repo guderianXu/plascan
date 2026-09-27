@@ -2,8 +2,11 @@
 
 #include "MvsTypes.h"
 
+#include <placamera/frame_camera.h>
+
 #include <opencv2/core.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,8 +15,7 @@ namespace xjw::mvs
 
     /// Reference public d4 calibration: f/cx/cy divided by 4, no Brown terms.
     /// This is not OpenCV half-pixel image resizing.
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState
-    recoveredPublicD4Camera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source);
+    placamera::FramePinholeModel recoveredPublicD4Camera(const placamera::FramePinholeModel& source);
 
     struct RecoveredSourceMask
     {
@@ -42,7 +44,7 @@ namespace xjw::mvs
         /// CV_32FC1. Retained pixels are NaN because recovered voting does not
         /// expose the samples needed to measure inverse-depth dispersion.
         cv::Mat inverseDepthRelativeSpread;
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+        std::shared_ptr<const placamera::FramePinholeModel> cameraModel;
         std::vector<int> sourceViewIndices;
         std::string maskSource = "full_image";
         float maskCoverage = 1.0f;

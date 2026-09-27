@@ -87,27 +87,30 @@ TextureSampleStatus localDepthEvidence(
     bool strict,
     float *evidenceWeight)
 {
-    if (!view.depth || !view.confidence || !view.depthValidMask ||
-        !view.supportMask)
+    if (!view.depth || !view.confidence || !view.depthValidMask || !view.supportMask)
     {
         return TextureSampleStatus::MissingDepthEvidence;
     }
-    double pixel[2]{};
-    double camera_depth = 0.0;
-    if (!view.evidenceCamera.projectWorldPointWithDepth(
-            world.data(), pixel, camera_depth) ||
-        !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-        !std::isfinite(camera_depth) || camera_depth <= 0.0 ||
-        pixel[0] < 0.0 || pixel[1] < 0.0 ||
-        pixel[0] > view.supportMask->cols - 1.0 ||
+    if (!view.evidenceCamera)
+    {
+        return TextureSampleStatus::Rejected;
+    }
+    const auto projected = view.evidenceCamera->groundToImage({view.evidenceCamera->groundFrame(), world});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return TextureSampleStatus::Rejected;
+    }
+    const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+    const double camera_depth = *projected.value().positiveDepth;
+    if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(camera_depth) || camera_depth <= 0.0 ||
+        pixel[0] < 0.0 || pixel[1] < 0.0 || pixel[0] > view.supportMask->cols - 1.0 ||
         pixel[1] > view.supportMask->rows - 1.0)
     {
         return TextureSampleStatus::Rejected;
     }
     const int column = static_cast<int>(std::lround(pixel[0]));
     const int row = static_cast<int>(std::lround(pixel[1]));
-    if (row < 0 || column < 0 ||
-        row >= view.supportMask->rows || column >= view.supportMask->cols ||
+    if (row < 0 || column < 0 || row >= view.supportMask->rows || column >= view.supportMask->cols ||
         view.supportMask->at<std::uint8_t>(row, column) == 0)
     {
         return TextureSampleStatus::Rejected;
@@ -177,35 +180,37 @@ cv::Vec3b saturateColor(const cv::Vec3f &color)
 
 } // namespace
 
-TextureSampleStatus sampleTextureView(
-    const PreparedView &view,
-    const std::array<double, 3> &world,
-    const FaceCandidate &candidate,
-    const TextureMappingConfig &config,
-    double medianEdgeLength,
-    int padding,
-    WeightedColor *sample,
-    int faceIndex)
+TextureSampleStatus sampleTextureView(const PreparedView& view,
+                                      const std::array<double, 3>& world,
+                                      const FaceCandidate& candidate,
+                                      const TextureMappingConfig& config,
+                                      double medianEdgeLength,
+                                      int padding,
+                                      WeightedColor* sample,
+                                      int faceIndex)
 {
     if (!sample || candidate.score <= 0.0f || view.colorBgr.empty())
     {
         return TextureSampleStatus::Rejected;
     }
-    double pixel[2]{};
-    double color_depth = 0.0;
-    if (!view.colorCamera.projectWorldPointWithDepth(
-            world.data(), pixel, color_depth) ||
-        !std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
-        pixel[0] < 0.0 || pixel[1] < 0.0 ||
-        pixel[0] > view.colorBgr.cols - 1.0 ||
-        pixel[1] > view.colorBgr.rows - 1.0)
+    if (!view.colorCamera)
+    {
+        return TextureSampleStatus::Rejected;
+    }
+    const auto projected = view.colorCamera->groundToImage({view.colorCamera->groundFrame(), world});
+    if (!projected || !projected.value().positiveDepth)
+    {
+        return TextureSampleStatus::Rejected;
+    }
+    const double pixel[2]{projected.value().image.sample, projected.value().image.line};
+    if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || pixel[0] < 0.0 || pixel[1] < 0.0 ||
+        pixel[0] > view.colorBgr.cols - 1.0 || pixel[1] > view.colorBgr.rows - 1.0)
     {
         return TextureSampleStatus::Rejected;
     }
 
     float support_distance = 0.0f;
-    if (!bilinearFootprintSupported(
-            view, pixel[0], pixel[1], &support_distance))
+    if (!bilinearFootprintSupported(view, pixel[0], pixel[1], &support_distance))
     {
         return TextureSampleStatus::Rejected;
     }

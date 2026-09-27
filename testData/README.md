@@ -416,13 +416,6 @@ python testData/prepare_photogrammetry_benchmarks.py --target-root testData/phot
 
 The generated `image_camera.lis` can be passed to PlaScan CLI tools that accept image/camera lists.
 
-The same conversion core is also available through the built CLI and GUI Tools menu:
-
-```bash
-build/bin/camera_convert_cli --format auto \
-  --input testData/photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing \
-  --output-dir build/camera_inputs/dino \
-  --overwrite
-```
-
-In the GUI, use `工具 -> 相机格式转换...` to choose the input camera file/directory and output directory.
+This Python generator remains a benchmark-fixture utility for headless CLI tests. Production projects import the
+original Middlebury or EPFL camera project directly from the GUI camera-calibration window through PlaCamera,
+without creating this intermediate Tsai layout.

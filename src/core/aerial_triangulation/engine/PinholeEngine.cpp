@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <set>
+#include <string>
 
 namespace xjw::aerial_triangulation::engine
 {
@@ -25,24 +26,30 @@ namespace xjw::aerial_triangulation::engine
             return fail("用户取消");
         }
         std::set<ImageId> image_ids;
-        std::optional<xjw::coordinate_system::CoordinateFrameId> common_frame;
+        std::set<std::string> canonical_image_ids;
+        std::set<std::string> camera_instance_ids;
+        std::optional<placoordinate::CoordinateFrameId> common_frame;
         for (const PinholeImage& image : input.images)
         {
             if (image.id == kInvalidImageId || !image_ids.insert(image.id).second)
             {
                 return fail("空三影像 ID 重复或无效");
             }
-            std::string camera_error;
-            if (!image.camera.isValid() || !image.camera.validateNumericalState(&camera_error))
+            if (!image.camera || !image.camera->imageSize().isValid() ||
+                image.camera->pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
             {
-                return fail("空三影像相机数值状态非法: " +
-                            (camera_error.empty() ? std::string("相机未准备") : camera_error));
+                return fail("空三影像 PlaCamera 相机未准备或不支持 pixel-center 标定");
+            }
+            if (!canonical_image_ids.insert(image.camera->imageId().value()).second ||
+                !camera_instance_ids.insert(image.camera->instanceId().value()).second)
+            {
+                return fail("空三 PlaCamera 影像或实例身份重复");
             }
             if (!common_frame.has_value())
             {
-                common_frame = image.camera.worldFrame();
+                common_frame = image.camera->groundFrame();
             }
-            else if (*common_frame != image.camera.worldFrame())
+            else if (*common_frame != image.camera->groundFrame())
             {
                 return fail("空三影像相机混用 world frame；必须先显式归一化");
             }
@@ -52,9 +59,10 @@ namespace xjw::aerial_triangulation::engine
         {
             const auto keypoints = input.graph->keypointsByImage.find(image.id);
             static const std::vector<FeatureKeypoint> empty_keypoints;
+            const auto solver_camera = placamera::FramePinholeNumericState::fromModel(*image.camera);
             sfm.addImageWithCamera(image.id,
                                    xjw::common::file::pathToUtf8(image.path),
-                                   image.camera,
+                                   solver_camera,
                                    keypoints == input.graph->keypointsByImage.end() ? empty_keypoints
                                                                                     : keypoints->second,
                                    image.sensorKey);

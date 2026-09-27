@@ -59,6 +59,8 @@ private slots:
     void updateAerialTriangulation(const QString& stage, int percent);
     void updateAerialTriangulationDevice(const QString& displayName);
     void finishAerialTriangulation(bool success);
+    void updateCameraSetup(const QString& stage, int percent);
+    void finishCameraSetup(bool success);
     void updateMask(const QString& stage, int done, int total);
     void finishMask(bool success);
     void updateImageImport(const QString& stage, int done, int total);
@@ -94,6 +96,7 @@ private:
     TaskStatusWidget* _meshStatus = nullptr;
     TaskStatusWidget* _pointCloudStatus = nullptr;
     TaskStatusWidget* _aerialTriangulationStatus = nullptr;
+    TaskStatusWidget* _cameraStatus = nullptr;
     TaskStatusWidget* _tiePointStatus = nullptr;
     TaskStatusWidget* _maskStatus = nullptr;
     TaskStatusWidget* _imageImportStatus = nullptr;

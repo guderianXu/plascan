@@ -1,12 +1,7 @@
 #include "cli_photogrammetry_common.h"
 
-#include "FramePinholeTsaiIO.h"
-#include "ProjectCameraIO.h"
-#include "camera/project/CameraProjectRuntime.h"
-#include "camera/models/CameraModelFactories.h"
-#include "camera/models/frame_pinhole/FramePinholeDefinition.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/tsai.h>
+#include "placamera_runtime/ProjectCameraStore.h"
 #include "io/PathIO.h"
 #include "project/ProjectMetadata.h"
 
@@ -18,6 +13,8 @@
 #include <QSaveFile>
 #include <QTextStream>
 #include <QRegularExpression>
+
+#include <placamera/frame_camera.h>
 
 #include <algorithm>
 #include <cmath>
@@ -442,24 +439,6 @@ namespace xjw::cli
                 }
                 return false;
             }
-            if (item.hasCameraPath && options.loadCameras)
-            {
-                std::string camera_error;
-                if (!xjw::camera_io::loadFramePinholeNumericStateFromTsaiFile(
-                        xjw::common::io::toUtf8Path(item.cameraPath), &item.camera, &camera_error))
-                {
-                    if (errorMessage)
-                    {
-                        *errorMessage = QStringLiteral("%1:%2 相机读取失败: %3 (%4)")
-                                            .arg(listPath)
-                                            .arg(lineNumber)
-                                            .arg(item.cameraPath, QString::fromStdString(camera_error));
-                    }
-                    return false;
-                }
-                item.hasLoadedCamera = true;
-            }
-
             items->push_back(std::move(item));
         }
 
@@ -508,7 +487,7 @@ namespace xjw::cli
 
     bool resolveProjectImageIds(const QJsonObject& projectFiles,
                                 const QStringList& images,
-                                std::vector<xjw::camera_core::ImageId>* imageIds,
+                                std::vector<placamera::ImageId>* imageIds,
                                 QString* errorMessage)
     {
         if (errorMessage)
@@ -544,7 +523,7 @@ namespace xjw::cli
             }
             try
             {
-                xjw::camera_core::ImageId typedId(id.toStdString());
+                placamera::ImageId typedId(id.toStdString());
                 if (!seen.insert(typedId.value()).second)
                 {
                     if (errorMessage)
@@ -600,22 +579,21 @@ namespace xjw::cli
             return std::nullopt;
         }
 
-        bool makeExternalReferenceGeometry(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& source,
-                                           const std::shared_ptr<const xjw::camera_core::CameraInstance>& canonical,
-                                           const xjw::camera_core::ImageId& imageId,
-                                           std::optional<xjw::camera_reference::ReferenceCameraGeometry>* geometry,
+        bool makeExternalReferenceGeometry(const QString& sourcePath,
+                                           const std::shared_ptr<const placamera::RasterModel>& canonical,
+                                           const placamera::ImageId& imageId,
+                                           std::optional<placamera::reference::ReferenceCameraGeometry>* geometry,
                                            QString* errorMessage)
         {
-            if (!canonical || !geometry || !source.validateNumericalState())
+            if (!canonical || !geometry || sourcePath.trimmed().isEmpty())
             {
                 if (errorMessage)
                 {
-                    *errorMessage = QStringLiteral("外部参考相机缺少有效的 canonical 相机身份或数值");
+                    *errorMessage = QStringLiteral("外部参考相机缺少文件路径或 canonical 相机身份");
                 }
                 return false;
             }
-            if (dynamic_cast<const xjw::camera_models::frame_pinhole::FramePinholeInstance*>(canonical.get()) ==
-                nullptr)
+            if (canonical->modelType() != "frame_pinhole")
             {
                 if (errorMessage)
                 {
@@ -624,59 +602,44 @@ namespace xjw::cli
                 }
                 return false;
             }
-            xjw::camera_core::ImageSize imageSize = canonical->imageSize();
-            if (!imageSize.isValid())
-            {
-                const auto sourceSize = source.imageSize();
-                if (!sourceSize || sourceSize->samples <= 0 || sourceSize->lines <= 0)
-                {
-                    if (errorMessage)
-                    {
-                        *errorMessage = QStringLiteral("外部参考相机 %1 没有有效影像尺寸")
-                                            .arg(QString::fromStdString(imageId.value()));
-                    }
-                    return false;
-                }
-                imageSize = {sourceSize->samples, sourceSize->lines};
-            }
-
             try
             {
-                const auto definition = xjw::camera_models::frame_pinhole::FramePinholeDefinition::create(
-                    xjw::camera_core::CameraDefinitionId("external-reference-" + canonical->instanceId().value()),
-                    source.intrinsics(),
-                    source.distortion(),
-                    xjw::camera_models::frame_pinhole::PixelConvention::PixelCenter,
-                    canonical->definition().worldFrame(),
-                    source.depthAxisFlipped());
-                const auto pose = xjw::camera_core::Pose::create(
-                    canonical->definition().worldFrame(), source.cameraCenter(), source.cameraToWorldRotation());
-                const auto instance = xjw::camera_models::frame_pinhole::FramePinholeInstance::create(
-                    canonical->instanceId(), imageId, definition, imageSize, pose);
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
-                std::string conversionError;
-                if (!xjw::camera_models::frame_pinhole::FramePinholeNumericState::fromInstance(
-                        instance, &state, &conversionError))
+                const auto imported = placamera::loadTsaiFramePinhole(
+                    xjw::common::io::toUtf8Path(sourcePath),
+                    placamera::CameraDefinitionId("external-reference-" + canonical->instanceId().value()),
+                    canonical->groundFrame());
+                if (!imported)
                 {
                     if (errorMessage)
                     {
                         *errorMessage =
-                            QStringLiteral("外部参考相机转换失败：%1").arg(QString::fromStdString(conversionError));
+                            QStringLiteral("外部参考相机读取失败：%1").arg(QString::fromStdString(imported.message()));
                     }
                     return false;
                 }
-                const auto resolved =
-                    xjw::camera_reference::ReferenceCameraGeometry::create(std::move(state), &conversionError);
+                const auto model = placamera::bindFramePinhole(
+                    imported.value(),
+                    {canonical->instanceId(), imageId, canonical->imageSize(), canonical->captureTime()});
+                if (!model)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage =
+                            QStringLiteral("外部参考相机绑定失败：%1").arg(QString::fromStdString(model.message()));
+                    }
+                    return false;
+                }
+                auto resolved = placamera::reference::ReferenceCameraGeometry::create(model.value());
                 if (!resolved)
                 {
                     if (errorMessage)
                     {
                         *errorMessage =
-                            QStringLiteral("外部参考相机几何无效：%1").arg(QString::fromStdString(conversionError));
+                            QStringLiteral("外部参考相机几何无效：%1").arg(QString::fromStdString(resolved.message()));
                     }
                     return false;
                 }
-                *geometry = std::move(*resolved);
+                *geometry = resolved.takeValue();
                 return true;
             }
             catch (const std::exception& exception)
@@ -694,8 +657,9 @@ namespace xjw::cli
     bool buildReferenceCameraGeometries(const QJsonObject& projectFiles,
                                         const std::vector<PhotogrammetryInputItem>& items,
                                         const QStringList& images,
-                                        const std::vector<xjw::camera_core::ImageId>& imageIds,
-                                        xjw::camera_reference::ReferenceCameraGeometryMap* geometries,
+                                        const std::vector<placamera::ImageId>& imageIds,
+                                        bool useExternalReferenceCameras,
+                                        placamera::reference::ReferenceCameraGeometryMap* geometries,
                                         QString* errorMessage)
     {
         if (!geometries || images.size() != static_cast<qsizetype>(imageIds.size()) ||
@@ -708,23 +672,22 @@ namespace xjw::cli
             return false;
         }
         geometries->clear();
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-        if (!runtime.ok())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+        if (!loaded.ok())
         {
             if (errorMessage)
             {
-                *errorMessage =
-                    QStringLiteral("canonical 相机运行时加载失败：%1").arg(runtime.errors.join(QStringLiteral("; ")));
+                *errorMessage = QStringLiteral("canonical PlaCamera 集合加载失败：%1")
+                                    .arg(loaded.errors.join(QStringLiteral("; ")));
             }
             return false;
         }
         for (std::size_t index = 0; index < imageIds.size(); ++index)
         {
-            const auto lookup = runtime.instances.forImage(imageIds[index]);
+            const auto lookup = loaded.instances.forImage(imageIds[index]);
             if (!lookup.ok())
             {
-                if (items[index].hasLoadedCamera)
+                if (useExternalReferenceCameras && items[index].hasCameraPath)
                 {
                     if (errorMessage)
                     {
@@ -735,47 +698,54 @@ namespace xjw::cli
                 }
                 continue;
             }
-            std::optional<xjw::camera_reference::ReferenceCameraGeometry> geometry;
-            if (items[index].hasLoadedCamera)
+            std::optional<placamera::reference::ReferenceCameraGeometry> geometry;
+            if (useExternalReferenceCameras && items[index].hasCameraPath)
             {
                 if (!makeExternalReferenceGeometry(
-                        items[index].camera, lookup.instance, imageIds[index], &geometry, errorMessage))
+                        items[index].cameraPath, lookup.value(), imageIds[index], &geometry, errorMessage))
                 {
                     return false;
                 }
             }
             else
             {
-                xjw::camera_models::frame_pinhole::FramePinholeNumericState state;
-                std::string conversionError;
-                if (!runtime.framePinholeStateForImage(imageIds[index], &state, &conversionError))
+                const auto pinhole = std::dynamic_pointer_cast<const placamera::FramePinholeModel>(lookup.value());
+                if (!pinhole)
                 {
                     continue;
                 }
-                const auto resolved =
-                    xjw::camera_reference::ReferenceCameraGeometry::create(std::move(state), &conversionError);
+                auto resolved = placamera::reference::ReferenceCameraGeometry::create(pinhole);
                 if (!resolved)
                 {
                     if (errorMessage)
                     {
                         *errorMessage =
-                            QStringLiteral("工程参考相机几何无效：%1").arg(QString::fromStdString(conversionError));
+                            QStringLiteral("工程参考相机几何无效：%1").arg(QString::fromStdString(resolved.message()));
                     }
                     return false;
                 }
-                geometry = std::move(*resolved);
+                geometry = resolved.takeValue();
             }
             geometries->emplace(imageIds[index], std::move(*geometry));
         }
-        std::string validationError;
-        const auto commonFrame = xjw::camera_reference::commonReferenceWorldFrame(
-            *geometries, xjw::camera_reference::ReferenceCameraPositionMap{}, &validationError);
-        if (!xjw::camera_reference::validateReferenceCameraGeometryMap(*geometries, &validationError) ||
-            (!geometries->empty() && !commonFrame))
+        const auto validation = placamera::reference::validateReferenceCameraGeometryMap(*geometries);
+        if (!validation)
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("参考相机几何无效：%1").arg(QString::fromStdString(validationError));
+                *errorMessage =
+                    QStringLiteral("参考相机几何无效：%1").arg(QString::fromStdString(validation.message()));
+            }
+            return false;
+        }
+        const auto commonFrame = placamera::reference::commonReferenceWorldFrame(
+            *geometries, placamera::reference::ReferenceCameraPositionMap{});
+        if (!commonFrame || (!geometries->empty() && !commonFrame.value().has_value()))
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    QStringLiteral("参考相机几何坐标系无效：%1").arg(QString::fromStdString(commonFrame.message()));
             }
             return false;
         }
@@ -785,8 +755,8 @@ namespace xjw::cli
     bool readReferencePositionCsv(const QString& csvPath,
                                   const QJsonObject& projectFiles,
                                   const QStringList& images,
-                                  const std::vector<xjw::camera_core::ImageId>& imageIds,
-                                  xjw::camera_reference::ReferenceCameraPositionMap* positions,
+                                  const std::vector<placamera::ImageId>& imageIds,
+                                  placamera::reference::ReferenceCameraPositionMap* positions,
                                   QString* errorMessage)
     {
         if (!positions || images.size() != static_cast<qsizetype>(imageIds.size()))
@@ -807,14 +777,13 @@ namespace xjw::cli
             }
             return false;
         }
-        const auto runtime = xjw::camera_project::CameraProjectRuntime::load(
-            projectFiles, xjw::camera_models::makeBuiltinCameraModelRegistry());
-        if (!runtime.ok())
+        const auto loaded = xjw::placamera_runtime::loadProjectCameras(projectFiles);
+        if (!loaded.ok())
         {
             if (errorMessage)
             {
-                *errorMessage =
-                    QStringLiteral("canonical 相机运行时加载失败：%1").arg(runtime.errors.join(QStringLiteral("; ")));
+                *errorMessage = QStringLiteral("canonical PlaCamera 集合加载失败：%1")
+                                    .arg(loaded.errors.join(QStringLiteral("; ")));
             }
             return false;
         }
@@ -883,7 +852,7 @@ namespace xjw::cli
                 }
                 return false;
             }
-            const auto lookup = runtime.instances.forImage(imageIds[*imageIndex]);
+            const auto lookup = loaded.instances.forImage(imageIds[*imageIndex]);
             if (!lookup.ok())
             {
                 if (errorMessage)
@@ -895,9 +864,10 @@ namespace xjw::cli
                 }
                 return false;
             }
-            std::string positionError;
-            const auto reference = xjw::camera_reference::ReferenceCameraPosition::create(
-                imageIds[*imageIndex], lookup.instance->definition().worldFrame(), position, &positionError);
+            auto reference = placamera::reference::ReferenceCameraPosition::create(
+                imageIds[*imageIndex],
+                placoordinate::CoordinateFrameId(lookup.value()->groundFrame().value()),
+                position);
             if (!reference)
             {
                 if (errorMessage)
@@ -905,7 +875,7 @@ namespace xjw::cli
                     *errorMessage = QStringLiteral("%1:%2 参考位置无效：%3")
                                         .arg(csvPath)
                                         .arg(lineNumber)
-                                        .arg(QString::fromStdString(positionError));
+                                        .arg(QString::fromStdString(reference.message()));
                 }
                 return false;
             }
@@ -920,7 +890,7 @@ namespace xjw::cli
                 }
                 return false;
             }
-            positions->emplace(imageIds[*imageIndex], std::move(*reference));
+            positions->emplace(imageIds[*imageIndex], reference.takeValue());
             hasRecord = true;
         }
         if (!hasRecord)
@@ -931,27 +901,28 @@ namespace xjw::cli
             }
             return false;
         }
-        std::string frameError;
-        if (!xjw::camera_reference::validateReferenceCameraPositionMap(*positions, &frameError) ||
-            !xjw::camera_reference::commonReferenceWorldFrame(
-                xjw::camera_reference::ReferenceCameraGeometryMap{}, *positions, &frameError))
+        const auto validation = placamera::reference::validateReferenceCameraPositionMap(*positions);
+        if (!validation)
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("参考位置坐标系无效：%1").arg(QString::fromStdString(frameError));
+                *errorMessage =
+                    QStringLiteral("参考位置坐标系无效：%1").arg(QString::fromStdString(validation.message()));
+            }
+            return false;
+        }
+        const auto commonFrame = placamera::reference::commonReferenceWorldFrame(
+            placamera::reference::ReferenceCameraGeometryMap{}, *positions);
+        if (!commonFrame || !commonFrame.value().has_value())
+        {
+            if (errorMessage)
+            {
+                *errorMessage =
+                    QStringLiteral("参考位置坐标系无效：%1").arg(QString::fromStdString(commonFrame.message()));
             }
             return false;
         }
         return true;
-    }
-
-    QJsonObject cameraToJson(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
-    {
-        if (!camera.validateNumericalState())
-        {
-            return {};
-        }
-        return xjw::common::project::serializeFramePinholeNumericState(camera);
     }
 
     QJsonArray inputItemsToJson(const std::vector<PhotogrammetryInputItem>& items)

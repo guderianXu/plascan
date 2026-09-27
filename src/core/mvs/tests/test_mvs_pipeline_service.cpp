@@ -3,11 +3,36 @@
 #include <gtest/gtest.h>
 #include <future>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 
 using namespace xjw::mvs;
 using xjw::task_runtime::WorkflowStatus;
+
+namespace
+{
+    std::shared_ptr<const placamera::FramePinholeModel> makeCamera(const char* instanceId,
+                                                                    const char* imageId,
+                                                                    const char* frameId)
+    {
+        const placamera::FrameId frame(frameId);
+        const auto definition = placamera::FramePinholeDefinition::create(
+            placamera::CameraDefinitionId(std::string(instanceId) + "-definition"),
+            placamera::FrameIntrinsics{100.0, 100.0, 32.0, 24.0},
+            {},
+            placamera::PixelConvention::PixelCenter,
+            frame);
+        return std::make_shared<const placamera::FramePinholeModel>(placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId(instanceId),
+            placamera::ImageId(imageId),
+            definition,
+            {64, 48},
+            placamera::Pose::create(frame,
+                                    {0.0, 0.0, 0.0},
+                                    {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0})));
+    }
+}
 
 TEST(MvsPipelineServiceContract, SynchronousFailureNeedsNoQObjectAndFinishesOnce)
 {
@@ -105,11 +130,7 @@ TEST(MvsPipelineServiceContract, UnsupportedBackendsFailBeforeImagePreparation)
         service.setConfig(config);
         CameraView view;
         view.imagePath = "missing-input-must-not-be-read.tif";
-        view.camera.setIntrinsics(100.0, 100.0, 32.0, 24.0);
-        view.camera.setPose({1.0, 0.0, 0.0,
-                             0.0, 1.0, 0.0,
-                             0.0, 0.0, 1.0},
-                            {0.0, 0.0, 0.0});
+        view.camera = makeCamera("backend-instance", "backend-image", "backend-world");
         service.setViews({view});
         int finished_count = 0;
         int artifact_count = 0;
@@ -152,11 +173,6 @@ TEST(MvsPipelineServiceContract, RejectsInvalidCameraBeforeImagePreparation)
 
     CameraView view;
     view.imagePath = "missing-input-must-not-be-read.tif";
-    view.camera.setIntrinsics(0.0, 100.0, 32.0, 24.0);
-    view.camera.setPose({1.0, 0.0, 0.0,
-                         0.0, 1.0, 0.0,
-                         0.0, 0.0, 1.0},
-                        {0.0, 0.0, 0.0});
     service.setViews({view});
 
     int finished_count = 0;
@@ -174,8 +190,7 @@ TEST(MvsPipelineServiceContract, RejectsInvalidCameraBeforeImagePreparation)
 
     const auto outcome = service.execute();
     EXPECT_EQ(outcome.status, WorkflowStatus::Failed);
-    EXPECT_TRUE(error_message.contains(QStringLiteral("相机数值状态非法"))) << error_message.toStdString();
-    EXPECT_TRUE(error_message.contains(QStringLiteral("pinhole intrinsics"))) << error_message.toStdString();
+    EXPECT_TRUE(error_message.contains(QStringLiteral("PlaCamera 模型缺失"))) << error_message.toStdString();
     EXPECT_EQ(finished_count, 1);
     EXPECT_EQ(progress_count, 0);
 }
@@ -191,17 +206,7 @@ TEST(MvsPipelineServiceContract, RejectsMixedWorldFramesBeforeImagePreparation)
     {
         CameraView view;
         view.imagePath = "missing-input-must-not-be-read.tif";
-        view.camera.setIntrinsics(100.0, 100.0, 32.0, 24.0);
-        view.camera.setPose({1.0, 0.0, 0.0,
-                             0.0, 1.0, 0.0,
-                             0.0, 0.0, 1.0},
-                            {0.0, 0.0, 0.0});
-        std::string bind_error;
-        const bool bound = view.camera.bindIdentity(xjw::camera_core::CameraInstanceId(instance_id),
-                                                    xjw::camera_core::ImageId(image_id),
-                                                    xjw::coordinate_system::CoordinateFrameId(frame_id),
-                                                    &bind_error);
-        EXPECT_TRUE(bound) << bind_error;
+        view.camera = makeCamera(instance_id, image_id, frame_id);
         return view;
     };
 

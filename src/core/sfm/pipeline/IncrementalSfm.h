@@ -16,7 +16,7 @@
 //   4. 输出最终重建结果
 //
 // 依赖模块：FramePinholeNumericState, Intersection,
-//           BundleAdjust, PnpSolver, Triangulator
+//           PlaBundle, PnpSolver, Triangulator
 // ============================================================
 
 #include "common/SfmTypes.h"
@@ -27,14 +27,17 @@
 #include "triangulation/Triangulator.h"
 #include "registration/PriorTrack.h"
 
-#include "BundleAdjustSolver.h"
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/reference/resolve/CameraReferencePosePrior.h"
+#include <placamera/frame_numeric_state.h>
+#include "placamera/reference/CameraReferencePosePrior.h"
+
+#include <plabundle/options.h>
+#include <plabundle/result.h>
 
 #include <array>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -103,9 +106,9 @@ namespace xjw
          *
          * 这是独立的软约束来源，不等价于 useKnownCameraPoses；只有在
          * SfM 数值相机已经绑定显式 typed identity 后，协调器才会将其
-         * 对齐为 BACameraPosePrior。
+         * 对齐为 PlaBundle CameraPosePrior。
          */
-        std::vector<camera_reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
+        std::vector<placamera::reference::ResolvedCameraPosePrior> cameraReferencePosePriors;
         /// 自动选择初始像对时的最大候选对数量（参考 COLMAP 多候选重试策略）
         int maxInitPairCandidates = 40;
         /// 按完整输入轨迹共视数排序，并用三/五相机试算选择初始模型。
@@ -192,7 +195,7 @@ namespace xjw
         /// 最大并发块数，0 表示按机器逻辑线程数和实际块数自动确定。
         int hierarchicalBAMaxConcurrentBlocks = 0;
         /// BA 选项
-        BAOptions baOptions;
+        plabundle::SolveOptions baOptions;
         /// 是否按当前重建几何和影像覆盖逐项选择可观测的共享内参。
         bool adaptiveCameraModelFitting = false;
         /// 共享内参自标定时，是否保留进入 BA 前每台相机相对参考层的法向偏移。
@@ -290,9 +293,9 @@ namespace xjw
         double baSharedRadialK3 = 0.0;          ///< 最终全局 BA 的共享三阶径向畸变系数
         double baSharedTangentialP1 = 0.0;      ///< 最终全局 BA 的共享第一切向畸变系数
         double baSharedTangentialP2 = 0.0;      ///< 最终全局 BA 的共享第二切向畸变系数
-        BABackend baRequestedBackend = BABackend::PlaMatrixCpu; ///< 最终全局 BA 请求后端
-        BABackend baUsedBackend = BABackend::PlaMatrixCpu;      ///< 最终全局 BA 实际后端
-        BASolveStatus baSolveStatus = BASolveStatus::NotRun;    ///< 最终全局 BA 求解状态
+        plabundle::Backend baRequestedBackend = plabundle::Backend::PlaMatrixCpu; ///< 最终全局 BA 请求后端
+        plabundle::Backend baUsedBackend = plabundle::Backend::PlaMatrixCpu;      ///< 最终全局 BA 实际后端
+        plabundle::SolveStatus baSolveStatus = plabundle::SolveStatus::NotRun;    ///< 最终全局 BA 求解状态
         bool baSolutionUsable = false;                          ///< 求解结果是否满足写回前置条件
         bool baResultApplied = false;                           ///< 求解结果是否通过 SfM 质量门并写回
         bool baBackendFallback = false;                         ///< 是否发生后端回退
@@ -301,11 +304,12 @@ namespace xjw
         std::string baBackendMessage;                           ///< 后端选择、回退或失败原因
         bool baAdaptiveCameraModelFittingEvaluated = false;     ///< 是否执行了逐参数模型可靠性评估
         bool baAdaptiveCameraModelFittingApplied = false;       ///< 自适应内参结果是否通过质量门并写回
-        BAIntrinsicParameterMask baIntrinsicParameterMask{};    ///< 最终全局 BA 的有效共享内参掩码
-        std::array<double, kBAIntrinsicParameterCount> baIntrinsicParameterReliability{}; ///< 各共享内参可靠度 [0, 1]
-        std::array<double, kBAIntrinsicParameterCount>
+        plabundle::IntrinsicParameterMask baIntrinsicParameterMask{}; ///< 最终全局 BA 的有效共享内参掩码
+        std::array<double, plabundle::kIntrinsicParameterCount>
+            baIntrinsicParameterReliability{}; ///< 各共享内参可靠度 [0, 1]
+        std::array<double, plabundle::kIntrinsicParameterCount>
             baIntrinsicParameterIncrementalInformationScore{}; ///< 消元后的增量信息评分 [0, 1]
-        std::array<double, kBAIntrinsicParameterCount>
+        std::array<double, plabundle::kIntrinsicParameterCount>
             baIntrinsicParameterSensitivity{};              ///< 典型参数扰动的像点响应 [0, 1]
         std::string baAdaptiveCameraModel;                  ///< 有效模型名称，例如 f+k1
         std::string baAdaptiveCameraModelReason;            ///< 模型选择原因
@@ -350,8 +354,8 @@ namespace xjw
      *   IncrementalSfm sfm(options);
      *
      *   // 添加图像和特征
-     *   sfm.addImage(id1, path1, camPath1, keypoints1);
-     *   sfm.addImage(id2, path2, camPath2, keypoints2);
+     *   sfm.addImageWithCamera(id1, path1, camera1, keypoints1);
+     *   sfm.addImageWithCamera(id2, path2, camera2, keypoints2);
      *   ...
      *
      *   // 添加匹配
@@ -374,24 +378,10 @@ namespace xjw
         // ---- 数据输入 ----
 
         /**
-         * @brief 添加一幅图像。
-         * @param id         图像唯一 ID
-         * @param imagePath  图像文件路径
-         * @param cameraPath 相机参数文件路径（.tsai），可为空
-         * @param keypoints  该图像的特征点列表
-         */
-        void addImage(ImageId id,
-                      const std::string& imagePath,
-                      const std::string& cameraPath,
-                      const std::vector<FeatureKeypoint>& keypoints,
-                      const std::string& sensorKey = {});
-
-        /**
-         * @brief 添加一幅图像，并提供预设的相机内参（无需相机文件）。
+         * @brief 添加一幅图像及已在输入边界准备好的数值相机。
          *
-         * 当没有 .tsai 相机文件时（如纯 SFM 场景），调用方可根据
-         * 影像尺寸估算内参（焦距≈max(w,h)*1.2，主点≈图像中心），
-         * 通过此接口传入。外参（R、C）留为默认值即可，SFM 会恢复。
+         * 工程或外部文件相机在上层先解析为 PlaCamera，再于求解器边界转换；
+         * 本层不读取相机文件，也不从路径推导相机身份。
          *
          * @param id         图像唯一 ID
          * @param imagePath  图像文件路径
@@ -400,7 +390,7 @@ namespace xjw
          */
         void addImageWithCamera(ImageId id,
                                 const std::string& imagePath,
-                                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                const placamera::FramePinholeNumericState& camera,
                                 const std::vector<FeatureKeypoint>& keypoints,
                                 const std::string& sensorKey = {});
 
@@ -459,15 +449,11 @@ namespace xjw
         /// 重建容器
         std::shared_ptr<SfmReconstruction> _reconstruction;
 
-        /// 输入的相机文件路径（imageId → cameraPath）
-        std::unordered_map<ImageId, std::string> _cameraPaths;
-
         /// 预设的相机对象（imageId → FramePinholeNumericState），由 addImageWithCamera 填充
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState> _preloadedCameras;
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState> _preloadedCameras;
 
         /// 整次增量重建生命周期内稳定的自标定参考；后续全局/重试 BA 不重新锚定已优化内参。
-        std::unordered_map<ImageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-            _stableIntrinsicReferenceByImageId;
+        std::unordered_map<ImageId, placamera::FramePinholeNumericState> _stableIntrinsicReferenceByImageId;
 
         /// 最近一次内部操作的错误描述（供 run() 写入 result.summary）
         std::string _lastErrorMessage;
@@ -493,9 +479,9 @@ namespace xjw
         double _lastGlobalBASharedRadialK3 = 0.0;
         double _lastGlobalBASharedTangentialP1 = 0.0;
         double _lastGlobalBASharedTangentialP2 = 0.0;
-        BABackend _lastGlobalBARequestedBackend = BABackend::PlaMatrixCpu;
-        BABackend _lastGlobalBAUsedBackend = BABackend::PlaMatrixCpu;
-        BASolveStatus _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+        plabundle::Backend _lastGlobalBARequestedBackend = plabundle::Backend::PlaMatrixCpu;
+        plabundle::Backend _lastGlobalBAUsedBackend = plabundle::Backend::PlaMatrixCpu;
+        plabundle::SolveStatus _lastGlobalBASolveStatus = plabundle::SolveStatus::NotRun;
         bool _lastGlobalBASolutionUsable = false;
         bool _lastGlobalBAResultApplied = false;
         bool _lastGlobalBABackendFallback = false;
@@ -504,11 +490,12 @@ namespace xjw
         std::string _lastGlobalBABackendMessage;
         bool _lastGlobalBAAdaptiveCameraModelFittingEvaluated = false;
         bool _lastGlobalBAAdaptiveCameraModelFittingApplied = false;
-        BAIntrinsicParameterMask _lastGlobalBAIntrinsicParameterMask{};
-        BAIntrinsicParameterMask _referenceCommittedIntrinsicParameterMask{};
-        std::array<double, kBAIntrinsicParameterCount> _lastGlobalBAIntrinsicParameterReliability{};
-        std::array<double, kBAIntrinsicParameterCount> _lastGlobalBAIntrinsicParameterIncrementalInformationScore{};
-        std::array<double, kBAIntrinsicParameterCount> _lastGlobalBAIntrinsicParameterSensitivity{};
+        plabundle::IntrinsicParameterMask _lastGlobalBAIntrinsicParameterMask{};
+        plabundle::IntrinsicParameterMask _referenceCommittedIntrinsicParameterMask{};
+        std::array<double, plabundle::kIntrinsicParameterCount> _lastGlobalBAIntrinsicParameterReliability{};
+        std::array<double, plabundle::kIntrinsicParameterCount>
+            _lastGlobalBAIntrinsicParameterIncrementalInformationScore{};
+        std::array<double, plabundle::kIntrinsicParameterCount> _lastGlobalBAIntrinsicParameterSensitivity{};
         std::string _lastGlobalBAAdaptiveCameraModel;
         std::string _lastGlobalBAAdaptiveCameraModelReason;
         double _lastGlobalBACameraModelGeometryStrength = 0.0;
@@ -569,31 +556,27 @@ namespace xjw
         /**
          * @brief 获取某张影像的相机对象。
          *
-         * 优先使用预设相机（addImageWithCamera），
-         * 其次从 _cameraPaths 中的 .tsai 文件加载。
+         * 仅使用 addImageWithCamera 提供的相机，不回退读取文件。
          *
          * @param imageId  图像 ID
-         * @param cam      输出相机对象
-         * @return 成功返回 true
+         * @return 已绑定的原生求解状态；未提供时返回 nullptr
          */
-        bool getCamera(ImageId imageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const;
+        const placamera::FramePinholeNumericState* getCamera(ImageId imageId) const;
 
         void materializePriorTracks();
         void rebuildInputTrackObservationIndex();
         void applyPriorTrackDiagnostics(IncrementalSfmResult* result) const;
         void applyControlNetworkDiagnostics(IncrementalSfmResult* result) const;
-        bool
-        tryApplyControlNetwork(const std::vector<ImageId>& baImageIds,
-                               std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras);
+        bool tryApplyControlNetwork(const std::vector<ImageId>& baImageIds,
+                                    std::vector<placamera::FramePinholeNumericState>* baCameras);
         const control_points::PriorTrack* priorTrack(const std::string& markerId) const;
         void tagPriorTrackSource(Track* track) const;
 
-        std::vector<BACameraPosePrior>
+        std::vector<std::optional<plabundle::CameraPosePrior>>
         buildCameraPosePriorsFromInputCameras(const std::vector<ImageId>& imageIds) const;
 
-        void alignReconstructionToKnownPosePriors(
-            const std::vector<ImageId>& imageIds,
-            std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>* baCameras);
+        void alignReconstructionToKnownPosePriors(const std::vector<ImageId>& imageIds,
+                                                  std::vector<placamera::FramePinholeNumericState>* baCameras);
 
         void refineKnownCameraPosesWithPnp();
 
@@ -604,15 +587,6 @@ namespace xjw
          * 此路径不会重新估计相机位姿，只注册所有输入相机并基于匹配生成稀疏点。
          */
         IncrementalSfmResult runKnownCameraPoseReconstruction(SfmProgressCallback progressCb);
-
-        /**
-         * @brief 从 .tsai 文件加载相机参数。
-         * @param cameraPath  .tsai 文件路径
-         * @param cam         输出相机对象
-         * @return 成功返回 true
-         */
-        bool loadCamera(const std::string& cameraPath,
-                        xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam) const;
 
         /**
          * @brief 返回多个初始像对候选（按匹配数降序排序）。
@@ -639,11 +613,10 @@ namespace xjw
 
         bool initializeFromPairPose(ImageId id1,
                                     ImageId id2,
-                                    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& secondCamera,
+                                    const placamera::FramePinholeNumericState& secondCamera,
                                     int poseInliers = 0);
 
-        std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        initialPairPoseHypotheses(ImageId id1, ImageId id2) const;
+        std::vector<placamera::FramePinholeNumericState> initialPairPoseHypotheses(ImageId id1, ImageId id2) const;
 
         /**
          * @brief 初始像对已经注册后，执行后续增量注册、BA 和结果组装。
@@ -686,7 +659,7 @@ namespace xjw
         struct ImageRegistrationEvaluation
         {
             bool success = false;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+            std::optional<placamera::FramePinholeNumericState> camera;
             int supportingInliers = 0;
             std::size_t observations = 0;
             std::size_t rawProposals = 0;
@@ -736,35 +709,32 @@ namespace xjw
         /**
          * @brief 检查 PnP 结果是否破坏照片序列的局部相机中心距离。
          */
-        bool validateSequencePoseConsistency(
-            ImageId imageId,
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& candidateCamera,
-            std::string* reason,
-            bool force = false) const;
+        bool validateSequencePoseConsistency(ImageId imageId,
+                                             const placamera::FramePinholeNumericState& candidateCamera,
+                                             std::string* reason,
+                                             bool force = false) const;
 
         /**
          * @brief 使用已注册的序列相邻相机为 PnP 生成外参初值。
          */
-        bool
-        makeSequenceInitialPoseGuess(ImageId imageId,
-                                     xjw::camera_models::frame_pinhole::FramePinholeNumericState* guessCamera) const;
+        bool makeSequenceInitialPoseGuess(ImageId imageId, placamera::FramePinholeNumericState* guessCamera) const;
 
         /**
          * @brief 执行光束法平差。
          *
-         * 收集重建中的所有相机和轨迹，调用 BundleAdjust::optimizePoints。
+         * 收集重建中的所有相机和轨迹，调用 PlaBundle Solver。
          * 将优化结果回写到重建容器。
          *
          * @param localOnly  是否仅局部 BA（仅优化最近注册图像的邻域）
          * @param anchorIds  局部 BA 时锚定的图像 ID
-         * @param stableIntrinsicReferences 本次迭代各轮共用的内参参考；nullptr 使用配置值
+         * @param stableIntrinsicReferences 本次迭代各轮共用的内参参考；nullptr 表示不设置稳定参考
          */
-        void runBundleAdjust(bool localOnly = false,
-                             const std::vector<ImageId>& anchorIds = {},
-                             const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>*
-                                 stableIntrinsicReferences = nullptr,
-                             int maxIterationsOverride = 0,
-                             SfmBundleAdjustmentStage stage = SfmBundleAdjustmentStage::Incremental);
+        void
+        runBundleAdjust(bool localOnly = false,
+                        const std::vector<ImageId>& anchorIds = {},
+                        const std::vector<placamera::FramePinholeNumericState>* stableIntrinsicReferences = nullptr,
+                        int maxIterationsOverride = 0,
+                        SfmBundleAdjustmentStage stage = SfmBundleAdjustmentStage::Incremental);
 
         /**
          * @brief 按“对齐照片”阶段执行全局 BA、三角化和过滤。

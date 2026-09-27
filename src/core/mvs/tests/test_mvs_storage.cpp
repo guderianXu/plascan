@@ -183,13 +183,13 @@ TEST_F(MvsStorageContract, ManifestRoundTripAndReplayKeepOrderedCameraAndMaskIde
     {
         EXPECT_EQ(views[index].imageWidth, 18);
         EXPECT_EQ(views[index].imageHeight, 12);
-        EXPECT_DOUBLE_EQ(views[index].camera.focalX(), 120.0);
-        EXPECT_DOUBLE_EQ(views[index].camera.principalX(), 9.0);
-        EXPECT_DOUBLE_EQ(views[index].camera.cameraCenter()[0], static_cast<double>(index));
-        EXPECT_TRUE(views[index].camera.hasBoundIdentity());
-        EXPECT_EQ(views[index].camera.instanceId().value(), "mvs-instance-" + std::to_string(index));
-        EXPECT_EQ(views[index].camera.imageId().value(), "mvs-image-" + std::to_string(index));
-        EXPECT_EQ(views[index].camera.worldFrame().value(), "project-world");
+        ASSERT_TRUE(views[index].camera);
+        EXPECT_DOUBLE_EQ(views[index].camera->pinholeDefinition().intrinsics().focalX, 120.0);
+        EXPECT_DOUBLE_EQ(views[index].camera->pinholeDefinition().intrinsics().principalX, 9.0);
+        EXPECT_DOUBLE_EQ(views[index].camera->pose().center[0], static_cast<double>(index));
+        EXPECT_EQ(views[index].camera->instanceId().value(), "mvs-instance-" + std::to_string(index));
+        EXPECT_EQ(views[index].camera->imageId().value(), "mvs-image-" + std::to_string(index));
+        EXPECT_EQ(views[index].camera->groundFrame().value(), "project-world");
         EXPECT_EQ(views[index].imagePath,
                   xjw::common::io::toUtf8Path(directory.filePath(QStringLiteral("image_%1.png").arg(index))));
         EXPECT_EQ(
@@ -207,7 +207,7 @@ TEST_F(MvsStorageContract, PointCloudWriterAndValidatorRejectTruncatedPublicatio
     QTemporaryDir temporary_directory(QStringLiteral(PLASCAN_MVS_STORAGE_TEST_TMP "/ply-XXXXXX"));
     ASSERT_TRUE(temporary_directory.isValid());
     const QString path = QDir(temporary_directory.path()).filePath(QStringLiteral("nested/cloud.ply"));
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(2, 3);
+    plamatrix::MatrixXf points(2, 3);
     for (int index = 0; index < 2; ++index)
     {
         points(index, 0) = static_cast<float>(index);

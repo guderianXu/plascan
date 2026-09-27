@@ -39,7 +39,7 @@ namespace xjw
             return {values[0], values[1], values[2]};
         }
 
-        bool project(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        bool project(const placamera::FramePinholeDefinition& camera,
                      const ReferenceWorldToCameraPose& pose,
                      const std::array<double, 3>& world,
                      cv::Vec2d* pixel,
@@ -64,20 +64,20 @@ namespace xjw
             const double x = local[0] * inverse_z;
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.distortion();
+            const placamera::FrameIntrinsics& intrinsics = camera.intrinsics();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r2 * r2 + distortion.radialK3 * r2 * r2 * r2;
             const double distorted_x =
                 x * radial + 2.0 * distortion.tangentialP1 * x * y + distortion.tangentialP2 * (r2 + 2.0 * x * x);
             const double distorted_y =
                 y * radial + distortion.tangentialP1 * (r2 + 2.0 * y * y) + 2.0 * distortion.tangentialP2 * x * y;
-            (*pixel)[0] = camera.focalX() * distorted_x + camera.principalX();
-            (*pixel)[1] = camera.focalY() * distorted_y + camera.principalY();
+            (*pixel)[0] = intrinsics.uAxisSign * intrinsics.focalX * distorted_x + intrinsics.principalX;
+            (*pixel)[1] = intrinsics.vAxisSign * intrinsics.focalY * distorted_y + intrinsics.principalY;
             return std::isfinite((*pixel)[0]) && std::isfinite((*pixel)[1]);
         }
 
-        double squaredReprojectionError(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        double squaredReprojectionError(const placamera::FramePinholeDefinition& camera,
                                         const ReferenceWorldToCameraPose& pose,
                                         const std::array<double, 3>& world,
                                         const std::array<double, 2>& observed)
@@ -94,18 +94,10 @@ namespace xjw
 
         std::array<double, 9>
         restoreOriginalCameraAxes(const std::array<double, 9>& normalizedCameraToWorld,
-                                  const xjw::camera_models::frame_pinhole::FramePinholeNumericState& originalCamera)
+                                  const placamera::FramePinholeDefinition& originalCamera)
         {
-            const double z_sign = originalCamera.depthAxisFlipped() ? -1.0 : 1.0;
-            const cv::Matx33d axis(z_sign * static_cast<double>(originalCamera.uAxisSign()),
-                                   0.0,
-                                   0.0,
-                                   0.0,
-                                   z_sign * static_cast<double>(originalCamera.vAxisSign()),
-                                   0.0,
-                                   0.0,
-                                   0.0,
-                                   z_sign);
+            const auto signs = originalCamera.positiveDepthAxisSigns();
+            const cv::Matx33d axis(signs[0], 0.0, 0.0, 0.0, signs[1], 0.0, 0.0, 0.0, signs[2]);
             return arrayFromMatrix(matrixFromArray(normalizedCameraToWorld) * axis);
         }
 
@@ -114,7 +106,7 @@ namespace xjw
     ReferenceResectionResult
     solveReferenceResection(const std::vector<std::array<double, 3>>& worldPoints,
                             const std::vector<std::array<double, 2>>& imagePoints,
-                            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                            const placamera::FramePinholeDefinition& camera,
                             double resectionThresholdPixels)
     {
         ReferenceResectionResult result;
@@ -125,17 +117,18 @@ namespace xjw
             return result;
         }
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState normalized_camera =
-            camera.normalizedForPositiveDepth();
+        const auto normalized_camera = camera.normalizedForPositiveDepth(
+            placamera::CameraDefinitionId(camera.definitionId().value() + "-positive-depth"));
         std::vector<std::array<double, 3>> bearing_vectors(count);
         for (std::size_t index = 0; index < count; ++index)
         {
-            double normalized[2]{};
-            if (!normalized_camera.undistortPixel(imagePoints[index].data(), normalized))
+            const auto normalized = normalized_camera->undistortPixel(
+                placamera::ImageCoordinate{imagePoints[index][0], imagePoints[index][1]});
+            if (!normalized)
             {
                 return result;
             }
-            bearing_vectors[index] = {{normalized[0], normalized[1], 1.0}};
+            bearing_vectors[index] = {{normalized.value()[0], normalized.value()[1], 1.0}};
         }
 
         constexpr std::size_t level_count = 10;
@@ -194,7 +187,7 @@ namespace xjw
                 for (std::size_t index = 0; index < count; ++index)
                 {
                     const double error =
-                        squaredReprojectionError(normalized_camera, candidate, worldPoints[index], imagePoints[index]);
+                        squaredReprojectionError(*normalized_camera, candidate, worldPoints[index], imagePoints[index]);
                     for (std::size_t level = 0; level < level_count; ++level)
                     {
                         candidate_counts[level] += error < squared_thresholds[level];
@@ -229,7 +222,7 @@ namespace xjw
         const double initial_mask_threshold = thresholds[selected_level];
         for (std::size_t index = 0; index < count; ++index)
         {
-            mask[index] = squaredReprojectionError(normalized_camera, pose, worldPoints[index], imagePoints[index]) <
+            mask[index] = squaredReprojectionError(*normalized_camera, pose, worldPoints[index], imagePoints[index]) <
                           initial_mask_threshold;
         }
 
@@ -249,12 +242,12 @@ namespace xjw
             {
                 return result;
             }
-            refineReferencePose(normalized_camera, worldPoints, imagePoints, inliers, &pose, 10);
+            refineReferencePose(*normalized_camera, worldPoints, imagePoints, inliers, &pose, 10);
             std::size_t changed = 0;
             for (std::size_t index = 0; index < count; ++index)
             {
                 const unsigned char next =
-                    squaredReprojectionError(normalized_camera, pose, worldPoints[index], imagePoints[index]) <
+                    squaredReprojectionError(*normalized_camera, pose, worldPoints[index], imagePoints[index]) <
                     base_threshold_squared;
                 changed += next != mask[index];
                 mask[index] = next;

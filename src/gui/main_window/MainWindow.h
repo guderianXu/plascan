@@ -57,6 +57,11 @@ namespace xjw::gui::project
     class ProjectServiceContainer;
 }
 
+namespace xjw::gui::main_window
+{
+    class ApplicationShutdownCoordinator;
+}
+
 namespace xjw::gui::markers
 {
     class MarkerWorkspaceController;
@@ -148,7 +153,9 @@ private:
     TiePointWorkflowController* _tiePointWorkflowController{};
     ProjectTaskStatusController* _taskStatusController{};
     xjw::gui::runtime::TaskRuntimeService* _taskRuntimeService{};
+    xjw::gui::main_window::ApplicationShutdownCoordinator* _shutdownCoordinator{};
     ProjectLifecyclePresenter* _projectLifecyclePresenter{};
+    bool _shutdownReadyToClose{};
     Qt::WindowStates _windowStateBeforeFullScreen{Qt::WindowNoState};
 
 public:

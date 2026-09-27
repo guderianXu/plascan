@@ -3,7 +3,10 @@
 #include "geometry/TriangulationQuality.h"
 #include "tracks/ReferenceTrackBuilder.h"
 
+#include <placamera/frame_numeric_state.h>
+
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <utility>
 
@@ -55,23 +58,23 @@ namespace xjw::core::project
             return compactIndex;
         }
 
-        using NumericCamera = xjw::camera_models::frame_pinhole::FramePinholeNumericState;
+        using NumericCamera = placamera::FramePinholeNumericState;
 
         std::array<double, 3> midpointBetweenCameras(const NumericCamera& cameraA,
                                                      const NumericCamera& cameraB)
         {
-            const auto centerA = cameraA.cameraCenter();
-            const auto centerB = cameraB.cameraCenter();
+            const auto& centerA = cameraA.pose().center;
+            const auto& centerB = cameraB.pose().center;
             return {
                 {0.5 * (centerA[0] + centerB[0]), 0.5 * (centerA[1] + centerB[1]), 0.5 * (centerA[2] + centerB[2])}};
         }
 
-        xjw::BATrack
+        plabundle::Track
         makeBaTrackFromIndexedTrack(const xjw::Track& track,
                                     const std::map<IndexedFeatureKey, IndexedObservation>& observationsByIndexedFeature,
                                     const std::vector<NumericCamera>& cameras)
         {
-            xjw::BATrack baTrack;
+            plabundle::Track baTrack;
             std::vector<IndexedObservation> observations;
             observations.reserve(track.elements.size());
             for (const xjw::TrackElement& element : track.elements)
@@ -106,12 +109,12 @@ namespace xjw::core::project
                     }
                     const auto candidate = NumericCamera::triangulatePair(
                         cameras[static_cast<std::size_t>(left.cameraIndex)],
-                        left.pixel,
+                        placamera::ImageCoordinate{left.pixel[0], left.pixel[1]},
                         cameras[static_cast<std::size_t>(right.cameraIndex)],
-                        right.pixel);
-                    if (candidate.valid)
+                        placamera::ImageCoordinate{right.pixel[0], right.pixel[1]});
+                    if (candidate)
                     {
-                        baTrack.initialPoint = candidate.point;
+                        baTrack.initialPoint = candidate.value().point.position;
                         initialized = true;
                         break;
                     }
@@ -127,7 +130,7 @@ namespace xjw::core::project
 
             for (const IndexedObservation& observation : observations)
             {
-                xjw::BAObservation baObservation;
+                plabundle::Observation baObservation;
                 baObservation.cameraIndex = observation.cameraIndex;
                 baObservation.u = observation.pixel[0];
                 baObservation.v = observation.pixel[1];
@@ -140,11 +143,49 @@ namespace xjw::core::project
 
     } // namespace
 
-    void appendBaTracks(const ProjectMatchInput& input, BaInputBuildResult* result)
+    bool appendBaTracks(const ProjectMatchInput& input, BaInputBuildResult* result)
     {
         if (!result)
         {
-            return;
+            return false;
+        }
+
+        std::vector<NumericCamera> cameras;
+        cameras.reserve(input.cameraInstances.size());
+        for (const auto& instance : input.cameraInstances)
+        {
+            if (!instance)
+            {
+                result->matchDiagnostics.firstCameraError = QStringLiteral("BA 轨迹包含空 PlaCamera 实例");
+                return false;
+            }
+            try
+            {
+                cameras.push_back(NumericCamera::fromModel(*instance));
+            }
+            catch (const std::exception& exception)
+            {
+                result->matchDiagnostics.firstCameraError =
+                    QStringLiteral("BA 轨迹无法建立 PlaCamera 数值状态：%1")
+                        .arg(QString::fromUtf8(exception.what()));
+                return false;
+            }
+        }
+        if (cameras.size() != input.imageIdByIndex.size())
+        {
+            result->matchDiagnostics.firstCameraError =
+                QStringLiteral("BA 轨迹的 PlaCamera 实例与 canonical ImageId 数量不一致");
+            return false;
+        }
+        for (std::size_t index = 0; index < cameras.size(); ++index)
+        {
+            if (input.cameraInstances[index]->imageId() != input.imageIdByIndex[index])
+            {
+                result->matchDiagnostics.firstCameraError =
+                    QStringLiteral("BA 轨迹的 PlaCamera 实例与 canonical ImageId 不一致（索引 %1）")
+                        .arg(static_cast<qulonglong>(index));
+                return false;
+            }
         }
 
         // 新格式匹配具有稳定特征索引，可跨多个 pair 合并为同一物点。旧格式只有
@@ -155,8 +196,8 @@ namespace xjw::core::project
         std::map<int, std::vector<xjw::FeatureKeypoint>> keypointsByCamera;
         for (const ProjectMatchPair& pair : input.pairs)
         {
-            const NumericCamera& cameraA = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexA));
-            const NumericCamera& cameraB = input.cameras.at(static_cast<std::size_t>(pair.cameraIndexB));
+            const NumericCamera& cameraA = cameras.at(static_cast<std::size_t>(pair.cameraIndexA));
+            const NumericCamera& cameraB = cameras.at(static_cast<std::size_t>(pair.cameraIndexB));
 
             if (pair.indexed)
             {
@@ -192,10 +233,14 @@ namespace xjw::core::project
 
             for (const ProjectMatchObservationPair& observation : pair.observations)
             {
-                xjw::BATrack track;
+                plabundle::Track track;
                 const auto candidate = NumericCamera::triangulatePair(
-                    cameraA, observation.pixelA, cameraB, observation.pixelB);
-                track.initialPoint = candidate.valid ? candidate.point : midpointBetweenCameras(cameraA, cameraB);
+                    cameraA,
+                    placamera::ImageCoordinate{observation.pixelA[0], observation.pixelA[1]},
+                    cameraB,
+                    placamera::ImageCoordinate{observation.pixelB[0], observation.pixelB[1]});
+                track.initialPoint = candidate ? candidate.value().point.position
+                                               : midpointBetweenCameras(cameraA, cameraB);
 
                 const double weight = std::clamp(observation.score, 0.0, 1.0);
                 track.observations.push_back({pair.cameraIndexA, observation.pixelA[0], observation.pixelA[1], weight});
@@ -215,12 +260,13 @@ namespace xjw::core::project
         result->multiViewTrackCount = static_cast<int>(referenceTracks.tracks.size());
         for (const xjw::Track& track : referenceTracks.tracks)
         {
-            xjw::BATrack baTrack = makeBaTrackFromIndexedTrack(track, observationsByIndexedFeature, input.cameras);
+            plabundle::Track baTrack = makeBaTrackFromIndexedTrack(track, observationsByIndexedFeature, cameras);
             if (baTrack.observations.size() >= 2)
             {
                 result->tracks.push_back(std::move(baTrack));
             }
         }
+        return true;
     }
 
 } // namespace xjw::core::project

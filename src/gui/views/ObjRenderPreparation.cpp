@@ -68,7 +68,7 @@ bool hasValidTextureCoordinates(const ObjRenderCloud &cloud,
         }
         for (int corner = 0; corner < 3; ++corner)
         {
-            const int texture_index = cloud.faceTextureIndices()->getValue(face_index, corner);
+            const int texture_index = cloud.faceTextureIndices()->coeff(face_index, corner);
             if (texture_index < 0 || texture_index >= texture_coordinate_count)
             {
                 return false;
@@ -130,9 +130,7 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
             }
             const auto row = static_cast<plamatrix::Index>(index);
             vertex_normals[index] = normalizedVector(QVector3D(
-                cloud.normals()->getValue(row, 0),
-                cloud.normals()->getValue(row, 1),
-                cloud.normals()->getValue(row, 2)));
+                cloud.normals()->coeff(row, 0), cloud.normals()->coeff(row, 1), cloud.normals()->coeff(row, 2)));
         }
     }
 
@@ -148,9 +146,9 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
         {
             return {};
         }
-        const int first = faces->getValue(face_index, 0);
-        const int second = faces->getValue(face_index, 1);
-        const int third = faces->getValue(face_index, 2);
+        const int first = faces->coeff(face_index, 0);
+        const int second = faces->coeff(face_index, 1);
+        const int third = faces->coeff(face_index, 2);
         if (first < 0 || second < 0 || third < 0
             || static_cast<std::size_t>(first) >= vertex_count
             || static_cast<std::size_t>(second) >= vertex_count
@@ -234,9 +232,9 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
         vertex[5] = vertex_normals[index].z();
         if (cloud.hasColors())
         {
-            vertex[6] = cloud.colors()->getValue(row, 0) / 255.0f;
-            vertex[7] = cloud.colors()->getValue(row, 1) / 255.0f;
-            vertex[8] = cloud.colors()->getValue(row, 2) / 255.0f;
+            vertex[6] = cloud.colors()->coeff(row, 0) / 255.0f;
+            vertex[7] = cloud.colors()->coeff(row, 1) / 255.0f;
+            vertex[8] = cloud.colors()->coeff(row, 2) / 255.0f;
         }
         else
         {
@@ -315,13 +313,11 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
         }
         const int face_index = valid_face_indices[valid_index];
         const int face_indices[] = {
-            faces->getValue(face_index, 0),
-            faces->getValue(face_index, 1),
-            faces->getValue(face_index, 2)};
-        const bool use_vertex_color_fallback = cloud.hasColors()
-            && cloud.faceTextureIndices()->getValue(face_index, 0) == 0
-            && cloud.faceTextureIndices()->getValue(face_index, 1) == 0
-            && cloud.faceTextureIndices()->getValue(face_index, 2) == 0;
+            faces->coeff(face_index, 0), faces->coeff(face_index, 1), faces->coeff(face_index, 2)};
+        const bool use_vertex_color_fallback = cloud.hasColors() &&
+                                               cloud.faceTextureIndices()->coeff(face_index, 0) == 0 &&
+                                               cloud.faceTextureIndices()->coeff(face_index, 1) == 0 &&
+                                               cloud.faceTextureIndices()->coeff(face_index, 2) == 0;
         for (int corner = 0; corner < 3; ++corner)
         {
             const int vertex_index = face_indices[corner];
@@ -335,17 +331,17 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
             textured_vertices.push_back(normal.z());
             if (cloud.hasColors())
             {
-                textured_vertices.push_back(cloud.colors()->getValue(row, 0) / 255.0f);
-                textured_vertices.push_back(cloud.colors()->getValue(row, 1) / 255.0f);
-                textured_vertices.push_back(cloud.colors()->getValue(row, 2) / 255.0f);
+                textured_vertices.push_back(cloud.colors()->coeff(row, 0) / 255.0f);
+                textured_vertices.push_back(cloud.colors()->coeff(row, 1) / 255.0f);
+                textured_vertices.push_back(cloud.colors()->coeff(row, 2) / 255.0f);
             }
             else
             {
                 textured_vertices.insert(textured_vertices.end(), {-1.0f, -1.0f, -1.0f});
             }
-            const int texture_index = cloud.faceTextureIndices()->getValue(face_index, corner);
-            textured_vertices.push_back(cloud.textureCoords()->getValue(texture_index, 0));
-            textured_vertices.push_back(cloud.textureCoords()->getValue(texture_index, 1));
+            const int texture_index = cloud.faceTextureIndices()->coeff(face_index, corner);
+            textured_vertices.push_back(cloud.textureCoords()->coeff(texture_index, 0));
+            textured_vertices.push_back(cloud.textureCoords()->coeff(texture_index, 1));
             textured_vertices.push_back(use_vertex_color_fallback ? 1.0f : 0.0f);
         }
     }

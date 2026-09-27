@@ -5,19 +5,18 @@
 namespace xjw::control_points
 {
 
-struct MarkerPredictionResult
-{
-    MarkerTriangulation triangulation;
-    QVector<MarkerProjection> predictions;
-};
+    struct MarkerPredictionResult
+    {
+        MarkerTriangulation triangulation;
+        QVector<MarkerProjection> predictions;
+    };
 
-class MarkerProjectionPredictor
-{
-public:
-    static MarkerPredictionResult predict(
-        const Marker &marker,
-        const QVector<MarkerCamera> &cameras,
-        const MarkerTriangulationOptions &options = {});
-};
+    class MarkerProjectionPredictor
+    {
+    public:
+        static MarkerPredictionResult predict(const Marker& marker,
+                                              const QVector<MarkerImageView>& views,
+                                              const MarkerTriangulationOptions& options = {});
+    };
 
 } // namespace xjw::control_points

@@ -3,8 +3,7 @@
 #include "RpcGeospatialSupport.h"
 
 #include "DemDomIO.h"
-#include "RpcRasterIO.h"
-#include "camera/models/rpc/RpcProjection.h"
+#include <placamera/rpc_raster.h>
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
 
@@ -17,6 +16,8 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
+
+#include <placamera/rpc_camera.h>
 
 #include <algorithm>
 #include <cmath>
@@ -32,7 +33,7 @@ namespace xjw
         struct RpcImage
         {
             QString path;
-            std::shared_ptr<const camera_models::rpc::RpcInstance> camera;
+            std::shared_ptr<const placamera::RpcModel> camera;
             cv::Mat bgr;
         };
 
@@ -63,24 +64,22 @@ namespace xjw
             {
                 return false;
             }
-            std::string cameraError;
             const std::string suffix = std::to_string(index);
-            image->camera = camera_models::rpc::importRpcRasterInstance(
-                common::io::toUtf8Path(path),
-                camera_core::CameraDefinitionId("rpc-dom-definition-" + suffix),
-                camera_core::CameraInstanceId("rpc-dom-instance-" + suffix),
-                camera_core::ImageId("rpc-dom-image-" + suffix),
-                xjw::coordinate_system::CoordinateFrameId("EPSG:4978"),
-                &cameraError);
-            if (!image->camera)
+            auto camera = placamera::importRpcRasterModel(common::io::toUtf8Path(path),
+                                                          placamera::CameraDefinitionId("rpc-dom-definition-" + suffix),
+                                                          placamera::CameraInstanceId("rpc-dom-instance-" + suffix),
+                                                          placamera::ImageId("rpc-dom-image-" + suffix),
+                                                          placamera::FrameId("EPSG:4978"));
+            if (!camera)
             {
                 if (errorMessage)
                 {
                     *errorMessage = QStringLiteral("读取 DOM 输入影像 RPC 失败 (%1): %2")
-                                        .arg(path, QString::fromUtf8(cameraError.c_str()));
+                                        .arg(path, QString::fromStdString(camera.message()));
                 }
                 return false;
             }
+            image->camera = camera.takeValue();
             QString imageError;
             image->bgr = common::io::readImage(path, cv::IMREAD_COLOR, &imageError);
             if (image->bgr.empty() || image->bgr.type() != CV_8UC3)
@@ -210,7 +209,7 @@ namespace xjw
             {
                 return false;
             }
-            std::vector<camera_models::rpc::RpcDefinition::GeodeticCoordinate> geodetic;
+            std::vector<placamera::GeodeticCoordinate> geodetic;
             if (!stereo_dem::projectedRowToGeodetic(dem, row, &geodetic, errorMessage))
             {
                 return false;
@@ -225,12 +224,13 @@ namespace xjw
                 int contributors = 0;
                 for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex)
                 {
-                    camera_models::rpc::ImagePoint pixel;
-                    if (!camera_models::rpc::RpcProjection::groundToImage(
-                            *images[imageIndex].camera, geodetic[static_cast<std::size_t>(col)], &pixel))
+                    const auto projection =
+                        images[imageIndex].camera->groundToImageGeodetic(geodetic[static_cast<std::size_t>(col)]);
+                    if (!projection)
                     {
                         continue;
                     }
+                    const placamera::ImageCoordinate pixel = projection.value().image;
                     cv::Vec3d sampled;
                     if (!bilinearSample(images[imageIndex].bgr, pixel.sample, pixel.line, &sampled))
                     {

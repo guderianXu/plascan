@@ -6,20 +6,46 @@
 // ============================================================
 
 #include <future>
+#include <string>
 
 #include <gtest/gtest.h>
 #include <opencv2/core.hpp>
 #include "triangulation/Triangulator.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pose/PnpSolver.h"
-#include "BundleAdjustSolver.h"
 #include "filtering/SparsePointCloudProcessor.h"
-#include "Intersection.h"
+#include <placamera/frame_numeric_state.h>
+
+#include <plabundle/options.h>
 
 using namespace xjw;
 
 namespace
 {
+
+    placamera::FramePinholeNumericState
+    makeNumericCamera(const std::string& id,
+                      placamera::FrameIntrinsics intrinsics,
+                      placamera::BrownConradyDistortion distortion,
+                      const std::array<double, 3>& center,
+                      const std::array<double, 9>& rotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0},
+                      bool depth_flipped = false)
+    {
+        const placamera::FrameId frame("pnp-test-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("pnp-definition-" + id),
+                                                      intrinsics,
+                                                      distortion,
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame,
+                                                      depth_flipped);
+        return placamera::FramePinholeNumericState::fromModel(
+            placamera::FramePinholeModel::create(placamera::CameraInstanceId("pnp-instance-" + id),
+                                                 placamera::ImageId("pnp-image-" + id),
+                                                 definition,
+                                                 {1280, 960},
+                                                 placamera::Pose::create(frame, center, rotation)));
+    }
 
     struct LowRatioPnpCase
     {
@@ -468,10 +494,8 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
     }};
     const std::array<double, 3> trueCenter{{0.25, -0.12, 0.35}};
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(820.0, 790.0, 640.0, 480.0);
-    camera.setDistortion(-0.32, 0.11, -0.014, 0.004, -0.003);
-    camera.setPose(identity, trueCenter);
+    const auto camera = makeNumericCamera(
+        "brown", {820.0, 790.0, 640.0, 480.0, 1.0, 1, 1}, {-0.32, 0.11, -0.014, 0.004, -0.003}, trueCenter, identity);
 
     std::vector<std::array<double, 3>> worldPoints;
     std::vector<std::array<double, 2>> imagePoints;
@@ -489,10 +513,10 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
                 trueCenter[1] + normalizedY * depth,
                 trueCenter[2] + depth,
             }};
-            double pixel[2] = {0.0, 0.0};
-            ASSERT_TRUE(camera.projectWorldPoint(world.data(), pixel));
+            const auto projection = camera.groundToImage({camera.groundFrame(), world});
+            ASSERT_TRUE(projection);
             worldPoints.push_back(world);
-            imagePoints.push_back({{pixel[0], pixel[1]}});
+            imagePoints.push_back({{projection.value().image.sample, projection.value().image.line}});
         }
     }
 
@@ -509,15 +533,16 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
 
     const PnpResult pinholeResult = PnpSolver::solve(worldPoints,
                                                      imagePoints,
-                                                     camera.focalX(),
-                                                     camera.focalY(),
-                                                     camera.principalX(),
-                                                     camera.principalY(),
-                                                     camera.uAxisSign(),
-                                                     camera.vAxisSign(),
+                                                     camera.intrinsics().focalX,
+                                                     camera.intrinsics().focalY,
+                                                     camera.intrinsics().principalX,
+                                                     camera.intrinsics().principalY,
+                                                     camera.intrinsics().uAxisSign,
+                                                     camera.intrinsics().vAxisSign,
                                                      camera.depthAxisFlipped(),
                                                      options);
-    const PnpResult result = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+    const PnpResult result = PnpSolver::solveCalibrated(
+        worldPoints, imagePoints, camera.intrinsics(), camera.distortion(), camera.depthAxisFlipped(), options);
 
     EXPECT_FALSE(pinholeResult.success)
         << "Synthetic case must distinguish the calibrated distortion path from the pinhole overload";
@@ -532,15 +557,108 @@ TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
         EXPECT_NEAR(result.R[index], identity[index], 1.0e-6);
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState recovered = camera;
-    recovered.setPose(result.R, result.C);
+    placamera::FramePinholeNumericState recovered = camera;
+    recovered.setPose(placamera::Pose::create(recovered.groundFrame(), result.C, result.R));
     for (std::size_t index = 0; index < worldPoints.size(); ++index)
     {
-        double pixel[2] = {0.0, 0.0};
-        ASSERT_TRUE(recovered.projectWorldPoint(worldPoints[index].data(), pixel));
-        EXPECT_NEAR(pixel[0], imagePoints[index][0], 1.0e-4);
-        EXPECT_NEAR(pixel[1], imagePoints[index][1], 1.0e-4);
+        const auto projection = recovered.groundToImage({recovered.groundFrame(), worldPoints[index]});
+        ASSERT_TRUE(projection);
+        EXPECT_NEAR(projection.value().image.sample, imagePoints[index][0], 1.0e-4);
+        EXPECT_NEAR(projection.value().image.line, imagePoints[index][1], 1.0e-4);
     }
+}
+
+TEST(PnpParamsTest, ReferenceResectionPreservesPoseForEveryCameraAxisParity)
+{
+    const std::array<double, 3> center{{0.2, -0.1, 0.3}};
+    for (const bool depth_flipped : {false, true})
+    {
+        for (const int u_sign : {1, -1})
+        {
+            for (const int v_sign : {1, -1})
+            {
+                SCOPED_TRACE(::testing::Message()
+                             << "depth_flipped=" << depth_flipped << " u=" << u_sign << " v=" << v_sign);
+                const placamera::FrameIntrinsics intrinsics{920.0, 900.0, 640.0, 480.0, 1.0, u_sign, v_sign};
+                const placamera::BrownConradyDistortion distortion{-0.04, 0.008, -0.0005, 0.001, -0.0008};
+                const auto definition =
+                    placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("pnp-axis-test"),
+                                                              intrinsics,
+                                                              distortion,
+                                                              placamera::PixelConvention::PixelCenter,
+                                                              placamera::FrameId("pnp-axis-world"),
+                                                              depth_flipped);
+                const auto signs = definition->positiveDepthAxisSigns();
+                const std::array<double, 9> rotation{{signs[0], 0.0, 0.0, 0.0, signs[1], 0.0, 0.0, 0.0, signs[2]}};
+                const auto camera = makeNumericCamera("axis-" + std::to_string(depth_flipped) + "-" +
+                                                          std::to_string(u_sign) + "-" + std::to_string(v_sign),
+                                                      intrinsics,
+                                                      distortion,
+                                                      center,
+                                                      rotation,
+                                                      depth_flipped);
+
+                std::vector<std::array<double, 3>> world_points;
+                std::vector<std::array<double, 2>> image_points;
+                for (int row = 0; row < 7; ++row)
+                {
+                    for (int column = 0; column < 7; ++column)
+                    {
+                        const double depth = 4.0 + 0.13 * static_cast<double>((row * 3 + column) % 5);
+                        const std::array<double, 3> world{{center[0] + (-0.3 + 0.1 * column) * depth,
+                                                           center[1] + (-0.3 + 0.1 * row) * depth,
+                                                           center[2] + depth}};
+                        const auto projection = camera.groundToImage({camera.groundFrame(), world});
+                        ASSERT_TRUE(projection);
+                        world_points.push_back(world);
+                        image_points.push_back({projection.value().image.sample, projection.value().image.line});
+                    }
+                }
+
+                PnpOptions options;
+                options.useReferenceResection = true;
+                options.maxReprojError = 1.0;
+                options.minNumInliers = 20;
+                const PnpResult result = PnpSolver::solveCalibrated(world_points,
+                                                                    image_points,
+                                                                    camera.intrinsics(),
+                                                                    camera.distortion(),
+                                                                    camera.depthAxisFlipped(),
+                                                                    options);
+                ASSERT_TRUE(result.success)
+                    << "inliers=" << result.numInliers << " threshold_level=" << result.referenceThresholdLevel;
+                EXPECT_EQ(result.numInliers, static_cast<int>(world_points.size()));
+                for (std::size_t index = 0; index < center.size(); ++index)
+                {
+                    EXPECT_NEAR(result.C[index], center[index], 1.0e-5);
+                }
+                for (std::size_t index = 0; index < rotation.size(); ++index)
+                {
+                    EXPECT_NEAR(result.R[index], rotation[index], 1.0e-5);
+                }
+            }
+        }
+    }
+}
+
+TEST(PnpParamsTest, RejectsInvalidPlaCameraCalibrationForBothSolvers)
+{
+    PnpOptions options;
+    options.useReferenceResection = true;
+    const std::vector<std::array<double, 3>> world_points(4);
+    const std::vector<std::array<double, 2>> image_points(4);
+    const PnpResult result =
+        PnpSolver::solve(world_points, image_points, 0.0, 800.0, 640.0, 480.0, 1, 1, false, options);
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.usedReferenceResection);
+    EXPECT_EQ(result.inputCandidateCount, 4);
+
+    options.useReferenceResection = false;
+    const PnpResult standard =
+        PnpSolver::solve(world_points, image_points, 0.0, 800.0, 640.0, 480.0, 1, 1, false, options);
+    EXPECT_FALSE(standard.success);
+    EXPECT_FALSE(standard.usedReferenceResection);
+    EXPECT_EQ(standard.inputCandidateCount, 4);
 }
 
 TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
@@ -558,11 +676,11 @@ TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
     }};
     const std::array<double, 3> trueCenter{{0.31, -0.18, 0.42}};
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(1160.0, 1140.0, 640.0, 480.0);
-    camera.setDistortion(-0.08, 0.015, -0.001, 0.0007, -0.0005);
-    camera.setImageSize(camera_core::ImageSize{1280, 960});
-    camera.setPose(identity, trueCenter);
+    const auto camera = makeNumericCamera("resection",
+                                          {1160.0, 1140.0, 640.0, 480.0, 1.0, 1, 1},
+                                          {-0.08, 0.015, -0.001, 0.0007, -0.0005},
+                                          trueCenter,
+                                          identity);
 
     std::vector<std::array<double, 3>> worldPoints;
     std::vector<std::array<double, 2>> imagePoints;
@@ -574,10 +692,10 @@ TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
         const double y = -1.0 + 0.29 * static_cast<double>((index / 10) % 8);
         const double z = 5.0 + 0.17 * static_cast<double>((index * 7) % 11);
         const std::array<double, 3> world{{x, y, z}};
-        double pixel[2]{};
-        ASSERT_TRUE(camera.projectWorldPoint(world.data(), pixel));
+        const auto projection = camera.groundToImage({camera.groundFrame(), world});
+        ASSERT_TRUE(projection);
         worldPoints.push_back(world);
-        imagePoints.push_back({{pixel[0], pixel[1]}});
+        imagePoints.push_back({{projection.value().image.sample, projection.value().image.line}});
     }
     for (std::size_t index = 68; index < imagePoints.size(); ++index)
     {
@@ -591,13 +709,15 @@ TEST(PnpParamsTest, ReferenceResectionRecoversDeterministicPoseWithOutliers)
     options.minNumInliers = 5;
 
     cv::setRNGSeed(23);
-    const PnpResult first = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+    const PnpResult first = PnpSolver::solveCalibrated(
+        worldPoints, imagePoints, camera.intrinsics(), camera.distortion(), camera.depthAxisFlipped(), options);
     cv::setRNGSeed(987654);
     for (int index = 0; index < 100; ++index)
     {
         static_cast<void>(cv::theRNG().next());
     }
-    const PnpResult second = PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+    const PnpResult second = PnpSolver::solveCalibrated(
+        worldPoints, imagePoints, camera.intrinsics(), camera.distortion(), camera.depthAxisFlipped(), options);
 
     ASSERT_TRUE(first.success);
     EXPECT_TRUE(first.usedReferenceResection);
@@ -631,40 +751,40 @@ TEST(IntersectionDistortionTest, RecoversWorldPointFromDistortedPixels)
         0.0,
         1.0,
     }};
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera1;
-    camera1.setIntrinsics(900.0, 875.0, 640.0, 480.0);
-    camera1.setDistortion(-0.28, 0.09, -0.012, 0.003, -0.004);
-    camera1.setPose(identity, {{-1.0, 0.10, 0.0}});
-
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera2 = camera1;
-    camera2.setPose(identity, {{1.0, -0.05, 0.10}});
+    const auto camera1 = makeNumericCamera("intersection-a",
+                                           {900.0, 875.0, 640.0, 480.0, 1.0, 1, 1},
+                                           {-0.28, 0.09, -0.012, 0.003, -0.004},
+                                           {-1.0, 0.10, 0.0},
+                                           identity);
+    const auto camera2 =
+        makeNumericCamera("intersection-b", camera1.intrinsics(), camera1.distortion(), {1.0, -0.05, 0.10}, identity);
 
     const std::array<double, 3> expectedPoint{{0.75, -0.55, 3.70}};
-    double pixel1[2] = {0.0, 0.0};
-    double pixel2[2] = {0.0, 0.0};
-    ASSERT_TRUE(camera1.projectWorldPoint(expectedPoint.data(), pixel1));
-    ASSERT_TRUE(camera2.projectWorldPoint(expectedPoint.data(), pixel2));
+    const auto pixel1 = camera1.groundToImage({camera1.groundFrame(), expectedPoint});
+    const auto pixel2 = camera2.groundToImage({camera2.groundFrame(), expectedPoint});
+    ASSERT_TRUE(pixel1);
+    ASSERT_TRUE(pixel2);
 
-    const Intersection::Result result =
-        Intersection::intersectPair(camera1, pixel1[0], pixel1[1], camera2, pixel2[0], pixel2[1]);
+    const auto result = placamera::FramePinholeNumericState::triangulatePair(
+        camera1, pixel1.value().image, camera2, pixel2.value().image);
 
-    ASSERT_TRUE(result.valid);
+    ASSERT_TRUE(result);
     for (std::size_t index = 0; index < expectedPoint.size(); ++index)
     {
-        EXPECT_NEAR(result.point[index], expectedPoint[index], 1.0e-7);
+        EXPECT_NEAR(result.value().point.position[index], expectedPoint[index], 1.0e-7);
     }
-    EXPECT_LT(result.ray_miss_distance, 1.0e-8);
-    EXPECT_LT(result.reproj_error_rms, 1.0e-5);
+    EXPECT_LT(result.value().rayMissDistance, 1.0e-8);
+    EXPECT_LT(result.value().rmsReprojectionPixels, 1.0e-5);
 }
 
 // ─── BundleAdjust 参数验证 ──────────────────────────────────────
 
 TEST(BAParamsTest, FilterReprojErrorTightened)
 {
-    BAOptions opts;
+    plabundle::SolveOptions opts;
 
     // 从 4.0 收紧到 2.5
-    EXPECT_LE(opts.filterMaxReprojError, 2.5) << "BA filterMaxReprojError should be <= 2.5";
+    EXPECT_LE(opts.solver.filterMaxReprojError, 2.5) << "BA filterMaxReprojError should be <= 2.5";
 }
 
 // ─── SparsePointCloudProcessor 选项默认值验证 ───────────────────

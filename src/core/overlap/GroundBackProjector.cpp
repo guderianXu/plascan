@@ -15,7 +15,7 @@
 //
 // 坐标系约定：
 //   - 像素坐标：(u=列, v=行)，左上角为原点
-//   - 相机坐标系的轴方向和物理前方由 FramePinholeNumericState 统一定义，
+//   - 相机坐标系的轴方向和物理前方由 PlaCamera 统一定义，
 //     不在此处假设固定的深度轴方向
 //   - 世界坐标系：由相机标定确定，通常为 UTM 或本地水平坐标系
 //   - 高程 Z：向上为正
@@ -140,11 +140,11 @@ double DemSurface::meanHeight() const
 // 函数：GroundBackProjector::pixelRayWorld（私有）
 // 功能：将像素坐标 (u,v) 转换为世界坐标系下的射线（起点 + 归一化方向）。
 //   数学步骤：
-//     ① 通过 FramePinholeNumericState::rayForPixel() 完成去畸变、轴方向、
+//     ① 通过 PlaCamera::imageToImagingLocus() 完成去畸变、轴方向、
 //        深度轴和相机到世界坐标变换；这里不再复制一套针孔公式。
-//     ② 返回统一数值状态定义的世界系单位射线。
+//     ② 返回 PlaCamera 定义的世界系单位射线。
 // ============================================================
-bool GroundBackProjector::pixelRayWorld(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::pixelRayWorld(const placamera::FramePinholeModel& camera,
                                         double u,
                                         double v,
                                         std::array<double, 3>* origin,
@@ -156,32 +156,18 @@ bool GroundBackProjector::pixelRayWorld(const xjw::camera_models::frame_pinhole:
         return false;
     }
 
-    std::string validationError;
-    if (!camera.validateNumericalState(&validationError))
+    const auto ray = camera.imageToImagingLocus({u, v});
+    if (!ray.ok())
     {
         if (errorMsg)
         {
-            *errorMsg = "数值相机状态无效";
-            if (!validationError.empty())
-            {
-                *errorMsg += ": " + validationError;
-            }
+            *errorMsg = "无法计算有效射线方向: " + ray.message();
         }
         return false;
     }
 
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
-    if (!camera.rayForPixel({u, v}, &ray))
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "无法计算有效射线方向";
-        }
-        return false;
-    }
-
-    *origin = ray.origin;
-    *dir = ray.direction;
+    *origin = ray.value().origin.position;
+    *dir = ray.value().direction;
     return true;
 }
 
@@ -196,7 +182,7 @@ bool GroundBackProjector::pixelRayWorld(const xjw::camera_models::frame_pinhole:
 //     - |dir.z| 不能接近 0（否则射线与高程面平行，无交点或无穷远）
 //     - t > 0（交点必须在相机前方，t ≤ 0 表示面在相机后方）
 // ============================================================
-bool GroundBackProjector::backProjectToFixedZ(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::backProjectToFixedZ(const placamera::FramePinholeModel& camera,
                                               double u,
                                               double v,
                                               double fixedZ,
@@ -263,7 +249,7 @@ bool GroundBackProjector::backProjectToFixedZ(const xjw::camera_models::frame_pi
 //   迭代限制：最多 32 次，收敛条件 |diff| < 1e-3（毫米级精度）
 //   DEM 查询失败时扩大 t 继续搜索；超过迭代预算或没有前向交点则失败。
 // ============================================================
-bool GroundBackProjector::backProjectWithDem(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::backProjectWithDem(const placamera::FramePinholeModel& camera,
                                              double u,
                                              double v,
                                              const DemSurface& dem,
@@ -399,7 +385,7 @@ bool GroundBackProjector::backProjectWithDem(const xjw::camera_models::frame_pin
 // 函数：GroundBackProjector::backProjectToSphere
 // 功能：射线与基准球面求交（解析二次方程）。
 // ============================================================
-bool GroundBackProjector::backProjectToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::backProjectToSphere(const placamera::FramePinholeModel& camera,
                                               double u,
                                               double v,
                                               const ReferenceSphereSurface& sphere,
@@ -492,7 +478,7 @@ bool GroundBackProjector::backProjectToSphere(const xjw::camera_models::frame_pi
 //     - 调用方应在进入重叠分析前提供有效影像尺寸
 //   地面模型选择：useFixedZ=true 用固定高程面，否则用 DEM（需有效）
 // ============================================================
-bool GroundBackProjector::imageCenterToGround(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::imageCenterToGround(const placamera::FramePinholeModel& camera,
                                               int imageWidth,
                                               int imageHeight,
                                               const DemSurface* dem,
@@ -529,7 +515,7 @@ bool GroundBackProjector::imageCenterToGround(const xjw::camera_models::frame_pi
     return backProjectWithDem(camera, u, v, *dem, ground, errorMsg);
 }
 
-bool GroundBackProjector::imageCenterToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+bool GroundBackProjector::imageCenterToSphere(const placamera::FramePinholeModel& camera,
                                               int imageWidth,
                                               int imageHeight,
                                               const ReferenceSphereSurface& sphere,
@@ -561,7 +547,7 @@ bool GroundBackProjector::imageCenterToSphere(const xjw::camera_models::frame_pi
 //         搜索半径 = neighborFactor * radius * 2.5（见 OverlapAnalyzer）
 // ============================================================
 bool GroundBackProjector::estimateFootprintRadius(
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    const placamera::FramePinholeModel& camera,
     int imageWidth,
     int imageHeight,
     const DemSurface* dem,
@@ -654,7 +640,7 @@ bool GroundBackProjector::estimateFootprintRadius(
 }
 
 bool GroundBackProjector::estimateFootprintRadiusOnSphere(
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    const placamera::FramePinholeModel& camera,
     int imageWidth,
     int imageHeight,
     const ReferenceSphereSurface& sphere,

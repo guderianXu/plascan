@@ -342,10 +342,9 @@ __kernel void unproject_dense_cloud(
             checkOpenCl(clSetKernelArg(kernel, index, sizeof(memory), &memory), "kernel buffer binding");
         }
 
-        bool hasZeroDistortion(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera)
+        bool hasZeroDistortion(const placamera::FramePinholeModel& camera)
         {
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.pinholeDefinition().distortion();
             return distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 && distortion.radialK3 == 0.0 &&
                    distortion.tangentialP1 == 0.0 && distortion.tangentialP2 == 0.0;
         }
@@ -393,7 +392,7 @@ __kernel void unproject_dense_cloud(
     std::vector<DensePoint>
     DensePointCloudOpenCL::unproject(const cv::Mat& depth,
                                      const cv::Mat& mask,
-                                     const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+                                     const placamera::FramePinholeModel& camera,
                                      const cv::Mat& colorImage,
                                      float minimumDepth,
                                      float maximumDepth,
@@ -462,9 +461,8 @@ __kernel void unproject_dense_cloud(
                                    static_cast<std::size_t>(elementCount) * 3 * sizeof(std::uint8_t));
             OpenClBuffer validBuffer(runtime.context(), static_cast<std::size_t>(elementCount) * sizeof(std::int32_t));
 
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics =
-                camera.intrinsics();
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Pose pose = camera.pose();
+            const placamera::FrameIntrinsics& intrinsics = camera.pinholeDefinition().intrinsics();
+            const placamera::Pose& pose = camera.pose();
             std::array<float, 9> rotation{};
             std::array<float, 3> center{};
             for (int index = 0; index < 9; ++index)
@@ -475,7 +473,7 @@ __kernel void unproject_dense_cloud(
             for (int index = 0; index < 3; ++index)
             {
                 center[static_cast<std::size_t>(index)] =
-                    static_cast<float>(pose.cameraCenter[static_cast<std::size_t>(index)]);
+                    static_cast<float>(pose.center[static_cast<std::size_t>(index)]);
             }
             OpenClBuffer rotationBuffer(
                 runtime.context(), sizeof(rotation), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, rotation.data());
@@ -513,7 +511,7 @@ __kernel void unproject_dense_cloud(
             setKernelValue(kernel, argument++, principalY);
             setKernelValue(kernel, argument++, intrinsics.uAxisSign);
             setKernelValue(kernel, argument++, intrinsics.vAxisSign);
-            const int depthSign = pose.depthAxisFlipped ? -1 : 1;
+            const int depthSign = camera.pinholeDefinition().depthAxisFlipped() ? -1 : 1;
             setKernelValue(kernel, argument++, depthSign);
             setKernelBuffer(kernel, argument++, rotationBuffer);
             setKernelBuffer(kernel, argument++, centerBuffer);

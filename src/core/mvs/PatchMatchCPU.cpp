@@ -45,10 +45,10 @@ struct HostPinholeCamera
     float principalY = 0.0f;
 };
 
-HostPinholeCamera makeHostPinholeCamera(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+HostPinholeCamera makeHostPinholeCamera(const placamera::FramePinholeModel& camera,
                                         int downsampleFactor)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Intrinsics intrinsics = camera.intrinsics();
+    const placamera::FrameIntrinsics& intrinsics = camera.pinholeDefinition().intrinsics();
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
 
     HostPinholeCamera result;
@@ -679,8 +679,8 @@ cv::Mat resizedBinaryMask(const cv::Mat* mask, const cv::Size& targetSize)
 bool PatchMatchDepthEstimator::estimateCPU(
     const cv::Mat& refGray,
     const std::vector<cv::Mat>& srcGrays,
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState& refCam,
-    const std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>& srcCams,
+    const placamera::FramePinholeModel& refCam,
+    const std::vector<placamera::FramePinholeModel>& srcCams,
     float zNear,
     float zFar,
     const PatchMatchConfig& config,

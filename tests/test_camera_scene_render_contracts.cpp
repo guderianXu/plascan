@@ -170,8 +170,9 @@ TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
     const QString source = readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([images]()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraPosesFromImages(images)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([meta]()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraPosesFromProject(meta)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("loadProjectCameras(project_files)")));
     EXPECT_TRUE(source.contains(QStringLiteral("generation == self->_cameraPoseGeneration")));
 }
 
@@ -900,7 +901,7 @@ TEST(CameraSceneRenderContractTest, MetadataResultUpdatesDoNotReloadCameraImages
     ASSERT_FALSE(source.isEmpty());
 
     const qsizetype signature_start = source.indexOf(
-        QStringLiteral("QJsonArray cameraPoseMetadataFromImages"));
+        QStringLiteral("QJsonObject cameraPoseProjectSnapshot"));
     const qsizetype signature_end = source.indexOf(
         QStringLiteral("} // namespace"), signature_start);
     ASSERT_GE(signature_start, 0);
@@ -909,13 +910,16 @@ TEST(CameraSceneRenderContractTest, MetadataResultUpdatesDoNotReloadCameraImages
         signature_start, signature_end - signature_start);
     EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"path\")")));
     EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"image_path\")")));
-    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"model_parameters\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"image_uuid\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"camera_definitions\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"camera_instances\")")));
+    EXPECT_FALSE(signature_block.contains(QStringLiteral("QStringLiteral(\"model_parameters\")")));
     EXPECT_FALSE(signature_block.contains(QStringLiteral("depth_map_results")));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QJsonArray _cameraPoseMetadata")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject _cameraPoseMetadata")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "if (_cameraPoseMetadata == camera_pose_metadata)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_cameraPoseMetadata = QJsonArray()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cameraPoseMetadata = QJsonObject()")));
 }
 
 TEST(CameraSceneRenderContractTest, RepeatedCameraPosesPreserveLoadedThumbnailResources)
@@ -1302,11 +1306,11 @@ TEST(CameraSceneRenderContractTest, MainWorkspaceCopiesCompleteCameraDisplayPose
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
 
-    EXPECT_TRUE(source.contains(QStringLiteral("camera.intrinsics()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("camera->pinholeDefinition().intrinsics()")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose.focalX")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose.imageWidth")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose.uAxisSign")));
-    EXPECT_TRUE(source.contains(QStringLiteral("pose.depthAxisFlipped = camera.depthAxisFlipped()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose.depthAxisFlipped = camera->pinholeDefinition().depthAxisFlipped()")));
 }
 
 TEST(CameraSceneRenderContractTest, ModelMenuProvidesExclusiveTiePointColorModes)

@@ -247,13 +247,13 @@ namespace xjw
             {
                 continue;
             }
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera = _reconstruction.camera(imageId);
+            const placamera::FramePinholeNumericState& camera = _reconstruction.camera(imageId);
             double width = 0.0;
             double height = 0.0;
-            if (camera.imageSize() && camera.imageSize()->samples > 0 && camera.imageSize()->lines > 0)
+            if (camera.imageSize().isValid())
             {
-                width = static_cast<double>(camera.imageSize()->samples);
-                height = static_cast<double>(camera.imageSize()->lines);
+                width = static_cast<double>(camera.imageSize().samples);
+                height = static_cast<double>(camera.imageSize().lines);
             }
             else
             {
@@ -510,8 +510,8 @@ namespace xjw
             return false;
         }
 
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam1 = _reconstruction.camera(imgId1);
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam2 = _reconstruction.camera(imgId2);
+        const placamera::FramePinholeNumericState& cam1 = _reconstruction.camera(imgId1);
+        const placamera::FramePinholeNumericState& cam2 = _reconstruction.camera(imgId2);
 
         const ImageData& img1 = _reconstruction.image(imgId1);
         const ImageData& img2 = _reconstruction.image(imgId2);
@@ -526,30 +526,28 @@ namespace xjw
         double u2 = img2.keypoints[featIdx2].x;
         double v2 = img2.keypoints[featIdx2].y;
 
-        // 使用 Intersection 模块进行前方交汇
-        auto result = Intersection::intersectPair(cam1, u1, v1, cam2, u2, v2);
-
-        if (!result.valid)
+        const auto result = placamera::FramePinholeNumericState::triangulatePair(cam1, {u1, v1}, cam2, {u2, v2});
+        if (!result)
         {
             return false;
         }
-        if (result.angle_deg < options.minTriAngle)
+        if (result.value().triangulationAngleDegrees < options.minTriAngle)
         {
             return false;
         }
-        double threshold_error = result.reproj_error_rms;
-        if (options.normalizeReprojectionByFeatureScale && result.valid)
+        double threshold_error = result.value().rmsReprojectionPixels;
+        if (options.normalizeReprojectionByFeatureScale)
         {
-            const double first_error =
-                normalizedReprojError(computeReprojError(result.point, imgId1, featIdx1), imgId1, featIdx1, true);
-            const double second_error =
-                normalizedReprojError(computeReprojError(result.point, imgId2, featIdx2), imgId2, featIdx2, true);
+            const double first_error = normalizedReprojError(
+                computeReprojError(result.value().point.position, imgId1, featIdx1), imgId1, featIdx1, true);
+            const double second_error = normalizedReprojError(
+                computeReprojError(result.value().point.position, imgId2, featIdx2), imgId2, featIdx2, true);
             threshold_error = std::sqrt(0.5 * (first_error * first_error + second_error * second_error));
         }
         if (!std::isfinite(threshold_error) || threshold_error > options.maxReprojError)
             return false;
 
-        outXyz = result.point;
+        outXyz = result.value().point.position;
         return true;
     }
 
@@ -562,7 +560,7 @@ namespace xjw
         {
             return 1e9;
         }
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
+        const placamera::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
         const ImageData& img = _reconstruction.image(imageId);
 
         if (featureIdx >= img.keypoints.size())
@@ -570,15 +568,14 @@ namespace xjw
             return 1e9;
         }
 
-        double uv[2];
-        double world[3] = {xyz[0], xyz[1], xyz[2]};
-        if (!cam.projectWorldPoint(world, uv))
+        const auto projection = cam.groundToImage({cam.groundFrame(), xyz});
+        if (!projection)
         {
             return 1e9;
         }
 
-        double du = uv[0] - img.keypoints[featureIdx].x;
-        double dv = uv[1] - img.keypoints[featureIdx].y;
+        double du = projection.value().image.sample - img.keypoints[featureIdx].x;
+        double dv = projection.value().image.line - img.keypoints[featureIdx].y;
         return std::sqrt(du * du + dv * dv);
     }
 
@@ -856,9 +853,9 @@ namespace xjw
     {
         if (!_reconstruction.hasCamera(imageId))
             return false;
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
-        const double world[3] = {xyz[0], xyz[1], xyz[2]};
-        return cam.isPointInFront(world);
+        const placamera::FramePinholeNumericState& cam = _reconstruction.camera(imageId);
+        const auto depth = cam.signedDepth({cam.groundFrame(), xyz});
+        return depth && depth.value() > 1.0e-9;
     }
 
     double Triangulator::computeMaxTriangulationAngle(const std::array<double, 3>& xyz,
@@ -873,9 +870,8 @@ namespace xjw
                 continue;
             }
 
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraI =
-                _reconstruction.camera(observations[i].imageId);
-            const auto centerI = cameraI.cameraCenter();
+            const placamera::FramePinholeNumericState& cameraI = _reconstruction.camera(observations[i].imageId);
+            const auto centerI = cameraI.pose().center;
 
             for (size_t j = i + 1; j < observations.size(); ++j)
             {
@@ -884,9 +880,8 @@ namespace xjw
                     continue;
                 }
 
-                const xjw::camera_models::frame_pinhole::FramePinholeNumericState& cameraJ =
-                    _reconstruction.camera(observations[j].imageId);
-                const auto centerJ = cameraJ.cameraCenter();
+                const placamera::FramePinholeNumericState& cameraJ = _reconstruction.camera(observations[j].imageId);
+                const auto centerJ = cameraJ.pose().center;
 
                 const double rayI[3] = {xyz[0] - centerI[0], xyz[1] - centerI[1], xyz[2] - centerI[2]};
                 const double rayJ[3] = {xyz[0] - centerJ[0], xyz[1] - centerJ[1], xyz[2] - centerJ[2]};
@@ -940,22 +935,25 @@ namespace xjw
             }
 
             const FeatureKeypoint& keypoint = image.keypoints[element.featureIdx];
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState::Ray ray;
-            if (!_reconstruction.camera(element.imageId)
-                     .rayForPixel({static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)}, &ray))
+            const auto ray =
+                _reconstruction.camera(element.imageId)
+                    .imageToImagingLocus({static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)});
+            if (!ray)
             {
                 continue;
             }
-            const double squaredLength = ray.direction[0] * ray.direction[0] + ray.direction[1] * ray.direction[1] +
-                                         ray.direction[2] * ray.direction[2];
+            const auto& direction = ray.value().direction;
+            const auto& origin = ray.value().origin.position;
+            const double squaredLength =
+                direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2];
             const double length = std::sqrt(squaredLength);
             if (!std::isfinite(length) || length < std::numeric_limits<double>::epsilon())
             {
                 continue;
             }
-            const double x = ray.direction[0] / length;
-            const double y = ray.direction[1] / length;
-            const double z = ray.direction[2] / length;
+            const double x = direction[0] / length;
+            const double y = direction[1] / length;
+            const double z = direction[2] / length;
             const double xx = x * x;
             const double xy = x * y;
             const double xz = x * z;
@@ -975,9 +973,9 @@ namespace xjw
             g -= xz;
             h -= yz;
             i += oneMinusZz;
-            rhsX += (oneMinusXx * ray.origin[0] - xy * ray.origin[1]) - xz * ray.origin[2];
-            rhsY += (-xy * ray.origin[0] + oneMinusYy * ray.origin[1]) - yz * ray.origin[2];
-            rhsZ += (-xz * ray.origin[0] - yz * ray.origin[1]) + oneMinusZz * ray.origin[2];
+            rhsX += (oneMinusXx * origin[0] - xy * origin[1]) - xz * origin[2];
+            rhsY += (-xy * origin[0] + oneMinusYy * origin[1]) - yz * origin[2];
+            rhsZ += (-xz * origin[0] - yz * origin[1]) + oneMinusZz * origin[2];
             ++rayCount;
         }
 

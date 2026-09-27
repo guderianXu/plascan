@@ -4,6 +4,7 @@
 #include "RecoveredDepthScene.h"
 #include "RecoveredModelBuilder.h"
 #include "DepthFrameUtils.h"
+#include <placamera/frame_numeric_state.h>
 #include "recovered_model/VertexColorOptions.h"
 #include "recovered_model/RecoveredModelColorizer.h"
 #include "ModelWorkflowService.h"
@@ -73,18 +74,32 @@ namespace
 
     TEST_F(RecoveredModelInputTest, PublicD4CameraUsesReferenceCalibrationWithoutHalfPixelShift)
     {
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState original;
-        original.setIntrinsics(402, 400, 131.5, 125.25);
-        original.setDistortion({0.1, 0.2, 0.3, 0.01, 0.02});
-        original.setCameraCenter({1, 2, 3});
-        const auto output = xjw::mvs::recoveredPublicD4Camera(original);
-        const auto intrinsics = output.intrinsics();
+        const placamera::FrameId frame("recovered-public-world");
+        const auto definition =
+            placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("recovered-public-definition"),
+                                                      {402.0, 400.0, 131.5, 125.25, 1.0, 1, 1},
+                                                      {0.1, 0.2, 0.3, 0.01, 0.02},
+                                                      placamera::PixelConvention::PixelCenter,
+                                                      frame);
+        const auto source_model = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("recovered-public-instance"),
+            placamera::ImageId("recovered-public-image"),
+            definition,
+            {512, 512},
+            placamera::Pose::create(frame, {1, 2, 3}, {1, 0, 0, 0, 1, 0, 0, 0, 1}));
+        const auto output = xjw::mvs::recoveredPublicD4Camera(source_model);
+        const auto intrinsics = output.pinholeDefinition().intrinsics();
         EXPECT_DOUBLE_EQ(intrinsics.focalX, 100);
         EXPECT_DOUBLE_EQ(intrinsics.focalY, 100);
         EXPECT_DOUBLE_EQ(intrinsics.principalX, 32.875);
         EXPECT_DOUBLE_EQ(intrinsics.principalY, 31.3125);
-        EXPECT_EQ(output.cameraCenter(), original.cameraCenter());
-        const auto distortion = output.distortion();
+        EXPECT_EQ(output.pose().center, source_model.pose().center);
+        EXPECT_EQ(output.imageSize().samples, 128);
+        EXPECT_EQ(output.imageSize().lines, 128);
+        EXPECT_EQ(output.instanceId(), source_model.instanceId());
+        EXPECT_EQ(output.imageId(), source_model.imageId());
+        EXPECT_EQ(output.groundFrame(), source_model.groundFrame());
+        const auto distortion = output.pinholeDefinition().distortion();
         EXPECT_EQ(distortion.radialK1, 0);
         EXPECT_EQ(distortion.radialK2, 0);
         EXPECT_EQ(distortion.radialK3, 0);

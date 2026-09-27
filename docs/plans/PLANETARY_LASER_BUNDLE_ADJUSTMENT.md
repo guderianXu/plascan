@@ -61,7 +61,7 @@ r_rho   = sqrt(w_global * w_shot) * (rho_hat - rho_obs) / sigma_rho
 - `constrained`：落点作为独立三维参数块优化，并使用完整 `3 x 3` 天体固连 XYZ 协方差。适配器计算平方根信息矩阵 `W`，加入 `W(P-P0)`。
 - `free`：落点可变且没有位置先验；必须至少有两台具有非零基线相机的真实 `measured` 像点，否则输入验证拒绝。
 
-shot 落点不是普通 SfM `BATrack`，不进入普通 track 的重投影 RMS、过滤统计或有效 track 比例。真实 `measured` 像点作为该独立辅助落点的重投影残差；`projected` 像点永远忽略。
+shot 落点不是普通 SfM `plabundle::Track`，不进入普通 track 的重投影 RMS、过滤统计或有效 track 比例。真实 `measured` 像点作为该独立辅助落点的重投影残差；`projected` 像点永远忽略。
 
 ISIS `LidarData` 中的 measures 是由落点反投影得到的虚拟量测。ISIS 会在平差中重新投影并将其影像残差置零，因此 PlaScan 导入时无论 JSON 内是否出现 `kind` 字段，都强制标记为 `projected`，绝不冒充真实像点。参考：
 
@@ -198,8 +198,9 @@ C_xyz = J * C_spherical * J^T
 10. `round_trip` 被拒绝；必须先按产品定义换算成单程几何距离。`unknown` 只有在调用方显式确认后才能按单程处理。
 11. `line_scan` 在通用适配器中仍被拒绝，不能把推扫影像压成单一静态位姿。
 
-轨道器推扫数据改走独立 `PlanetaryLineScanCamera` / `PlanetaryLineScanBundleAdjust`：它从 USGSCSM
-ISD 读取分段行曝光时间、Hermite 位置和四元数姿态，在每条控制量测的观测行求瞬时射线，在
+轨道器推扫数据通过 `placamera::importPlanetaryLineScanIsd()` 直接导入统一的 `LineScanModel`，再由
+`PlanetaryLineScanBundleAdjust` 装配 `plabundle::linescan::Problem` 并调用独立库求解。typed 实例从 USGSCSM ISD 读取分段行曝光时间、Hermite 位置和四元数姿态，
+在每条控制量测的观测行求瞬时射线，在
 laser shot ET 求相机中心。ISIS PVL 的左上像素中心是 `(1, 1)`，进入 CSM `(0.5, 0.5)` 约定前
 sample/line 统一减 `0.5`；ISIS LidarData 的 projected measures 只可用于 `isis_line` 兼容模式的
 曝光时刻定位，仍不作为真实重投影观测。
@@ -212,7 +213,8 @@ sample/line 统一减 `0.5`；ISIS LidarData 的 projected measures 只可用于
 
 ## 7. 求解、服务、CLI 与 GUI
 
-- 核心 `bundle_adjust` 通过独立 `BALaserRangeConstraint` 参数块接入 PlaMatrix CPU/CUDA/OpenCL BA；Legacy CPU 不会静默忽略该能力，Auto 按规模选择 PlaMatrix，GPU 失败只回退 PlaMatrix CPU。
+- PlaBundle 通过独立 `plabundle::LaserRangeConstraint` 参数块接入 PlaMatrix CPU/CUDA/OpenCL BA；
+  所有正式后端都声明并验证该能力，Auto 按规模选择 PlaMatrix，GPU 失败只回退 PlaMatrix CPU。
 - `BundleAdjustService` 加载 JSON、按求解相机顺序建立影像别名、调用适配器并写出 `planetary_laser_range_summary`，其中包含接受/跳过 shot、fixed/constrained/free 数量、忽略的 projected measures、range RMS 前后值，以及逐 shot 优化落点、相机索引和相机坐标系杆臂。服务拒绝用未建立索引对应关系的影像列表猜测相机顺序。
 - 行星激光 dry-run 仍会执行 JSON、传感器模型、坐标系和影像别名预校验；它只跳过实际求解与结果写回，不能让无效输入伪装成检查成功。
 - CLI 使用 `--laser-range-data`；必须显式提供 `--laser-range-camera-frame`。ISIS 输入还要提供目标、body frame、laser frame、相机模型、range 类型和三分量杆臂上下文；工程 UUID 自动合并，`--laser-range-image-alias` 用于把 ISIS `serialNumber` 等产品标识绑定到明确的相机索引。只有显式给出 `--laser-range-allow-unmapped-measures` 时，才允许忽略未映射的真实 `measured` 像点。

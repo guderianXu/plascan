@@ -137,7 +137,7 @@ namespace xjw
             return {x * scale, y * scale, z * scale};
         }
 
-        bool projectLocal(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        bool projectLocal(const placamera::FramePinholeDefinition& camera,
                           const cv::Vec3d& local,
                           cv::Vec2d* pixel)
         {
@@ -149,21 +149,21 @@ namespace xjw
             const double x = local[0] * inverse_z;
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.distortion();
+            const placamera::FrameIntrinsics& intrinsics = camera.intrinsics();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r2 * r2 + distortion.radialK3 * r2 * r2 * r2;
             const double distorted_x =
                 x * radial + 2.0 * distortion.tangentialP1 * x * y + distortion.tangentialP2 * (r2 + 2.0 * x * x);
             const double distorted_y =
                 y * radial + distortion.tangentialP1 * (r2 + 2.0 * y * y) + 2.0 * distortion.tangentialP2 * x * y;
-            (*pixel)[0] = camera.focalX() * distorted_x + camera.principalX();
-            (*pixel)[1] = camera.focalY() * distorted_y + camera.principalY();
+            (*pixel)[0] = intrinsics.uAxisSign * intrinsics.focalX * distorted_x + intrinsics.principalX;
+            (*pixel)[1] = intrinsics.vAxisSign * intrinsics.focalY * distorted_y + intrinsics.principalY;
             return std::isfinite((*pixel)[0]) && std::isfinite((*pixel)[1]);
         }
 
         std::array<double, 6>
-        projectionLocalJacobian(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+        projectionLocalJacobian(const placamera::FramePinholeDefinition& camera,
                                 const cv::Vec3d& local)
         {
             std::array<double, 6> result{};
@@ -176,8 +176,8 @@ namespace xjw
             const double y = local[1] * inverse_z;
             const double r2 = x * x + y * y;
             const double r4 = r2 * r2;
-            const xjw::camera_models::frame_pinhole::FramePinholeNumericState::Distortion distortion =
-                camera.distortion();
+            const placamera::BrownConradyDistortion& distortion = camera.distortion();
+            const placamera::FrameIntrinsics& intrinsics = camera.intrinsics();
             const double radial =
                 1.0 + distortion.radialK1 * r2 + distortion.radialK2 * r4 + distortion.radialK3 * r4 * r2;
             const double radial_derivative =
@@ -192,18 +192,20 @@ namespace xjw
                 radial + y * radial_y + 6.0 * distortion.tangentialP1 * y + 2.0 * distortion.tangentialP2 * x;
             const double z_x = -x * inverse_z;
             const double z_y = -y * inverse_z;
-            result = {{camera.focalX() * dxd_x * inverse_z,
-                       camera.focalX() * dxd_y * inverse_z,
-                       camera.focalX() * (dxd_x * z_x + dxd_y * z_y),
-                       camera.focalY() * dyd_x * inverse_z,
-                       camera.focalY() * dyd_y * inverse_z,
-                       camera.focalY() * (dyd_x * z_x + dyd_y * z_y)}};
+            const double focal_x = intrinsics.uAxisSign * intrinsics.focalX;
+            const double focal_y = intrinsics.vAxisSign * intrinsics.focalY;
+            result = {{focal_x * dxd_x * inverse_z,
+                       focal_x * dxd_y * inverse_z,
+                       focal_x * (dxd_x * z_x + dxd_y * z_y),
+                       focal_y * dyd_x * inverse_z,
+                       focal_y * dyd_y * inverse_z,
+                       focal_y * (dyd_x * z_x + dyd_y * z_y)}};
             return result;
         }
 
     } // namespace
 
-    void refineReferencePose(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    void refineReferencePose(const placamera::FramePinholeDefinition& camera,
                              const std::vector<std::array<double, 3>>& worldPoints,
                              const std::vector<std::array<double, 2>>& imagePoints,
                              const std::vector<std::size_t>& inlierIndices,

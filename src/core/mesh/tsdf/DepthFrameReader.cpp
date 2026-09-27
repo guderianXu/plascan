@@ -211,17 +211,15 @@ namespace xjw::mesh::tsdf_detail
             remaining_auxiliary_count > 0 && primary_count >= 3 &&
             std::all_of(selected.cbegin(),
                         selected.cend(),
-                        [](const DepthFrameArtifact& artifact)
-                        {
+                        [](const DepthFrameArtifact& artifact) {
                             return xjw::mvs::isOrbitalDepthSceneProfile(artifact.sceneProfile) &&
-                                   artifact.hasCameraModel && artifact.cameraModel.isValid();
+                                   artifact.cameraModel != nullptr;
                         }) &&
             std::all_of(auxiliary.cbegin(),
                         auxiliary.cend(),
-                        [](const DepthFrameArtifact& artifact)
-                        {
+                        [](const DepthFrameArtifact& artifact) {
                             return xjw::mvs::isOrbitalDepthSceneProfile(artifact.sceneProfile) &&
-                                   artifact.hasCameraModel && artifact.cameraModel.isValid();
+                                   artifact.cameraModel != nullptr;
                         });
         if (orbital_selection)
         {
@@ -260,14 +258,14 @@ namespace xjw::mesh::tsdf_detail
             fixed_views.reserve(static_cast<std::size_t>(selected.size()));
             for (int index = 0; index < static_cast<int>(selected.size()); ++index)
             {
-                fixed_views.push_back({index, selected[index].refIndex, selected[index].cameraModel.cameraCenter()});
+                fixed_views.push_back({index, selected[index].refIndex, selected[index].cameraModel->pose().center});
             }
             std::vector<DepthFusionView> candidate_views;
             candidate_views.reserve(static_cast<std::size_t>(auxiliary.size()));
             for (int index = 0; index < static_cast<int>(auxiliary.size()); ++index)
             {
                 candidate_views.push_back(
-                    {index, auxiliary[index].refIndex, auxiliary[index].cameraModel.cameraCenter()});
+                    {index, auxiliary[index].refIndex, auxiliary[index].cameraModel->pose().center});
             }
             const std::vector<int> selected_indices = DepthFusionFramePolicy::selectCoverageComplementaryCandidates(
                 fixed_views, candidate_views, remaining_auxiliary_count);

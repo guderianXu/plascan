@@ -11,7 +11,7 @@
 // 典型应用：影像地面覆盖范围估算、重叠度分析、相机姿态验证。
 // ============================================================
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_camera.h>
 #include <plapoint/search/spatial_kdtree.h>
 
 #include <array>
@@ -101,7 +101,7 @@ public:
     //   errorMsg - 可选错误信息输出
     // 返回值：成功 true，失败 false（射线平行于高程面或交点在相机后方）
     // --------------------------------------------------------
-    static bool backProjectToFixedZ(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool backProjectToFixedZ(const placamera::FramePinholeModel& camera,
                                     double u,
                                     double v,
                                     double fixedZ,
@@ -119,7 +119,7 @@ public:
     //   ground   - 输出三维交点坐标（Z 取 DEM 高程值）
     // 返回值：仅在迭代收敛时返回 true；无前向交点、未收敛或加载失败返回 false
     // --------------------------------------------------------
-    static bool backProjectWithDem(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool backProjectWithDem(const placamera::FramePinholeModel& camera,
                                    double u,
                                    double v,
                                    const DemSurface& dem,
@@ -132,7 +132,7 @@ public:
     //   射线方程 P(t)=C+t*dir，球面方程 |P-center|=radius。
     //   选择最小正根作为相机前方的近端交点。
     // --------------------------------------------------------
-    static bool backProjectToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool backProjectToSphere(const placamera::FramePinholeModel& camera,
                                     double u,
                                     double v,
                                     const ReferenceSphereSurface& sphere,
@@ -150,7 +150,7 @@ public:
     //   useFixedZ         - true = 固定高程面，false = DEM
     //   fixedZ            - 固定高程值（useFixedZ=true 时有效）
     // --------------------------------------------------------
-    static bool imageCenterToGround(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool imageCenterToGround(const placamera::FramePinholeModel& camera,
                                     int imageWidth,
                                     int imageHeight,
                                     const DemSurface* dem,
@@ -163,7 +163,7 @@ public:
     // 函数：imageCenterToSphere
     // 功能：将影像中心像素反投影到基准球面。
     // --------------------------------------------------------
-    static bool imageCenterToSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool imageCenterToSphere(const placamera::FramePinholeModel& camera,
                                     int imageWidth,
                                     int imageHeight,
                                     const ReferenceSphereSurface& sphere,
@@ -179,7 +179,7 @@ public:
     // 参数：
     //   radius - 输出：估算的地面覆盖等效半径；四个影像角点必须全部可反投影
     // --------------------------------------------------------
-    static bool estimateFootprintRadius(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool estimateFootprintRadius(const placamera::FramePinholeModel& camera,
                                         int imageWidth,
                                         int imageHeight,
                                         const DemSurface* dem,
@@ -193,7 +193,7 @@ public:
     // 功能：估计影像在基准球面上的近似覆盖半径；四个影像角点必须全部可反投影。
     // --------------------------------------------------------
     static bool
-    estimateFootprintRadiusOnSphere(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    estimateFootprintRadiusOnSphere(const placamera::FramePinholeModel& camera,
                                     int imageWidth,
                                     int imageHeight,
                                     const ReferenceSphereSurface& sphere,
@@ -213,7 +213,7 @@ private:
     //   origin - 输出射线起点（= 相机中心 C）
     //   dir    - 输出射线归一化方向向量（世界坐标系）
     // --------------------------------------------------------
-    static bool pixelRayWorld(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static bool pixelRayWorld(const placamera::FramePinholeModel& camera,
                               double u,
                               double v,
                               std::array<double, 3>* origin,

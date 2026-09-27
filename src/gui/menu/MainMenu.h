@@ -251,7 +251,6 @@ public:
     QAction* circleSelectionAction() const;
     QAction* freehandSelectionAction() const;
     QAction* cameraCalibrationAction() const;
-    QAction* cameraConvertAction() const;
     QAction* generateMaskAction() const;
     QAction* surveyControlAction() const;
     QAction* detectMarkersAction() const;
@@ -435,7 +434,6 @@ private:
     QAction* _viewTiePointMatchesAct{};          ///< 工具菜单中查看匹配入口
     QAction* _manualPointCloudPruneAct{};        ///< 手动点云剔除
     QAction* _cameraCalibrationAct{};            ///< 查看空三前后的相机内参
-    QAction* _cameraConvertAct{};                ///< 通用相机格式转换
     QAction* _generateMaskAct{};                 ///< 生成照片蒙版
     QAction* _surveyControlAct{};                ///< 控制点/检查点/比例尺管理
     QAction* _detectMarkersAct{};                ///< 自动检测编码或非编码标靶

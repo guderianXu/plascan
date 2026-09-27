@@ -10,9 +10,9 @@
  * 依赖成对 `.match` 或 JSON sidecar。
  */
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
-#include "camera/models/frame_pinhole/FramePinholeInstance.h"
 #include "common/SfmTypes.h"
+
+#include <placamera/frame_camera.h>
 
 #include <QJsonObject>
 #include <QMap>
@@ -38,8 +38,8 @@ struct ProjectMatchObservationPair
 /// 一对已解析到当前相机数组的匹配。
 struct ProjectMatchPair
 {
-    int cameraIndexA = -1; ///< ProjectMatchInput::cameras 下标。
-    int cameraIndexB = -1; ///< ProjectMatchInput::cameras 下标。
+    int cameraIndexA = -1; ///< ProjectMatchInput::cameraInstances 下标。
+    int cameraIndexB = -1; ///< ProjectMatchInput::cameraInstances 下标。
     bool indexed = false; ///< true 表示 featureA/B 可跨 pair 合并为多视轨迹。
     std::vector<ProjectMatchObservationPair> observations; ///< 通过最小匹配数门控的观测。
 };
@@ -64,12 +64,10 @@ struct ProjectMatchInputDiagnostics
 /// 工程读取阶段的完整输出；成员数组共享同一相机索引空间。
 struct ProjectMatchInput
 {
-    std::vector<xjw::camera_models::frame_pinhole::FramePinholeNumericState>
-        cameras; ///< 当前选中影像的求解数值状态，顺序稳定。
-    std::vector<std::shared_ptr<const xjw::camera_models::frame_pinhole::FramePinholeInstance>>
-        cameraInstances; ///< 与 cameras 一一对应的 typed instance 身份。
-    std::vector<xjw::camera_core::ImageId> imageIdByIndex; ///< 与 cameras 一一对应的 canonical ImageId。
-    QStringList imagePathByIndex; ///< 与 cameras 一一对应的规范影像路径。
+    std::vector<std::shared_ptr<const placamera::FramePinholeModel>>
+        cameraInstances; ///< 当前选中影像的 canonical 相机实例，顺序稳定。
+    std::vector<placamera::ImageId> imageIdByIndex; ///< 与 cameraInstances 一一对应的 canonical ImageId。
+    QStringList imagePathByIndex; ///< 与 cameraInstances 一一对应的规范影像路径。
     QMap<QString, QJsonObject> beforeCamMeta; ///< BA/SfM 前相机 JSON，用于事务式回写。
     QMap<QString, int> cameraIndexByImageId; ///< canonical ImageId 字符串到相机下标。
     QMap<QString, int> cameraIndexByPath; ///< 规范路径到相机下标；路径只承担外部定位。

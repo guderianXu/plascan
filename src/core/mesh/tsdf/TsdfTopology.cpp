@@ -262,14 +262,16 @@ namespace xjw::mesh::tsdf_detail
                 {
                     continue;
                 }
-                double pixel[2]{};
-                double camera_depth = 0.0;
-                if (!frame.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+                const auto projected = frame.camera->groundToImage(
+                    {frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+                if (!projected || !projected.value().positiveDepth)
                 {
                     continue;
                 }
-                const int column = static_cast<int>(std::lround(pixel[0]));
-                const int row = static_cast<int>(std::lround(pixel[1]));
+                const auto& pixel = projected.value().image;
+                const double camera_depth = *projected.value().positiveDepth;
+                const int column = static_cast<int>(std::lround(pixel.sample));
+                const int row = static_cast<int>(std::lround(pixel.line));
                 if (row < 0 || column < 0 || row >= silhouette_bands[frame_index].rows ||
                     column >= silhouette_bands[frame_index].cols ||
                     silhouette_bands[frame_index].at<std::uint8_t>(row, column) == 0)
@@ -327,15 +329,16 @@ namespace xjw::mesh::tsdf_detail
                 continue;
             }
 
-            double pixel[2]{};
-            double camera_depth = 0.0;
-            if (!frame.camera.projectWorldPointWithDepth(world, pixel, camera_depth) || !std::isfinite(camera_depth) ||
-                camera_depth <= 0.0)
+            const auto projected = frame.camera->groundToImage(
+                {frame.camera->groundFrame(), {world[0], world[1], world[2]}});
+            if (!projected || !projected.value().positiveDepth)
             {
                 continue;
             }
-            const int column = static_cast<int>(std::lround(pixel[0]));
-            const int row = static_cast<int>(std::lround(pixel[1]));
+            const auto& pixel = projected.value().image;
+            const double camera_depth = *projected.value().positiveDepth;
+            const int column = static_cast<int>(std::lround(pixel.sample));
+            const int row = static_cast<int>(std::lround(pixel.line));
             if (row < 0 || column < 0 || row >= frame.depth.rows || column >= frame.depth.cols)
             {
                 continue;

@@ -83,8 +83,10 @@ namespace xjw::mvs::pipeline_detail
         frames.reserve(views.size());
         for (const CameraView& view : views)
         {
-            frames.push_back(
-                {view.imageWidth, view.imageHeight, !mvsImagePreparationRequiresDistinctPixels(view.camera)});
+            frames.push_back({view.imageWidth,
+                              view.imageHeight,
+                              view.camera && !mvsImagePreparationRequiresDistinctPixels(
+                                                 view.camera->pinholeDefinition().distortion())});
         }
         return frames;
     }

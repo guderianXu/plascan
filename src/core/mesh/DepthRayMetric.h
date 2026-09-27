@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
+#include <placamera/frame_numeric_state.h>
 
 #include <array>
 
@@ -41,7 +41,7 @@ public:
      * horizontal and vertical footprints.  Each axis footprint is measured
      * symmetrically against the two half-pixel boundary rays.
      */
-    static DepthRayMetricSample evaluate(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+    static DepthRayMetricSample evaluate(const placamera::FramePinholeNumericState& camera,
                                          const std::array<double, 2>& pixel,
                                          double positiveCameraZDepth);
 

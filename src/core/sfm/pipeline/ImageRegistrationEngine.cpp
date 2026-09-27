@@ -3,7 +3,6 @@
 #include "ReferenceModelQuality.h"
 #include "SfmBundleAdjustCoordinator.h"
 #include "geometry/OpenCvCameraAdapter.h"
-#include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "concurrency/SafeWorkerGroup.h"
 
@@ -52,7 +51,8 @@ namespace xjw
             {
                 continue;
             }
-            const auto rotation = reconstruction.camera(image_id).normalizedForPositiveDepth().cameraToWorldRotation();
+            const auto rotation =
+                reconstruction.camera(image_id).normalizedForPositiveDepth().pose().cameraToWorldRotation;
             std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};
             const double norm = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
             if (!(norm > 1.0e-12) || !std::isfinite(norm))
@@ -255,7 +255,7 @@ namespace xjw
                 break;
             }
 
-            Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             if (useReferenceBaSchedule)
             {
                 // 参考状态机在每批相机提交后先刷新全部当前可用 selected tracks，再执行 BA。
@@ -266,7 +266,7 @@ namespace xjw
                 const TriangulationStats refresh =
                     triangulator.triangulateTracks(_inputMultiViewTracks, refreshOptions);
                 const ReferenceStructureFilterResult filterResult =
-                    filterReferenceStructurePoints(*_reconstruction, 0.0, _sfmOptions.baOptions.numThreads);
+                    filterReferenceStructurePoints(*_reconstruction, 0.0, _sfmOptions.baOptions.solver.numThreads);
                 Logger::instance()->infof(
                     "[SFM] Post-resection reference refresh: added=%d restored=%d far=%d inaccurate=%d weak=%d "
                     "valid=%zu",
@@ -350,7 +350,7 @@ namespace xjw
             repairParallelAerialPoseOutliersAfterFinalBA();
 
             // 过滤轨迹长度过短的不可靠三维点
-            Triangulator finalTri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator finalTri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             if (_sfmOptions.filterMinTrackLen > 1)
             {
                 int nShort = finalTri.filterShortTracks(_sfmOptions.filterMinTrackLen);
@@ -362,7 +362,8 @@ namespace xjw
         // ---- 步骤 4：用最新相机位姿重算重投影误差（确保统计精确） ----
         if (!_isAborted && _reconstruction->numRegisteredImages() >= 2)
         {
-            Triangulator finalReprojTri(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+            Triangulator finalReprojTri(
+                *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
             finalReprojTri.recomputeReprojErrors();
         }
 
@@ -485,7 +486,8 @@ namespace xjw
                 }
 
                 std::vector<Point3DId> previousPointIds = _reconstruction->image(imageId).point3DIds;
-                Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+                Triangulator triangulator(
+                    *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
                 triangulator.triangulateImage(imageId, _sfmOptions.triangulatorOptions);
                 updateVisibilityCacheForImage(imageId, previousPointIds);
                 ++registeredThisPass;
@@ -554,7 +556,8 @@ namespace xjw
 
         // 删除仅由错误分支支撑的三维点，再让稳定主网单独收敛。仍被主网至少两幅
         // 影像观测的点会保留，供随后受序列先验约束的 PnP 使用。
-        Triangulator stableTriangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+        Triangulator stableTriangulator(
+            *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
         const int removedBranchPoints = stableTriangulator.filterShortTracks(2);
         Logger::instance()->infof("[SFM] Parallel-aerial pose repair removed %d branch-only point(s)",
                                   removedBranchPoints);
@@ -616,7 +619,8 @@ namespace xjw
                 }
 
                 const std::vector<Point3DId> previousPointIds = _reconstruction->image(imageId).point3DIds;
-                Triangulator triangulator(*_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.numThreads);
+                Triangulator triangulator(
+                    *_reconstruction, _correspondenceGraph, _sfmOptions.baOptions.solver.numThreads);
                 triangulator.triangulateImage(imageId, _sfmOptions.triangulatorOptions);
                 updateVisibilityCacheForImage(imageId, previousPointIds);
                 pending.erase(imageId);
@@ -663,9 +667,9 @@ namespace xjw
         _lastGlobalBASharedRadialK3 = 0.0;
         _lastGlobalBASharedTangentialP1 = 0.0;
         _lastGlobalBASharedTangentialP2 = 0.0;
-        _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
-        _lastGlobalBAUsedBackend = BABackend::PlaMatrixCpu;
-        _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+        _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend.requested;
+        _lastGlobalBAUsedBackend = plabundle::Backend::PlaMatrixCpu;
+        _lastGlobalBASolveStatus = plabundle::SolveStatus::NotRun;
         _lastGlobalBASolutionUsable = false;
         _lastGlobalBAResultApplied = false;
         _lastGlobalBABackendFallback = false;
@@ -802,12 +806,12 @@ namespace xjw
         struct SuccessfulCandidate
         {
             ImageId imageId = kInvalidImageId;
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
+            placamera::FramePinholeNumericState camera;
             int support = 0;
         };
         const auto evaluationStarted = std::chrono::steady_clock::now();
         std::vector<ImageRegistrationEvaluation> evaluations(candidates.size());
-        const int configuredThreadCount = _sfmOptions.baOptions.numThreads;
+        const int configuredThreadCount = _sfmOptions.baOptions.solver.numThreads;
         const std::size_t threadCount =
             configuredThreadCount > 0 ? static_cast<std::size_t>(configuredThreadCount)
                                       : static_cast<std::size_t>(std::max(1u, std::thread::hardware_concurrency()));
@@ -827,7 +831,7 @@ namespace xjw
             ImageRegistrationEvaluation& evaluation = evaluations[candidateIndex];
             if (evaluation.success)
             {
-                successful.push_back({imageId, std::move(evaluation.camera), evaluation.supportingInliers});
+                successful.push_back({imageId, std::move(*evaluation.camera), evaluation.supportingInliers});
                 continue;
             }
 
@@ -937,7 +941,7 @@ namespace xjw
                                   evaluation.rawProposals,
                                   evaluation.strictSmallSupport ? "true" : "false",
                                   evaluation.occupiedGridCells);
-        _reconstruction->registerImage(imageId, evaluation.camera);
+        _reconstruction->registerImage(imageId, *evaluation.camera);
         if (supportingInliers)
         {
             *supportingInliers = evaluation.supportingInliers;
@@ -950,12 +954,13 @@ namespace xjw
     {
         ImageRegistrationEvaluation evaluation;
         // 加载相机内参
-        xjw::camera_models::frame_pinhole::FramePinholeNumericState cam;
-        if (!getCamera(imageId, cam))
+        const auto* input_camera = getCamera(imageId);
+        if (!input_camera)
         {
             evaluation.error = "getCamera(" + std::to_string(imageId) + ") failed";
             return evaluation;
         }
+        placamera::FramePinholeNumericState cam = *input_camera;
 
         const ImageData& img = _reconstruction->image(imageId);
 
@@ -1175,11 +1180,10 @@ namespace xjw
             pnpOptions.useInitialPose = false;
             pnpOptions.useInitialPosePrefilter = false;
             pnpOptions.useReferenceResection = true;
-            if (const auto image_size = cam.imageSize();
-                image_size && image_size->samples > 0 && image_size->lines > 0)
+            if (const auto image_size = cam.imageSize(); image_size.isValid())
             {
                 pnpOptions.maxReprojError =
-                    static_cast<double>(0.002F) * static_cast<double>(image_size->samples + image_size->lines);
+                    static_cast<double>(0.002F) * static_cast<double>(image_size.samples + image_size.lines);
             }
         }
         if (strict_small_support)
@@ -1198,7 +1202,7 @@ namespace xjw
         bool usedSequenceRecovery = false;
         auto solveSequenceRecovery = [&]()
         {
-            xjw::camera_models::frame_pinhole::FramePinholeNumericState sequenceGuessCamera = cam;
+            placamera::FramePinholeNumericState sequenceGuessCamera = cam;
             if (!makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
             {
                 return PnpResult{};
@@ -1206,8 +1210,8 @@ namespace xjw
             usedSequenceRecovery = true;
             PnpOptions recoveryOptions = pnpOptions;
             recoveryOptions.useInitialPose = true;
-            recoveryOptions.initialCameraToWorldRotation = sequenceGuessCamera.cameraToWorldRotation();
-            recoveryOptions.initialCameraCenter = sequenceGuessCamera.cameraCenter();
+            recoveryOptions.initialCameraToWorldRotation = sequenceGuessCamera.pose().cameraToWorldRotation;
+            recoveryOptions.initialCameraCenter = sequenceGuessCamera.pose().center;
 
             ImageId previousImageId = kInvalidImageId;
             ImageId nextImageId = kInvalidImageId;
@@ -1244,7 +1248,8 @@ namespace xjw
                     std::clamp(sequenceMinInlierRatio, 0.0, recoveryOptions.minInlierRatio);
                 recoveryOptions.relaxedMinNumInliers = std::max(recoveryOptions.minNumInliers, sequenceMinInliers);
             }
-            return PnpSolver::solveWithCamera(worldPts, imagePts, cam, recoveryOptions);
+            return PnpSolver::solveCalibrated(
+                worldPts, imagePts, cam.intrinsics(), cam.distortion(), cam.depthAxisFlipped(), recoveryOptions);
         };
 
         PnpResult pnpResult;
@@ -1255,14 +1260,16 @@ namespace xjw
             pnpResult = solveSequenceRecovery();
             if (!pnpResult.success)
             {
-                pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
+                pnpResult = PnpSolver::solveCalibrated(
+                    worldPts, imagePts, cam.intrinsics(), cam.distortion(), cam.depthAxisFlipped(), pnpOptions);
             }
         }
         else
         {
             // 常规增量阶段仍先执行不带运动模型的标准 PnP，避免序列外推妨碍
             // 非等速航带或真实转弯。标准解失败后才进入确定性序列恢复。
-            pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
+            pnpResult = PnpSolver::solveCalibrated(
+                worldPts, imagePts, cam.intrinsics(), cam.distortion(), cam.depthAxisFlipped(), pnpOptions);
             if (!pnpResult.success)
             {
                 if (!reference_resection)
@@ -1276,8 +1283,8 @@ namespace xjw
         if (pnpResult.success && strict_small_support)
         {
             const auto image_size = cam.imageSize();
-            double maximum_x = std::max(0.0, cam.principalX() * 2.0 + 1.0);
-            double maximum_y = std::max(0.0, cam.principalY() * 2.0 + 1.0);
+            double maximum_x = std::max(0.0, cam.intrinsics().principalX * 2.0 + 1.0);
+            double maximum_y = std::max(0.0, cam.intrinsics().principalY * 2.0 + 1.0);
             for (const FeatureKeypoint& keypoint : img.keypoints)
             {
                 if (std::isfinite(keypoint.x))
@@ -1289,10 +1296,8 @@ namespace xjw
                     maximum_y = std::max(maximum_y, static_cast<double>(keypoint.y) + 1.0);
                 }
             }
-            const int width =
-                image_size && image_size->samples > 0 ? image_size->samples : static_cast<int>(std::ceil(maximum_x));
-            const int height =
-                image_size && image_size->lines > 0 ? image_size->lines : static_cast<int>(std::ceil(maximum_y));
+            const int width = image_size.samples > 0 ? image_size.samples : static_cast<int>(std::ceil(maximum_x));
+            const int height = image_size.lines > 0 ? image_size.lines : static_cast<int>(std::ceil(maximum_y));
             spatial_support = measurePnpInlierSpatialSupport(imagePts, pnpResult.inlierMask, width, height);
             strict_spatial_support_accepted =
                 spatial_support.occupiedCells >= std::max(1, pnpOptions.strictSmallSupportMinGridCells) &&
@@ -1318,7 +1323,7 @@ namespace xjw
         }
 
         // 应用 PnP 结果更新相机外参
-        cam.setPose(pnpResult.R, pnpResult.C);
+        cam.setPose(placamera::Pose::create(cam.groundFrame(), pnpResult.C, pnpResult.R));
         std::string sequenceConsistencyReason;
         if (!validateSequencePoseConsistency(imageId, cam, &sequenceConsistencyReason, forceSequenceConsistency))
         {
@@ -1460,7 +1465,7 @@ namespace xjw
                 return;
             }
             const double distance =
-                distance3d(_reconstruction->camera(a).cameraCenter(), _reconstruction->camera(b).cameraCenter());
+                distance3d(_reconstruction->camera(a).pose().center, _reconstruction->camera(b).pose().center);
             if (std::isfinite(distance) && distance > 1e-9)
             {
                 distances.push_back(distance);
@@ -1483,11 +1488,10 @@ namespace xjw
         return percentile(distances, 0.5);
     }
 
-    bool IncrementalSfm::validateSequencePoseConsistency(
-        ImageId imageId,
-        const xjw::camera_models::frame_pinhole::FramePinholeNumericState& candidateCamera,
-        std::string* reason,
-        bool force) const
+    bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
+                                                         const placamera::FramePinholeNumericState& candidateCamera,
+                                                         std::string* reason,
+                                                         bool force) const
     {
         if ((!_sfmOptions.enforceSequencePoseConsistency && !force) || !_reconstruction ||
             _reconstruction->numRegisteredImages() < 3)
@@ -1537,7 +1541,7 @@ namespace xjw
 
         if (force)
         {
-            const auto candidateRotation = candidateCamera.normalizedForPositiveDepth().cameraToWorldRotation();
+            const auto candidateRotation = candidateCamera.normalizedForPositiveDepth().pose().cameraToWorldRotation;
             const std::array<double, 3> candidateAxis{
                 {candidateRotation[2], candidateRotation[5], candidateRotation[8]}};
             constexpr double radiansToDegrees = 57.2957795130823208768;
@@ -1551,7 +1555,7 @@ namespace xjw
                     continue;
                 }
                 const auto rotation =
-                    _reconstruction->camera(registered_id).normalizedForPositiveDepth().cameraToWorldRotation();
+                    _reconstruction->camera(registered_id).normalizedForPositiveDepth().pose().cameraToWorldRotation;
                 main_axis[0] += rotation[2];
                 main_axis[1] += rotation[5];
                 main_axis[2] += rotation[8];
@@ -1585,7 +1589,7 @@ namespace xjw
             for (const ImageId neighborId : registeredNeighbors)
             {
                 const auto neighborRotation =
-                    _reconstruction->camera(neighborId).normalizedForPositiveDepth().cameraToWorldRotation();
+                    _reconstruction->camera(neighborId).normalizedForPositiveDepth().pose().cameraToWorldRotation;
                 const double dot =
                     std::clamp(candidateAxis[0] * neighborRotation[2] + candidateAxis[1] * neighborRotation[5] +
                                    candidateAxis[2] * neighborRotation[8],
@@ -1615,10 +1619,10 @@ namespace xjw
         const double minDistance = medianDistance * std::max(0.0, _sfmOptions.sequenceAdjacentDistanceMinFactor);
         const double maxDistance = medianDistance * std::max(_sfmOptions.sequenceAdjacentDistanceMinFactor,
                                                              _sfmOptions.sequenceAdjacentDistanceMaxFactor);
-        const auto candidateCenter = candidateCamera.cameraCenter();
+        const auto candidateCenter = candidateCamera.pose().center;
         for (ImageId neighborId : registeredNeighbors)
         {
-            const double distance = distance3d(candidateCenter, _reconstruction->camera(neighborId).cameraCenter());
+            const double distance = distance3d(candidateCenter, _reconstruction->camera(neighborId).pose().center);
             if (!std::isfinite(distance) || distance < minDistance || distance > maxDistance)
             {
                 if (reason)
@@ -1634,8 +1638,8 @@ namespace xjw
         return true;
     }
 
-    bool IncrementalSfm::makeSequenceInitialPoseGuess(
-        ImageId imageId, xjw::camera_models::frame_pinhole::FramePinholeNumericState* guessCamera) const
+    bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId,
+                                                      placamera::FramePinholeNumericState* guessCamera) const
     {
         if (!guessCamera || !_sfmOptions.useSequencePoseRecovery || !_reconstruction ||
             _reconstruction->numRegisteredImages() < 2)
@@ -1673,13 +1677,13 @@ namespace xjw
         {
             const double denom = static_cast<double>(std::max(1, prevSteps + nextSteps));
             const double t = static_cast<double>(prevSteps) / denom;
-            const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
-            const auto nextCenter = _reconstruction->camera(next).cameraCenter();
+            const auto prevCenter = _reconstruction->camera(prev).pose().center;
+            const auto nextCenter = _reconstruction->camera(next).pose().center;
             // 连续缺口按序列步长插值中心，并对 camera-to-world 旋转执行 SLERP；
             // 直接复制一侧旋转会给环拍相邻帧引入一个完整帧间角度的 PnP 初值偏差。
             center = centerAdd(centerScale(prevCenter, 1.0 - t), centerScale(nextCenter, t));
-            rotation = interpolateCameraRotation(_reconstruction->camera(prev).cameraToWorldRotation(),
-                                                 _reconstruction->camera(next).cameraToWorldRotation(),
+            rotation = interpolateCameraRotation(_reconstruction->camera(prev).pose().cameraToWorldRotation,
+                                                 _reconstruction->camera(next).pose().cameraToWorldRotation,
                                                  t);
         }
         else if (hasDirectPrevious)
@@ -1690,13 +1694,13 @@ namespace xjw
             {
                 return false;
             }
-            const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
-            const auto delta = centerSub(prevCenter, _reconstruction->camera(prev2).cameraCenter());
+            const auto prevCenter = _reconstruction->camera(prev).pose().center;
+            const auto delta = centerSub(prevCenter, _reconstruction->camera(prev2).pose().center);
             const double scale =
                 static_cast<double>(std::max(1, prevSteps)) / static_cast<double>(std::max(1, prev2Steps));
             center = centerAdd(prevCenter, centerScale(delta, scale));
-            rotation = interpolateCameraRotation(_reconstruction->camera(prev2).cameraToWorldRotation(),
-                                                 _reconstruction->camera(prev).cameraToWorldRotation(),
+            rotation = interpolateCameraRotation(_reconstruction->camera(prev2).pose().cameraToWorldRotation,
+                                                 _reconstruction->camera(prev).pose().cameraToWorldRotation,
                                                  1.0 + scale);
         }
         else if (hasDirectNext)
@@ -1707,13 +1711,13 @@ namespace xjw
             {
                 return false;
             }
-            const auto nextCenter = _reconstruction->camera(next).cameraCenter();
-            const auto delta = centerSub(nextCenter, _reconstruction->camera(next2).cameraCenter());
+            const auto nextCenter = _reconstruction->camera(next).pose().center;
+            const auto delta = centerSub(nextCenter, _reconstruction->camera(next2).pose().center);
             const double scale =
                 static_cast<double>(std::max(1, nextSteps)) / static_cast<double>(std::max(1, next2Steps));
             center = centerAdd(nextCenter, centerScale(delta, scale));
-            rotation = interpolateCameraRotation(_reconstruction->camera(next2).cameraToWorldRotation(),
-                                                 _reconstruction->camera(next).cameraToWorldRotation(),
+            rotation = interpolateCameraRotation(_reconstruction->camera(next2).pose().cameraToWorldRotation,
+                                                 _reconstruction->camera(next).pose().cameraToWorldRotation,
                                                  1.0 + scale);
         }
         else if (prevRegistered && nextRegistered)
@@ -1722,11 +1726,11 @@ namespace xjw
             // 闭环前沿的另一侧可能要绕行数百帧，不能因其“存在”就压制直接邻居外推。
             const double denom = static_cast<double>(std::max(1, prevSteps + nextSteps));
             const double t = static_cast<double>(prevSteps) / denom;
-            const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
-            const auto nextCenter = _reconstruction->camera(next).cameraCenter();
+            const auto prevCenter = _reconstruction->camera(prev).pose().center;
+            const auto nextCenter = _reconstruction->camera(next).pose().center;
             center = centerAdd(centerScale(prevCenter, 1.0 - t), centerScale(nextCenter, t));
-            rotation = interpolateCameraRotation(_reconstruction->camera(prev).cameraToWorldRotation(),
-                                                 _reconstruction->camera(next).cameraToWorldRotation(),
+            rotation = interpolateCameraRotation(_reconstruction->camera(prev).pose().cameraToWorldRotation,
+                                                 _reconstruction->camera(next).pose().cameraToWorldRotation,
                                                  t);
         }
         else
@@ -1734,7 +1738,7 @@ namespace xjw
             return false;
         }
 
-        guessCamera->setPose(rotation, center);
+        guessCamera->setPose(placamera::Pose::create(guessCamera->groundFrame(), center, rotation));
         return true;
     }
 
@@ -1760,8 +1764,8 @@ namespace xjw
         const int minTrackLengthForPnp =
             effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
         std::vector<std::size_t> visibleCounts(pendingIds.size(), 0);
-        const int threadCount = _sfmOptions.baOptions.numThreads > 0
-                                    ? _sfmOptions.baOptions.numThreads
+        const int threadCount = _sfmOptions.baOptions.solver.numThreads > 0
+                                    ? _sfmOptions.baOptions.solver.numThreads
                                     : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
 
         common::concurrency::parallelForIndices(

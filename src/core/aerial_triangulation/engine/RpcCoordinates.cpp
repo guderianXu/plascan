@@ -23,7 +23,7 @@ namespace xjw::aerial_triangulation::engine
     } // namespace
     namespace detail
     {
-        camera_models::rpc::RpcDefinition::GeodeticCoordinate assignRpcLocalEnu(std::vector<RpcPoint>* points)
+        RpcGeodeticCoordinate assignRpcLocalEnu(std::vector<RpcPoint>* points)
         {
             std::vector<double> longitudes;
             std::vector<double> latitudes;
@@ -37,10 +37,12 @@ namespace xjw::aerial_triangulation::engine
                 latitudes.push_back(point.geodetic[1]);
                 heights.push_back(point.geodetic[2]);
             }
-            const camera_models::rpc::RpcDefinition::GeodeticCoordinate origin{
+            const RpcGeodeticCoordinate origin{
                 median(std::move(longitudes)), median(std::move(latitudes)), median(std::move(heights))};
-            camera_models::rpc::EcefCoordinate originEcef{};
-            camera_models::rpc::RpcProjection::geodeticToEcef(origin, &originEcef);
+            const auto originEcefResult = placamera::geodeticToCartesian(
+                placamera::GeodeticCoordinate{origin[0], origin[1], origin[2]},
+                placamera::ReferenceEllipsoid::wgs84());
+            const auto originEcef = originEcefResult.value();
 
             constexpr double degreesToRadians = 3.14159265358979323846 / 180.0;
             const double longitude = origin[0] * degreesToRadians;

@@ -49,7 +49,7 @@ double qualityWeightFactor(const LaserPlaneSample &sample,
 } // namespace
 
 LaserAssociationSummary attachLaserPlaneConstraints(const LaserConstraintMap &map,
-                                                    std::vector<xjw::BATrack> *tracks,
+                                                    std::vector<plabundle::Track> *tracks,
                                                     const LaserAssociationOptions &options)
 {
     LaserAssociationSummary summary;
@@ -59,7 +59,7 @@ LaserAssociationSummary attachLaserPlaneConstraints(const LaserConstraintMap &ma
     }
 
     summary.totalTracks = static_cast<int>(tracks->size());
-    for (xjw::BATrack &track : *tracks)
+    for (plabundle::Track &track : *tracks)
     {
         track.laserPlaneConstraints.clear();
 
@@ -83,7 +83,7 @@ LaserAssociationSummary attachLaserPlaneConstraints(const LaserConstraintMap &ma
             continue;
         }
 
-        xjw::BALaserPlaneConstraint constraint;
+        plabundle::LaserPlaneConstraint constraint;
         constraint.point = nearest.point;
         constraint.normal = nearest.normal;
         constraint.weight = options.weight * qualityWeightFactor(nearest, distance, options);

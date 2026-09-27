@@ -19,12 +19,12 @@ namespace
 
     constexpr int SentinelRole = Qt::UserRole + 100;
 
-    QJsonObject imageEntry(const QString& path, const QJsonObject& camera = {}, const QString& maskPath = {})
+    QJsonObject imageEntry(const QString& path, bool aligned = false, const QString& maskPath = {})
     {
         QJsonObject entry{{QStringLiteral("path"), path}};
-        if (!camera.isEmpty())
+        if (aligned)
         {
-            entry.insert(QStringLiteral("camera"), camera);
+            entry.insert(QStringLiteral("aligned"), true);
         }
         if (!maskPath.isEmpty())
         {
@@ -116,8 +116,7 @@ namespace
 
         progressSpy.clear();
         finishedSpy.clear();
-        widget.loadFromJson(projectMeta(
-            QJsonArray{imageEntry(secondPath, QJsonObject{{QStringLiteral("focal"), 12.5}}), imageEntry(firstPath)}));
+        widget.loadFromJson(projectMeta(QJsonArray{imageEntry(secondPath, true), imageEntry(firstPath)}));
         ASSERT_EQ(progressSpy.count(), 2);
         ASSERT_EQ(finishedSpy.count(), 1);
         EXPECT_TRUE(list->item(0)->toolTip().contains(QStringLiteral("已对齐")));
@@ -125,11 +124,9 @@ namespace
         list->item(0)->setData(SentinelRole, QStringLiteral("old-mask"));
         progressSpy.clear();
         finishedSpy.clear();
-        widget.loadFromJson(
-            projectMeta(QJsonArray{imageEntry(secondPath,
-                                              QJsonObject{{QStringLiteral("focal"), 12.5}},
-                                              QStringLiteral("/tmp/photo-strip-refresh/second_mask.png")),
-                                   imageEntry(firstPath)}));
+        widget.loadFromJson(projectMeta(
+            QJsonArray{imageEntry(secondPath, true, QStringLiteral("/tmp/photo-strip-refresh/second_mask.png")),
+                       imageEntry(firstPath)}));
         ASSERT_EQ(progressSpy.count(), 2);
         ASSERT_EQ(finishedSpy.count(), 1);
         EXPECT_FALSE(list->item(0)->data(SentinelRole).isValid());

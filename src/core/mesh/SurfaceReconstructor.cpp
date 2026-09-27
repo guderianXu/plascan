@@ -1,3 +1,4 @@
+#include <plapoint/geometry_cloud.h>
 #include "SurfaceReconstructor.h"
 #include "PointCloudPreprocess.h"
 #include "SurfaceReconstructorHeightGrid.h"
@@ -5,12 +6,12 @@
 #include "concurrency/SafeWorkerGroup.h"
 #include "io/PathIO.h"
 
-#include <plapoint/core/point_cloud.h>
+#include <plapoint/point_cloud.h>
 #include <plapoint/features/normal_estimation.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/mesh/poisson_reconstruction.h>
 #include <plapoint/search/kdtree.h>
-#include <plamatrix/dense/dense_matrix.h>
+#include <plamatrix/dense/matrix.h>
 
 #include <algorithm>
 #include <atomic>
@@ -36,50 +37,50 @@ namespace mesh
 namespace
 {
 
-using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-using PlyHeader = plapoint::io::PlyVertexStreamHeader;
-using PlyVertexChunk = plapoint::io::PlyVertexChunk;
+    using PlaPointCloud = plapoint::GeometryCloud<float>;
+    using PlyHeader = plapoint::io::PlyVertexStreamHeader;
+    using PlyVertexChunk = plapoint::io::PlyVertexChunk;
 
-std::string localizePlyStreamError(const std::string &error)
-{
-    if (error.find("Cannot open") != std::string::npos)
+    std::string localizePlyStreamError(const std::string& error)
     {
-        return "无法打开 PLY 文件";
-    }
-    if (error.find("Not a PLY file") != std::string::npos ||
-        error.find("missing magic header") != std::string::npos)
-    {
-        return "不是有效的 PLY 文件";
-    }
-    if (error.find("Only binary_little_endian") != std::string::npos)
-    {
-        return "仅支持 binary_little_endian PLY 的流式读取";
-    }
-    if (error.find("end_header") != std::string::npos)
-    {
-        return "PLY 头缺少 end_header";
-    }
-    if (error.find("positive vertex count") != std::string::npos)
-    {
-        return "PLY 头缺少有效顶点数量";
-    }
-    if (error.find("no scalar properties") != std::string::npos)
-    {
-        return "PLY 顶点属性为空";
-    }
-    if (error.find("x, y, and z") != std::string::npos)
-    {
-        return "PLY 顶点缺少 x/y/z 坐标属性";
-    }
-    if (error.find("list properties") != std::string::npos)
-    {
-        return "暂不支持顶点元素中的 list property";
-    }
-    if (error.find("Unsupported PLY vertex property type") != std::string::npos)
-    {
-        return "不支持的 PLY 顶点属性类型";
-    }
-    return "PLY 流式读取失败: " + error;
+        if (error.find("Cannot open") != std::string::npos)
+        {
+            return "无法打开 PLY 文件";
+        }
+        if (error.find("Not a PLY file") != std::string::npos ||
+            error.find("missing magic header") != std::string::npos)
+        {
+            return "不是有效的 PLY 文件";
+        }
+        if (error.find("Only binary_little_endian") != std::string::npos)
+        {
+            return "仅支持 binary_little_endian PLY 的流式读取";
+        }
+        if (error.find("end_header") != std::string::npos)
+        {
+            return "PLY 头缺少 end_header";
+        }
+        if (error.find("positive vertex count") != std::string::npos)
+        {
+            return "PLY 头缺少有效顶点数量";
+        }
+        if (error.find("no scalar properties") != std::string::npos)
+        {
+            return "PLY 顶点属性为空";
+        }
+        if (error.find("x, y, and z") != std::string::npos)
+        {
+            return "PLY 顶点缺少 x/y/z 坐标属性";
+        }
+        if (error.find("list properties") != std::string::npos)
+        {
+            return "暂不支持顶点元素中的 list property";
+        }
+        if (error.find("Unsupported PLY vertex property type") != std::string::npos)
+        {
+            return "不支持的 PLY 顶点属性类型";
+        }
+        return "PLY 流式读取失败: " + error;
 }
 
 bool parseBinaryPlyHeader(const std::string &cloudPath, PlyHeader *header, std::string *errorMsg)
@@ -1037,20 +1038,15 @@ void orientNormalsOutwardFromCentroid(std::vector<detail::PointXYZRGB> *points,
     }
 
     const int point_count = static_cast<int>(points->size());
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> coordinates(point_count, 3);
+    auto search_cloud = std::make_shared<plapoint::PointCloud<plapoint::PointXYZ>>();
+    search_cloud->resize(static_cast<std::size_t>(point_count));
     for (int point_index = 0; point_index < point_count; ++point_index)
     {
-        const detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
-        coordinates(point_index, 0) = point.x;
-        coordinates(point_index, 1) = point.y;
-        coordinates(point_index, 2) = point.z;
+        const auto& point = (*points)[static_cast<std::size_t>(point_index)];
+        search_cloud->points[static_cast<std::size_t>(point_index)] = plapoint::PointXYZ(point.x, point.y, point.z);
     }
-
-    auto cloud = std::make_shared<PlaPointCloud>(std::move(coordinates));
-    std::shared_ptr<const PlaPointCloud> const_cloud = cloud;
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(const_cloud);
-    tree.build();
+    plapoint::search::KdTree<plapoint::PointXYZ> tree;
+    tree.setInputCloud(search_cloud);
 
     const int neighbor_count = std::min(12, point_count);
     std::vector<std::vector<int>> neighbors(static_cast<std::size_t>(point_count));
@@ -1062,9 +1058,9 @@ void orientNormalsOutwardFromCentroid(std::vector<detail::PointXYZRGB> *points,
 #endif
     for (int point_index = 0; point_index < point_count; ++point_index)
     {
-        const detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
-        const plamatrix::Vec3<float> query{point.x, point.y, point.z};
-        neighbors[static_cast<std::size_t>(point_index)] = tree.nearestKSearch(query, neighbor_count);
+        const auto index = static_cast<std::size_t>(point_index);
+        std::vector<float> squared_distances;
+        tree.nearestKSearch(search_cloud->points[index], neighbor_count, neighbors[index], squared_distances);
     }
 
     std::vector<std::uint8_t> visited(static_cast<std::size_t>(point_count), 0);
@@ -1192,9 +1188,9 @@ PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
                             std::all_of(points.begin(), points.end(), [](const detail::PointXYZRGB &point) {
                                 return point.hasNormal;
                             });
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(n, 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(n, 3);
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(hasNormals ? n : 0, 3);
+    plamatrix::MatrixXf pts(n, 3);
+    plamatrix::Matrix<uint8_t, plamatrix::Dynamic, plamatrix::Dynamic> colors(n, 3);
+    plamatrix::MatrixXf normals(hasNormals ? n : 0, 3);
     for (plamatrix::Index i = 0; i < n; ++i)
     {
         pts(i, 0) = points[static_cast<std::size_t>(i)].x;
@@ -1295,10 +1291,10 @@ std::vector<detail::PointXYZRGB> loadPointsForMeshing(const std::string &cloudPa
     return cloudToPointXYZRGB(*cloudPtr);
 }
 
-bool convertPoissonResultToMesh(const plamatrix::DenseMatrix<float, plamatrix::Device::CPU> &verts,
-                                const plamatrix::DenseMatrix<float, plamatrix::Device::CPU> &faces,
-                                const std::shared_ptr<const PlaPointCloud> &source_cloud,
-                                TriMesh *mesh)
+bool convertPoissonResultToMesh(const plamatrix::MatrixXf& verts,
+                                const plamatrix::MatrixXf& faces,
+                                const std::shared_ptr<const PlaPointCloud>& source_cloud,
+                                TriMesh* mesh)
 {
     if (!mesh)
     {
@@ -1339,20 +1335,27 @@ bool convertPoissonResultToMesh(const plamatrix::DenseMatrix<float, plamatrix::D
         return true;
     }
 
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> queries(
-        static_cast<plamatrix::Index>(mesh->vertices.size()), 3);
-    for (std::size_t i = 0; i < mesh->vertices.size(); ++i)
+    auto search_cloud = std::make_shared<plapoint::PointCloud<plapoint::PointXYZ>>();
+    search_cloud->resize(source_cloud->size());
+    const auto& source_positions = std::as_const(*source_cloud).points();
+    for (std::size_t index = 0; index < search_cloud->size(); ++index)
     {
-        const auto row = static_cast<plamatrix::Index>(i);
-        queries(row, 0) = mesh->vertices[i].x;
-        queries(row, 1) = mesh->vertices[i].y;
-        queries(row, 2) = mesh->vertices[i].z;
+        const auto row = static_cast<plamatrix::Index>(index);
+        search_cloud->points[index] =
+            plapoint::PointXYZ(source_positions(row, 0), source_positions(row, 1), source_positions(row, 2));
     }
-
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> color_tree;
-    color_tree.setInputCloud(source_cloud);
-    color_tree.build();
-    const auto nearest = color_tree.batchNearestKSearch(queries, 1);
+    plapoint::search::KdTree<plapoint::PointXYZ> color_tree;
+    color_tree.setInputCloud(search_cloud);
+    plapoint::PointCloud<plapoint::PointXYZ> queries;
+    queries.resize(mesh->vertices.size());
+    for (std::size_t index = 0; index < mesh->vertices.size(); ++index)
+    {
+        const auto& vertex = mesh->vertices[index];
+        queries.points[index] = plapoint::PointXYZ(vertex.x, vertex.y, vertex.z);
+    }
+    std::vector<plapoint::Indices> nearest;
+    std::vector<std::vector<float>> squared_distances;
+    color_tree.nearestKSearch(queries, {}, 1, nearest, squared_distances);
     const auto *source_colors = source_cloud->colors();
     for (std::size_t i = 0; i < mesh->vertices.size(); ++i)
     {

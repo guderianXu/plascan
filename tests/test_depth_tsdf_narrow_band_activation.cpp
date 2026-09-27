@@ -1,4 +1,3 @@
-#include "camera/models/frame_pinhole/FramePinholeNumericState.h"
 #include "DepthTsdfNarrowBandActivation.h"
 #include "DepthTsdfSurfaceBuilder.h"
 
@@ -26,16 +25,28 @@ xjw::mesh::DepthTsdfLayout makeLayout()
     return layout;
 }
 
-xjw::camera_models::frame_pinhole::FramePinholeNumericState makeCamera()
+placamera::FramePinholeNumericState makeCamera()
 {
-    xjw::camera_models::frame_pinhole::FramePinholeNumericState camera;
-    camera.setIntrinsics(4.0, 4.0, 2.0, 2.0);
-    camera.setPose(
-        {1.0, 0.0, 0.0,
-         0.0, 1.0, 0.0,
-         0.0, 0.0, 1.0},
-        {0.0, 0.0, 0.0});
-    return camera;
+    placamera::FrameIntrinsics intrinsics;
+    intrinsics.focalX = 4.0;
+    intrinsics.focalY = 4.0;
+    intrinsics.principalX = 2.0;
+    intrinsics.principalY = 2.0;
+    const auto definition = placamera::FramePinholeDefinition::create(
+        placamera::CameraDefinitionId("narrow-band-definition"),
+        intrinsics,
+        {},
+        placamera::PixelConvention::PixelCenter,
+        placamera::FrameId("world"));
+    const auto model = placamera::FramePinholeModel::create(
+        placamera::CameraInstanceId("narrow-band-instance"),
+        placamera::ImageId("narrow-band-image"),
+        definition,
+        {5, 5},
+        placamera::Pose::create(placamera::FrameId("world"),
+                                {0.0, 0.0, 0.0},
+                                {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+    return placamera::FramePinholeNumericState::fromModel(model);
 }
 
 xjw::mesh::DepthTsdfNarrowBandActivationOptions makeOptions()
@@ -49,7 +60,7 @@ xjw::mesh::DepthTsdfNarrowBandActivationOptions makeOptions()
 }
 
 xjw::mesh::DepthTsdfNarrowBandFrameView
-makeView(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& camera,
+makeView(const placamera::FramePinholeNumericState& camera,
          const cv::Mat& depth,
          const cv::Mat* depth_valid,
          const cv::Mat* support)
@@ -66,7 +77,7 @@ makeView(const xjw::camera_models::frame_pinhole::FramePinholeNumericState& came
 
 TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
+    const auto camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -92,7 +103,7 @@ TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 
 TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
+    const auto camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -117,7 +128,7 @@ TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 
 TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
+    const auto camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     depth.at<float>(2, 2) = 2.0f;
@@ -143,7 +154,7 @@ TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 
 TEST(DepthTsdfNarrowBandActivationTest, CancellationLeavesNoPartialMask)
 {
-    const xjw::camera_models::frame_pinhole::FramePinholeNumericState camera = makeCamera();
+    const auto camera = makeCamera();
     cv::Mat depth(5, 5, CV_32FC1, cv::Scalar(2.0f));
     auto options = makeOptions();
     options.isCancelled = []()
