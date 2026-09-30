@@ -1,1 +1,0 @@
-#include <placamera/registry.h>

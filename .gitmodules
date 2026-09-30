@@ -29,3 +29,9 @@
 	path = 3rdparty/plabundle
 	url = https://github.com/guderianXu/plabundle.git
 	branch = main
+[submodule "3rdparty/placamera"]
+	path = 3rdparty/placamera
+	url = https://github.com/guderianXu/placamera.git
+[submodule "3rdparty/placoordinate"]
+	path = 3rdparty/placoordinate
+	url = https://github.com/guderianXu/placoordinate.git

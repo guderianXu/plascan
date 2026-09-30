@@ -1,8 +1,0 @@
-#pragma once
-
-// clang-format off
-#define PLACOORDINATE_VERSION_MAJOR @placoordinate_VERSION_MAJOR@
-#define PLACOORDINATE_VERSION_MINOR @placoordinate_VERSION_MINOR@
-#define PLACOORDINATE_VERSION_PATCH @placoordinate_VERSION_PATCH@
-#define PLACOORDINATE_VERSION_STRING "@placoordinate_VERSION@"
-// clang-format on
