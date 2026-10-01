@@ -6,7 +6,11 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -93,6 +97,8 @@ namespace
     {
         const auto path = _directory / "concurrent.json";
         std::atomic<int> failures{0};
+        std::mutex error_mutex;
+        std::vector<std::string> errors;
         std::vector<std::jthread> writers;
         for (int index = 0; index < 8; ++index)
         {
@@ -101,13 +107,20 @@ namespace
                 {
                     const nlohmann::json value{{"index", index},
                                                {"payload", std::string(65536, static_cast<char>('a' + index))}};
-                    if (!writeJsonAtomic(path, value))
+                    std::string error;
+                    if (!writeJsonAtomic(path, value, &error))
                     {
                         ++failures;
+                        std::lock_guard<std::mutex> lock(error_mutex);
+                        errors.push_back(std::move(error));
                     }
                 });
         }
         writers.clear();
+        for (const std::string& error : errors)
+        {
+            ADD_FAILURE() << error;
+        }
         EXPECT_EQ(failures.load(), 0);
         nlohmann::json document;
         ASSERT_TRUE(readJson(path, &document));

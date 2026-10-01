@@ -20,7 +20,6 @@
 #include "project/ProjectMetadata.h"
 #include "io/PathIO.h"
 
-#include <plabundle/camera.h>
 #include <plabundle/solver.h>
 #include <placamera/frame_camera.h>
 #include <placamera/frame_numeric_state.h>
@@ -131,90 +130,28 @@ namespace xjw
         namespace
         {
 
-            bool makeBundleCamera(const placamera::FramePinholeModel& source,
-                                  plabundle::FrameCamera* target,
-                                  std::string* error)
-            {
-                if (!target)
-                {
-                    if (error)
-                    {
-                        *error = "PlaBundle camera output is null";
-                    }
-                    return false;
-                }
-                if (source.pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
-                {
-                    if (error)
-                    {
-                        *error = "PlaBundle requires pixel-center frame calibration";
-                    }
-                    return false;
-                }
-                const auto& intrinsics = source.pinholeDefinition().intrinsics();
-                const auto& distortion = source.pinholeDefinition().distortion();
-                plabundle::FrameCamera camera;
-                camera.cameraToWorldRotation = source.pose().cameraToWorldRotation;
-                camera.cameraCenter = source.pose().center;
-                camera.focalXPixels = intrinsics.focalX;
-                camera.focalYPixels = intrinsics.focalY;
-                camera.principalXPixel = intrinsics.principalX;
-                camera.principalYPixel = intrinsics.principalY;
-                camera.pixelPitchMillimeters = intrinsics.pixelPitch;
-                camera.distortion = {distortion.radialK1,
-                                     distortion.radialK2,
-                                     distortion.radialK3,
-                                     distortion.tangentialP1,
-                                     distortion.tangentialP2};
-                camera.uAxisSign = intrinsics.uAxisSign;
-                camera.vAxisSign = intrinsics.vAxisSign;
-                camera.depthAxisFlipped = source.pinholeDefinition().depthAxisFlipped();
-                camera.imageSize = plabundle::ImageSize{source.imageSize().samples, source.imageSize().lines};
-                if (!plabundle::validateFrameCamera(camera, error))
-                {
-                    return false;
-                }
-                *target = camera;
-                return true;
-            }
-
-            bool applyBundleCamera(const plabundle::FrameCamera& refined,
+            bool applyBundleCamera(const placamera::FramePinholeNumericState& refined,
                                    placamera::FramePinholeNumericState* target,
                                    std::string* error)
             {
-                if (!target || !plabundle::validateFrameCamera(refined, error))
+                if (!target)
                 {
                     return false;
                 }
                 const auto& size = target->imageSize();
-                if (!refined.imageSize || refined.imageSize->samples != size.samples ||
-                    refined.imageSize->lines != size.lines || refined.depthAxisFlipped != target->depthAxisFlipped())
+                if (refined.instanceId() != target->instanceId() || refined.imageId() != target->imageId() ||
+                    refined.groundFrame() != target->groundFrame() || refined.imageSize().samples != size.samples ||
+                    refined.imageSize().lines != size.lines ||
+                    refined.depthAxisFlipped() != target->depthAxisFlipped() ||
+                    refined.pixelConvention() != target->pixelConvention())
                 {
                     if (error)
                     {
-                        *error = "PlaBundle changed the bound image grid or optical-axis convention";
+                        *error = "PlaBundle changed camera identity, image grid or optical convention";
                     }
                     return false;
                 }
-                auto intrinsics = target->intrinsics();
-                intrinsics.focalX = refined.focalXPixels;
-                intrinsics.focalY = refined.focalYPixels;
-                intrinsics.principalX = refined.principalXPixel;
-                intrinsics.principalY = refined.principalYPixel;
-                intrinsics.pixelPitch = refined.pixelPitchMillimeters;
-                intrinsics.uAxisSign = refined.uAxisSign;
-                intrinsics.vAxisSign = refined.vAxisSign;
-                const placamera::BrownConradyDistortion distortion{refined.distortion.k1,
-                                                                   refined.distortion.k2,
-                                                                   refined.distortion.k3,
-                                                                   refined.distortion.p1,
-                                                                   refined.distortion.p2};
-                auto candidate = *target;
-                candidate.setPose(placamera::Pose::create(
-                    candidate.groundFrame(), refined.cameraCenter, refined.cameraToWorldRotation));
-                candidate.setIntrinsics(intrinsics);
-                candidate.setDistortion(distortion);
-                *target = std::move(candidate);
+                *target = refined;
                 return true;
             }
 
@@ -630,14 +567,21 @@ namespace xjw
             baProblem.cameras.reserve(cameras.size());
             for (const auto& camera : cameras)
             {
-                plabundle::FrameCamera bundle_camera;
-                if (!makeBundleCamera(*camera, &bundle_camera, &cameraConversionError))
+                if (camera->pinholeDefinition().pixelConvention() != placamera::PixelConvention::PixelCenter)
                 {
-                    result.errorMessage =
-                        QStringLiteral("BA 相机转换失败: %1").arg(QString::fromStdString(cameraConversionError));
+                    result.errorMessage = QStringLiteral("BA 相机转换失败: PlaBundle 要求像素中心坐标约定");
                     return result;
                 }
-                baProblem.cameras.push_back(std::move(bundle_camera));
+                try
+                {
+                    baProblem.cameras.push_back(placamera::FramePinholeNumericState::fromModel(*camera));
+                }
+                catch (const std::exception& exception)
+                {
+                    result.errorMessage =
+                        QStringLiteral("BA 相机转换失败: %1").arg(QString::fromUtf8(exception.what()));
+                    return result;
+                }
             }
 
             // PlaBundle 内部使用 Levenberg-Marquardt 算法，

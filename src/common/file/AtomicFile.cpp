@@ -76,11 +76,24 @@ namespace xjw::common::file
         std::error_code replaceFile(const std::filesystem::path& temporary, const std::filesystem::path& destination)
         {
 #ifdef _WIN32
-            if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING))
+            // Another writer can briefly hold the destination while publishing its own temporary file.
+            DWORD error_code = ERROR_SUCCESS;
+            for (int attempt = 0; attempt < 64; ++attempt)
             {
-                return {static_cast<int>(GetLastError()), std::system_category()};
+                if (MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING))
+                {
+                    return {};
+                }
+                error_code = GetLastError();
+                if ((error_code != ERROR_ACCESS_DENIED && error_code != ERROR_SHARING_VIOLATION &&
+                     error_code != ERROR_LOCK_VIOLATION) ||
+                    attempt == 63)
+                {
+                    break;
+                }
+                Sleep(1);
             }
-            return {};
+            return {static_cast<int>(error_code), std::system_category()};
 #else
             std::error_code error;
             std::filesystem::rename(temporary, destination, error);

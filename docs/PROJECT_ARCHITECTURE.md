@@ -864,10 +864,10 @@ RPC GeoTIFF 导入、RPC DEM/DOM、RPC 空三等生产入口已直接使用 PlaC
 外部格式适配和部分模型能力仍按各自边界维护。
 PROJ、csmapi、CSPICE 与 MessagePack 仍属后续可选组件，不能据此宣称 USGS CSM API 兼容。
 
-`3rdparty/plabundle` 是指向独立仓库的固定 submodule，可独立配置、安装并通过 `find_package(plabundle)` 消费；公开头只含
-纯数值 frame-pinhole/Brown 与 callback 式线阵 Problem、Options 和 Result 契约；项目独立 BA 的
-GUI/CLI service 已直接从 PlaCamera 实例构造 PlaBundle 相机。SfM 重建状态也已切至 PlaCamera，
-其 BA 求解边界使用 `SfmBundleCameraCodec` 转换 PlaBundle 数值输入；
+`3rdparty/plabundle` 是指向独立仓库的固定 submodule，可独立配置、安装并通过 `find_package(plabundle)` 消费；公开头
+使用 PlaCamera 面阵数值状态及 callback 式线阵 Problem、Options 和 Result 契约；项目独立 BA 的
+GUI/CLI service 已直接从 PlaCamera 实例构造数值状态。SfM 重建状态也已切至 PlaCamera，
+其 BA 求解边界使用 `SfmBundleCameraCodec` 校验相机身份、影像网格与光学约定；
 旧适配器与测试目标已移除。稳定报告字段由 service/CLI 边界直接映射。PB3 已迁移 PlaMatrix CPU 参考求解器、解析 Jacobian、完整 Brown 分组内参、
 全部测绘约束、general/online point Schur、质量门、取消和自适应相机模型；PB4 已迁移
 CUDA/OpenCL device Schur-PCG、workspace 复用、混合精度安全回退、Auto 阈值与质量回退。

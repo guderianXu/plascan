@@ -69,7 +69,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("submodules: recursive", text)
         self.assertIn(
             "git submodule update --init --depth 1 3rdparty/plamatrix "
-            "3rdparty/plapoint 3rdparty/opencv 3rdparty/PoissonRecon",
+            "3rdparty/plapoint 3rdparty/plabundle 3rdparty/placamera "
+            "3rdparty/placoordinate 3rdparty/opencv 3rdparty/PoissonRecon",
             text,
         )
         self.assertIn("cmake -S . -B build", text)

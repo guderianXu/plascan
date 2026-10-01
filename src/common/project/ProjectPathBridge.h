@@ -4,6 +4,7 @@
 #include "plafs/PlaChunkLayout.h"
 #include "plafs/PlaProjectLayout.h"
 
+#include <QDir>
 #include <QString>
 
 #include <filesystem>
@@ -33,7 +34,7 @@ namespace xjw::common::project::path_bridge
     inline QString toQtPath(const std::filesystem::path& path)
     {
         const std::string utf8Path = xjw::common::file::pathToUtf8(path);
-        return QString::fromUtf8(utf8Path.c_str());
+        return QDir::fromNativeSeparators(QString::fromUtf8(utf8Path.c_str()));
     }
 
 } // namespace xjw::common::project::path_bridge

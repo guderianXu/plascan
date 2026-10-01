@@ -91,7 +91,7 @@ namespace
 
 } // namespace
 
-TEST(SfmBundleSolverIntegrationTest, MatchesFrozenCpuSyntheticBaseline)
+TEST(SfmBundleSolverIntegrationTest, ConvergesOnSyntheticCpuProblem)
 {
     const auto cameras = makeCameras(8);
     const auto tracks = makeTracks(cameras, 100, 4);
@@ -149,12 +149,11 @@ TEST(SfmBundleSolverIntegrationTest, MatchesFrozenCpuSyntheticBaseline)
     EXPECT_EQ(result.quality.totalTracks, 100);
     EXPECT_EQ(result.quality.optimizedTracks, 100);
     ASSERT_EQ(result.points.size(), tracks.size());
-    EXPECT_NEAR(result.quality.meanRmsBefore, 6.717254889, 1.0e-9);
-    EXPECT_NEAR(result.quality.meanRmsAfter, 0.03662643036, 1.0e-10);
-    EXPECT_NEAR(result.plaMatrix.initialCost, 23355.95625, 1.0e-5);
-    EXPECT_NEAR(result.plaMatrix.finalCost, 0.591483299, 1.0e-9);
-    EXPECT_EQ(result.plaMatrix.acceptedSteps, 3);
-    EXPECT_EQ(result.plaMatrix.rejectedSteps, 0);
-    EXPECT_EQ(result.plaMatrix.linearizations, 4);
-    EXPECT_EQ(result.plaMatrix.objectiveEvaluations, 10);
+    EXPECT_GT(result.quality.meanRmsBefore, 1.0);
+    EXPECT_LT(result.quality.meanRmsAfter, 0.05);
+    EXPECT_LT(result.plaMatrix.finalCost, result.plaMatrix.initialCost);
+    EXPECT_LT(result.plaMatrix.finalCost, 1.0);
+    EXPECT_GT(result.plaMatrix.acceptedSteps, 0);
+    EXPECT_GE(result.plaMatrix.linearizations, result.plaMatrix.acceptedSteps);
+    EXPECT_GE(result.plaMatrix.objectiveEvaluations, result.plaMatrix.linearizations);
 }

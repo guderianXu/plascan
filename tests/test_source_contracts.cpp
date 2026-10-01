@@ -264,7 +264,10 @@ namespace
     {
         const QString exporter = readSourceFile(QStringLiteral("src/cli/common/FinalBaCameraExporter.cpp"));
         const QString decoder = readSourceFile(QStringLiteral("src/common/project/ProjectFramePinholeMetadataIO.cpp"));
-        const QString writer = readSourceFile(QStringLiteral("3rdparty/placamera/src/tsai.cpp"));
+        const QString writer =
+            readSourceFile(sourceFileExists(QStringLiteral("3rdparty/placamera/src/formats/tsai.cpp"))
+                               ? QStringLiteral("3rdparty/placamera/src/formats/tsai.cpp")
+                               : QStringLiteral("3rdparty/placamera/src/tsai.cpp"));
         const QString calibration = readSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraCalibrationData.cpp"));
 
         EXPECT_TRUE(exporter.contains(QStringLiteral("placamera::CameraInstanceSet")));
@@ -1764,7 +1767,10 @@ TEST(MvsSchedulerContractTest, StandaloneSparseHintsUseProjectedSamplesAndPresca
 {
     const QString cameraHeader =
         readSourceFile(QStringLiteral("3rdparty/placamera/include/placamera/frame_numeric_state.h"));
-    const QString cameraSource = readSourceFile(QStringLiteral("3rdparty/placamera/src/frame_numeric_state.cpp"));
+    const QString cameraSource =
+        readSourceFile(sourceFileExists(QStringLiteral("3rdparty/placamera/src/frame/frame_numeric_state.cpp"))
+                           ? QStringLiteral("3rdparty/placamera/src/frame/frame_numeric_state.cpp")
+                           : QStringLiteral("3rdparty/placamera/src/frame_numeric_state.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/MvsPipelineService.h"));
     const QString scheduler = readMvsPipelineImplementation();
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));

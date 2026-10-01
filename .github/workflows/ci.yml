@@ -44,7 +44,7 @@ jobs:
           submodules: false
 
       - name: Initialize PlaScan libraries
-        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/opencv 3rdparty/PoissonRecon
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/placamera 3rdparty/placoordinate 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Install system dependencies
         timeout-minutes: 15
@@ -312,7 +312,7 @@ jobs:
           submodules: false
 
       - name: Initialize PlaScan libraries
-        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/opencv 3rdparty/PoissonRecon
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/placamera 3rdparty/placoordinate 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Install package build dependencies
         timeout-minutes: 15
@@ -438,7 +438,7 @@ jobs:
 
       - name: Initialize PlaScan libraries
         shell: pwsh
-        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/opencv 3rdparty/PoissonRecon
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/placamera 3rdparty/placoordinate 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Download smoke-test models
         shell: pwsh
@@ -493,7 +493,7 @@ jobs:
 
       - name: Initialize PlaScan libraries
         shell: pwsh
-        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/opencv 3rdparty/PoissonRecon
+        run: git submodule update --init --depth 1 3rdparty/plamatrix 3rdparty/plapoint 3rdparty/plabundle 3rdparty/placamera 3rdparty/placoordinate 3rdparty/opencv 3rdparty/PoissonRecon
 
       - name: Download complete release model set
         shell: pwsh

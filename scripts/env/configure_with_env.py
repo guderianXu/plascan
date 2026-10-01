@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from env_common import default_output_dir, fail, host_platform, load_env_json, merged_environment, quote_command
-from run_tests import build_ctest_command
+from run_tests import build_ctest_command, build_test_environment
 from setup_tensorrt_sdk import prepare_tensorrt_sdk
 
 
@@ -372,7 +372,9 @@ def main() -> None:
             else ["--preset", preset]
         )
         test_cmd = build_ctest_command(test_selector, jobs=args.test_jobs, environment=env)
-        run(test_cmd, args.dry_run, env)
+        test_directory = custom_main_dir or repository_root / "build" / preset
+        test_env = build_test_environment(["--test-dir", str(test_directory)], environment=env)
+        run(test_cmd, args.dry_run, test_env)
     if args.package:
         package_selector = (
             ["--config", cmake_path(custom_main_dir / "CPackConfig.cmake")]

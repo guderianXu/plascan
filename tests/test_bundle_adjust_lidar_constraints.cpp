@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <plabundle/solver.h>
+#include <placamera/frame_camera.h>
 
 #include <array>
 #include <cmath>
@@ -11,17 +12,27 @@
 namespace
 {
 
-    plabundle::FrameCamera makeCamera()
+    placamera::FramePinholeNumericState makeCamera(int index)
     {
-        plabundle::FrameCamera camera;
-        camera.cameraToWorldRotation = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-        camera.cameraCenter = {0.0, 0.0, 0.0};
-        camera.focalXPixels = 1000.0;
-        camera.focalYPixels = 1000.0;
-        camera.principalXPixel = 512.0;
-        camera.principalYPixel = 384.0;
-        camera.imageSize = plabundle::ImageSize{1024, 768};
-        return camera;
+        placamera::FrameIntrinsics intrinsics;
+        intrinsics.focalX = 1000.0;
+        intrinsics.focalY = 1000.0;
+        intrinsics.principalX = 512.0;
+        intrinsics.principalY = 384.0;
+        const placamera::FrameId world("world");
+        const auto definition = placamera::FramePinholeDefinition::create(placamera::CameraDefinitionId("definition"),
+                                                                          intrinsics,
+                                                                          {},
+                                                                          placamera::PixelConvention::PixelCenter,
+                                                                          world);
+        const auto suffix = std::to_string(index);
+        const auto model = placamera::FramePinholeModel::create(
+            placamera::CameraInstanceId("camera-" + suffix),
+            placamera::ImageId("image-" + suffix),
+            definition,
+            placamera::ImageSize{1024, 768},
+            placamera::Pose::create(world, {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}));
+        return placamera::FramePinholeNumericState::fromModel(model);
     }
 
     plabundle::Track makeDepthAmbiguousTrack()
@@ -40,7 +51,7 @@ namespace
         return track;
     }
 
-    plabundle::Result solve(const std::vector<plabundle::FrameCamera>& cameras,
+    plabundle::Result solve(const std::vector<placamera::FramePinholeNumericState>& cameras,
                             std::vector<plabundle::Track> tracks,
                             const plabundle::SolveOptions& options,
                             std::vector<plabundle::ScaleBarConstraint> scale_bars = {})
@@ -61,7 +72,7 @@ namespace
 
 TEST(BundleAdjustLidarConstraintTest, LaserPlaneConstraintReducesPointToPlaneDistance)
 {
-    const std::vector<plabundle::FrameCamera> cameras{makeCamera(), makeCamera()};
+    const std::vector<placamera::FramePinholeNumericState> cameras{makeCamera(0), makeCamera(1)};
     const std::vector<plabundle::Track> tracks{makeDepthAmbiguousTrack()};
 
     plabundle::SolveOptions options;
@@ -83,7 +94,7 @@ TEST(BundleAdjustLidarConstraintTest, LaserPlaneConstraintReducesPointToPlaneDis
 
 TEST(BundleAdjustLidarConstraintTest, OmittedLaserPlaneConstraintLeavesDepthAmbiguousPointUnchanged)
 {
-    const std::vector<plabundle::FrameCamera> cameras{makeCamera(), makeCamera()};
+    const std::vector<placamera::FramePinholeNumericState> cameras{makeCamera(0), makeCamera(1)};
     std::vector<plabundle::Track> tracks{makeDepthAmbiguousTrack()};
     tracks.front().laserPlaneConstraints.clear();
 
@@ -119,7 +130,7 @@ TEST(BundleAdjustControlPointConstraintTest, SoftPointConstraintReducesControlPo
     options.constraints.controlPointHuberDeltaMeters = 10.0;
     options.solver.maxIterations = 4;
 
-    const plabundle::Result result = solve({makeCamera(), makeCamera()}, {track}, options);
+    const plabundle::Result result = solve({makeCamera(0), makeCamera(1)}, {track}, options);
 
     ASSERT_EQ(result.points.size(), 1U);
     ASSERT_TRUE(result.points.front().valid);
@@ -141,7 +152,7 @@ TEST(BundleAdjustControlPointConstraintTest, OmittedPointConstraintLeavesDepthAm
     options.solver.enablePointFilter = false;
     options.solver.maxIterations = 2;
 
-    const plabundle::Result result = solve({makeCamera(), makeCamera()}, {track}, options);
+    const plabundle::Result result = solve({makeCamera(0), makeCamera(1)}, {track}, options);
 
     ASSERT_EQ(result.points.size(), 1U);
     ASSERT_TRUE(result.points.front().valid);
@@ -175,7 +186,7 @@ TEST(BundleAdjustScaleBarConstraintTest, SoftScaleBarConstraintReducesEndpointDi
     options.constraints.scaleBarHuberDeltaMeters = 10.0;
     options.solver.maxIterations = 8;
 
-    const plabundle::Result result = solve({makeCamera(), makeCamera()}, {left, right}, options, {scale_bar});
+    const plabundle::Result result = solve({makeCamera(0), makeCamera(1)}, {left, right}, options, {scale_bar});
 
     ASSERT_EQ(result.points.size(), 2U);
     ASSERT_TRUE(result.points[0].valid);

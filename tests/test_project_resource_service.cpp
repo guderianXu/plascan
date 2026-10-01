@@ -27,6 +27,13 @@
 
 #include <functional>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace
 {
 
@@ -365,7 +372,18 @@ TEST(ProjectResourceServiceTest, FailedPackDoesNotLeavePartiallyStagedResource)
     ASSERT_TRUE(blocked.open(QIODevice::WriteOnly));
     ASSERT_GT(blocked.write("must fail"), 0);
     blocked.close();
+#ifdef _WIN32
+    const HANDLE blocked_handle = CreateFileW(reinterpret_cast<LPCWSTR>(blockedPath.utf16()),
+                                              GENERIC_READ,
+                                              0,
+                                              nullptr,
+                                              OPEN_EXISTING,
+                                              FILE_ATTRIBUTE_NORMAL,
+                                              nullptr);
+    ASSERT_NE(blocked_handle, INVALID_HANDLE_VALUE);
+#else
     ASSERT_TRUE(blocked.setPermissions(QFileDevice::Permissions()));
+#endif
 
     ProjectData data;
     const QString projectPath = temporary.filePath(QStringLiteral("pack-failure.plascan"));
@@ -388,7 +406,11 @@ TEST(ProjectResourceServiceTest, FailedPackDoesNotLeavePartiallyStagedResource)
         EXPECT_FALSE(path.contains(QStringLiteral("/assets/packed/"))) << qPrintable(path);
         EXPECT_FALSE(path.contains(QStringLiteral(".packing-"))) << qPrintable(path);
     }
+#ifdef _WIN32
+    CloseHandle(blocked_handle);
+#else
     ASSERT_TRUE(blocked.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+#endif
 }
 
 TEST(ProjectResourceServiceTest, DuplicatePhotoImportDoesNotMutateSavedMetadata)

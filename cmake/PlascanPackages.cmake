@@ -336,12 +336,6 @@ if(MSVC)
 endif()
 message(STATUS "plascan: using plamatrix from 3rdparty/")
 
-# ── plabundle (submodule) ─────────────────────────────────────────────────────
-# PlaBundle consumes the PlaMatrix target above and is pinned by the parent
-# repository through 3rdparty/plabundle.
-add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plabundle ${CMAKE_BINARY_DIR}/3rdparty/plabundle)
-message(STATUS "plascan: using plabundle from 3rdparty/")
-
 # ── placoordinate (local extraction tree) ─────────────────────────────────────
 # PlaCoordinate owns the shared frame/time/context types used by PlaScan and
 # PlaCamera. PlaScan enables its optional persistence and GDAL adapters, while
@@ -368,6 +362,13 @@ add_subdirectory(
   ${CMAKE_SOURCE_DIR}/3rdparty/placamera
   ${CMAKE_BINARY_DIR}/3rdparty/placamera)
 message(STATUS "plascan: using placamera from 3rdparty/")
+
+# ── plabundle (submodule) ─────────────────────────────────────────────────────
+# PlaBundle consumes the PlaMatrix and PlaCamera targets above and is pinned by
+# the parent repository through 3rdparty/plabundle.
+set(PLABUNDLE_INSTALL OFF CACHE BOOL "Generate PlaBundle install rules" FORCE)
+add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plabundle ${CMAKE_BINARY_DIR}/3rdparty/plabundle)
+message(STATUS "plascan: using plabundle from 3rdparty/")
 
 # ── plapoint (submodule) ───────────────────────────────────────────────────────
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plapoint ${CMAKE_BINARY_DIR}/3rdparty/plapoint)

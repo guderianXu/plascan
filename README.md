@@ -116,9 +116,9 @@ OpenCL、TensorRT 和 `PLASCAN_BUILD_QT_PRESENTATION`，保留 CLI 和核心测�
 headless 仍需要 QtCore/Gui/Network/Concurrent：标靶图像转换和网格纹理
 仍依赖公开 QtGui；它不是无 Qt 的算法构建。
 
-项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。PlaPoint 的 PCL 对齐公开接口依赖 Eigen3，已列入 vcpkg manifest；系统包构建须提供 Eigen3 的 CMake 配置。
+项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。PlaPoint 的公开接口依赖 Eigen3 和 Boost 头文件，已列入 vcpkg manifest；系统包构建须提供对应的 CMake 配置与头文件。
 `3rdparty/plabundle` 当前通过 git submodule 固定到独立仓库，提供可独立构建、测试、安装和消费的
-`plabundle::plabundle` 纯数值契约、PlaMatrix CPU 参考求解器及 CUDA/OpenCL Schur-PCG 后端；
+`plabundle::plabundle` 基于 PlaCamera 数值状态的平差契约、PlaMatrix CPU 参考求解器及 CUDA/OpenCL Schur-PCG 后端；
 Qt-free adapter 与 CPU/CUDA/OpenCL 已通过固定 synthetic、全约束和质量回退回归。PlaScan 的
 frame/Brown BA 生产入口已全部直接使用 PlaBundle，旧 `src/core/bundle_adjust` 重复实现已删除；
 SfM 的 `SfmBundleCameraCodec` 负责 PlaCamera 求解状态到 PlaBundle 数值相机的转换和身份保持。行星 line-scan 仍保留为 PlaScan
